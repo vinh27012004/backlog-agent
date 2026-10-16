@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brief",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "1-2 sentences: what is wrong or wanted"
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "checkable done-conditions"
+    },
+    "symptoms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "PI only: observable symptoms; empty for other types"
+    },
+    "suspects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Class.method or file"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "file",
+          "reason"
+        ]
+      },
+      "description": "at most 6"
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ]
+      }
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": [
+        "easy",
+        "medium",
+        "hard"
+      ]
+    },
+    "est_files_to_change": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "assumption": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "assumption"
+        ]
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "criteria",
+    "symptoms",
+    "suspects",
+    "related",
+    "difficulty",
+    "est_files_to_change",
+    "ambiguities"
+  ]
+}

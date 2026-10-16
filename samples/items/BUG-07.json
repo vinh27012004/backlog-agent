@@ -1,0 +1,7 @@
+{
+  "id": "BUG-07",
+  "title": "Tổng tiền đơn hàng sai khi có mã giảm giá phần trăm",
+  "description": "Khi áp mã giảm 10% cho đơn có nhiều sản phẩm, tổng tiền bị giảm hai lần. Mong đợi: giảm 10% trên tổng trước thuế.",
+  "logs": "java.lang.AssertionError: expected:<900000> but was:<810000>\n\tat com.shop.order.OrderServiceTest.applyPercentCoupon(OrderServiceTest.java:88)",
+  "severity": "high"
+}

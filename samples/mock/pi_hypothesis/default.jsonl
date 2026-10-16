@@ -1,0 +1,5 @@
+{"type": "thread.started", "thread_id": "mock-hyp-0001"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "mcp_tool_call", "server": "runner", "tool": "app_call", "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_final", "type": "agent_message", "text": "{\"hypothesis\": \"Truy vấn báo cáo tháng lọc sai múi giờ\", \"verdict\": \"supported\", \"evidence\": [\"ReportRepository.java:41 dùng LocalDate.now() theo UTC\", \"Gọi GET /api/reports/monthly?month=2026-10 trả về []\"], \"fix_location\": \"ReportRepository.findMonthly\", \"next_check\": null}"}}
+{"type": "turn.completed", "usage": {"input_tokens": 12000, "cached_input_tokens": 8000, "output_tokens": 350}}

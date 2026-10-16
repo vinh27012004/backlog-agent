@@ -1,0 +1,58 @@
+# Cấu hình từng vai trò agent. Orchestrator đọc file này để dựng lệnh `codex exec`.
+#
+# model = ""          → để Codex dùng model mặc định. Chốt model sau khi đo ở practice:
+#                       vai trò đọc/tóm tắt dùng model rẻ, fixer dùng model mạnh.
+# effort              → model_reasoning_effort: "low" | "medium" | "high"
+# sandbox             → "read-only" | "workspace-write"
+# timeout_sec         → quá giờ thì orchestrator dừng tiến trình codex
+# add_dirs            → thư mục ngoài worktree Codex được ghi (vd. cache Maven ~/.m2)
+
+[defaults]
+codex_bin = "codex"
+codex_home = "codex-home"
+model = ""
+effort = "medium"
+timeout_sec = 900
+add_dirs = []
+
+[roles.jev]
+role = "jev"
+schema = "brief"
+sandbox = "read-only"
+model = ""            # model rẻ
+effort = "low"
+timeout_sec = 240
+
+[roles.fixer]
+role = "fixer"
+schema = "fix-result"
+sandbox = "workspace-write"
+model = ""            # model mạnh
+effort = "medium"
+timeout_sec = 1200
+add_dirs = ["~/.m2"]  # Maven cần ghi vào cache cục bộ; kiểm lại khi chạy thật
+
+[roles.fixer.by_type]  # ghi đè theo loại item
+PI = { effort = "medium", timeout_sec = 900 }
+TASK = { effort = "low" }
+
+[roles.reviewer]
+role = "reviewer"
+schema = "review"
+sandbox = "read-only"
+model = ""            # model rẻ hoặc trung bình
+effort = "low"
+timeout_sec = 300
+
+[roles.pi_hypothesis]
+role = "pi-hypothesis"
+schema = "hypothesis"
+sandbox = "read-only"
+model = ""
+effort = "low"
+timeout_sec = 300
+
+# Giá model ($ / 1 triệu token). ĐIỀN THEO BẢNG GIÁ THẬT trước khi practice.
+# Model không có trong bảng → chi phí ghi là null và orchestrator cảnh báo.
+[pricing]
+# "ten-model" = { input = 0.0, cached_input = 0.0, output = 0.0 }

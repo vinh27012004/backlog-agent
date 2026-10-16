@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backlog Agent Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: bảng điều khiển vận hành — chỉ số tổng → luồng giai đoạn → danh sách + chi tiết → eval + sự kiện */
+:root {
+  --bg: #EDF0F3;
+  --panel: #FFFFFF;
+  --panel-2: #F5F7F9;
+  --line: #D8DEE5;
+  --ink: #131A23;
+  --ink-2: #48525F;
+  --ink-3: #7A8492;
+  --accent: #2A56C0;
+  --accent-soft: #E2E9F8;
+  --ok: #1D8048; --ok-soft: #DFF2E6;
+  --warn: #A86A10; --warn-soft: #FAEFD8;
+  --crit: #C2302F; --crit-soft: #FAE3E2;
+  --run: #2A56C0; --run-soft: #E2E9F8;
+  --idle: #A3ACB8; --idle-soft: #EEF1F4;
+  --t-bug: #C2410C; --t-cr: #1B6BB0; --t-sec: #7339D6; --t-issue: #5A6472;
+  --shadow: 0 1px 2px rgba(19,26,35,.06);
+  --f-ui: "Be Vietnam Pro", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1319; --panel: #151C24; --panel-2: #1A222C; --line: #29333F;
+    --ink: #E5EAF0; --ink-2: #A9B3C0; --ink-3: #788495;
+    --accent: #7D9EF0; --accent-soft: #1D2943;
+    --ok: #4CC07D; --ok-soft: #13301F; --warn: #E2A846; --warn-soft: #33270F;
+    --crit: #EF7070; --crit-soft: #3A1A1B; --run: #7D9EF0; --run-soft: #1D2943;
+    --idle: #5C6775; --idle-soft: #1E2630;
+    --t-bug: #F08A4B; --t-cr: #5BA6E8; --t-sec: #A98BF5; --t-issue: #9AA4B1;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1319; --panel: #151C24; --panel-2: #1A222C; --line: #29333F;
+  --ink: #E5EAF0; --ink-2: #A9B3C0; --ink-3: #788495;
+  --accent: #7D9EF0; --accent-soft: #1D2943;
+  --ok: #4CC07D; --ok-soft: #13301F; --warn: #E2A846; --warn-soft: #33270F;
+  --crit: #EF7070; --crit-soft: #3A1A1B; --run: #7D9EF0; --run-soft: #1D2943;
+  --idle: #5C6775; --idle-soft: #1E2630;
+  --t-bug: #F08A4B; --t-cr: #5BA6E8; --t-sec: #A98BF5; --t-issue: #9AA4B1;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-ui); font-size: 14px; line-height: 1.5;
+  padding-inline: 16px; padding-block: 0 32px;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1440px; margin: 0 auto; display: grid; gap: 16px; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Header */
+.top {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg); padding-block: 14px 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.brand h1 { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.brand .sub { color: var(--ink-3); font-size: 13px; }
+.sample {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--warn); background: var(--warn-soft); padding: 2px 8px; border-radius: 4px;
+}
+.controls { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.clock { font-size: 13px; color: var(--ink-2); padding-right: 6px; }
+.clock b { color: var(--ink); font-weight: 500; }
+.btn {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
+  padding: 6px 12px; cursor: pointer; font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn[disabled] { opacity: .5; cursor: default; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.btn.running .live-dot { animation: pulse 1.2s ease-in-out infinite; }
+
+/* KPI */
+.kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.kpi { background: var(--panel); padding: 14px 16px; display: grid; gap: 2px; min-width: 0; }
+.kpi .lbl { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+.kpi .val { font-family: var(--f-mono); font-size: 26px; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.kpi .val small { font-size: 14px; color: var(--ink-3); font-weight: 400; }
+.kpi .foot { font-size: 12px; color: var(--ink-2); }
+.kpi .up { color: var(--ok); } .kpi .down { color: var(--crit); }
+.kpi.alert .val { color: var(--crit); }
+
+/* Panels */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); min-width: 0; }
+.panel-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.panel-h h2 { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+.panel-h .hint { color: var(--ink-3); font-size: 12px; }
+.panel-h .right { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Flow */
+.flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 12px; }
+.stage-btn {
+  flex: 1 0 118px; text-align: left; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px 12px; display: grid; gap: 2px; position: relative;
+}
+.stage-btn:hover { border-color: var(--ink-3); }
+.stage-btn .n { font-family: var(--f-mono); font-size: 22px; font-weight: 500; line-height: 1.1; }
+.stage-btn .s { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.stage-btn.active { background: var(--accent-soft); border-color: var(--accent); }
+.stage-btn.active .s { color: var(--accent); }
+.stage-btn.esc { background: var(--crit-soft); border-color: transparent; }
+.stage-btn.esc .n, .stage-btn.esc .s { color: var(--crit); }
+.stage-btn.esc.active { border-color: var(--crit); }
+.arrow { flex: 0 0 22px; display: grid; place-items: center; color: var(--ink-3); font-size: 14px; }
+.flow .sep { flex: 0 0 1px; background: var(--line); margin: 4px 12px; }
+
+/* Main grid */
+.main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.lower { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+
+/* Filters */
+.fchip {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--ink-2);
+}
+.fchip.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+
+/* Table */
+.tbl-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--panel); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--panel-2); }
+tbody tr.sel td { background: var(--accent-soft); }
+tbody tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+tbody tr.flash td { animation: flash 1.4s ease-out; }
+tbody tr:last-child td { border-bottom: 0; }
+td.id { white-space: nowrap; }
+td.id .mono { font-size: 12px; font-weight: 500; }
+td.title { min-width: 220px; }
+td.title .t { font-weight: 500; }
+td.title .sub { font-size: 12px; color: var(--ink-3); }
+td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.empty-row td { text-align: center; color: var(--ink-3); padding: 28px; cursor: default; }
+
+.type { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; border: 1px solid currentColor; margin-right: 6px; }
+.type.BUG { color: var(--t-bug); } .type.CR { color: var(--t-cr); } .type.SEC { color: var(--t-sec); } .type.ISSUE { color: var(--t-issue); }
+.prio { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
+.prio.P1 { color: var(--crit); font-weight: 500; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.backlog { color: var(--ink-3); background: var(--idle-soft); }
+.pill.triage, .pill.agent, .pill.gate { color: var(--run); background: var(--run-soft); }
+.pill.agent::before, .pill.gate::before, .pill.triage::before { animation: pulse 1.4s ease-in-out infinite; }
+.pill.review { color: var(--warn); background: var(--warn-soft); }
+.pill.done { color: var(--ok); background: var(--ok-soft); }
+.pill.escalated { color: var(--crit); background: var(--crit-soft); }
+.phase { display: block; font-size: 11px; color: var(--ink-3); margin-top: 2px; padding-left: 2px; }
+
+.pips { display: inline-flex; gap: 3px; vertical-align: middle; }
+.pips i { width: 8px; height: 8px; border-radius: 2px; background: var(--idle-soft); border: 1px solid var(--line); }
+.pips i.on { background: var(--ink-2); border-color: var(--ink-2); }
+.pips i.on.last { background: var(--warn); border-color: var(--warn); }
+.pips.max i.on { background: var(--crit); border-color: var(--crit); }
+
+.gate { display: inline-grid; grid-template-columns: repeat(8, 10px); gap: 3px; }
+.gate i { width: 10px; height: 10px; border-radius: 2px; }
+.g-pass { background: var(--ok); } .g-fail { background: var(--crit); } .g-warn { background: var(--warn); }
+.g-run { background: var(--run); animation: pulse 1.2s ease-in-out infinite; }
+.g-pending { background: var(--idle-soft); box-shadow: inset 0 0 0 1px var(--line); }
+.g-skip { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-3); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* Detail */
+.detail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 72px); max-height: calc(100vh - 90px); overflow: auto; }
+.d-body { padding: 16px; display: grid; gap: 18px; }
+.d-id { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.d-id .mono { font-size: 13px; font-weight: 500; }
+.d-title { font-size: 17px; font-weight: 600; line-height: 1.35; margin-top: 6px; }
+.d-stage { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.callout { border-radius: 6px; padding: 10px 12px; font-size: 13px; }
+.callout b { display: block; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 2px; }
+.callout.crit { background: var(--crit-soft); color: var(--ink); } .callout.crit b { color: var(--crit); }
+.callout.ok { background: var(--ok-soft); } .callout.ok b { color: var(--ok); }
+.callout.info { background: var(--run-soft); } .callout.info b { color: var(--run); }
+
+.meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
+.meta div { min-width: 0; }
+.meta dt { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.meta dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.meta .full { grid-column: 1 / -1; }
+.bar { height: 6px; background: var(--idle-soft); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.bar.hot i { background: var(--warn); }
+.low { color: var(--crit); font-weight: 600; }
+
+.sec-h { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.sec-h span { font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+.checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; list-style: none; margin: 0; padding: 0; }
+.checks li { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; min-width: 0; }
+.checks li .st { margin-left: auto; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.checks li.fail .st { color: var(--crit); font-weight: 600; }
+.checks li.warn .st { color: var(--warn); font-weight: 600; }
+.checks li.run .st { color: var(--run); }
+.checks i { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
+
+.trace { list-style: none; margin: 0; padding: 0; position: relative; }
+.trace li { display: grid; grid-template-columns: 44px 14px minmax(0, 1fr); gap: 8px; padding-bottom: 10px; position: relative; }
+.trace li::after { content: ""; position: absolute; left: 58px; top: 14px; bottom: -2px; width: 1px; background: var(--line); }
+.trace li:last-child::after { display: none; }
+.trace .tm { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); padding-top: 2px; }
+.trace .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; justify-self: center; position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--panel); }
+.trace .dot.ok { background: var(--ok); } .trace .dot.fail { background: var(--crit); } .trace .dot.warn { background: var(--warn); }
+.trace .dot.run { background: var(--run); animation: pulse 1.2s ease-in-out infinite; }
+.trace .what { font-size: 13px; min-width: 0; }
+.trace .what b { font-weight: 600; }
+.tool { font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; margin-left: 4px; white-space: nowrap; }
+.trace .msg { color: var(--ink-2); display: block; overflow-wrap: anywhere; }
+
+.files { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.files li { font-family: var(--f-mono); font-size: 12px; color: var(--ink-2); background: var(--panel-2); border-radius: 4px; padding: 4px 8px; overflow-wrap: anywhere; }
+
+.pr { display: grid; gap: 10px; margin: 0; }
+.pr dt { font-size: 11px; color: var(--ink-3); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.pr dd { margin: 2px 0 0; font-size: 13px; }
+
+.d-empty { padding: 48px 20px; text-align: center; color: var(--ink-3); }
+
+/* Chart */
+.chart-box { padding: 12px 16px 16px; }
+.chart-box svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-note { font-size: 12px; color: var(--ink-2); margin-top: 6px; min-height: 18px; }
+.chart-note b { font-family: var(--f-mono); font-weight: 500; color: var(--ink); }
+.ax { fill: var(--ink-3); font-family: var(--f-mono); font-size: 11px; }
+.grid-l { stroke: var(--line); stroke-width: 1; }
+.target-l { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.target-t { fill: var(--warn); font-size: 11px; font-family: var(--f-ui); font-weight: 500; }
+.line-p { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.area-p { fill: var(--accent); opacity: .1; }
+.pt { fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: pointer; }
+.pt:hover, .pt.on { fill: var(--accent); }
+.pt.end { fill: var(--accent); }
+.end-t { fill: var(--ink); font-family: var(--f-mono); font-size: 12px; font-weight: 500; }
+
+/* Log */
+.log { list-style: none; margin: 0; padding: 4px 0; max-height: 360px; overflow: auto; }
+.log li { display: grid; grid-template-columns: 44px 8px 74px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 6px 16px; font-size: 12.5px; }
+.log li.new { animation: flash 1.4s ease-out; }
+.log .tm { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
+.log .dt { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.log .dt.ok { background: var(--ok); } .log .dt.fail { background: var(--crit); } .log .dt.warn { background: var(--warn); } .log .dt.run { background: var(--run); }
+.log .tid { font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.log .tid:hover { text-decoration: underline; }
+.log .m { color: var(--ink-2); overflow-wrap: anywhere; }
+.log .m b { color: var(--ink); font-weight: 600; }
+
+.footnote { font-size: 12px; color: var(--ink-3); }
+.footnote code { font-family: var(--f-mono); font-size: 11.5px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes flash { from { background: var(--warn-soft); } to { background: transparent; } }
+
+@media (max-width: 1180px) {
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1000px) {
+  .main, .lower { grid-template-columns: minmax(0, 1fr); }
+  .detail { position: static; max-height: none; }
+}
+@media (max-width: 560px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi .val { font-size: 22px; }
+  .checks, .meta { grid-template-columns: minmax(0, 1fr); }
+  .controls { margin-left: 0; }
+  .log li { grid-template-columns: 40px 8px minmax(0, 1fr); }
+  .log li .m { grid-column: 3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before { animation: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <h1>Backlog Agent Monitor</h1>
+      <span class="sub" id="repo"></span>
+      <span class="sample" id="sample-badge">Dữ liệu mẫu</span>
+    </div>
+    <div class="controls">
+      <span class="clock">Giờ mô phỏng <b class="mono" id="clock">--:--</b></span>
+      <button class="btn primary" id="btn-sim" type="button"><span class="live-dot"></span><span id="sim-label">Chạy mô phỏng</span></button>
+      <button class="btn" id="btn-reset" type="button">Đặt lại</button>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Chỉ số tổng"></section>
+
+  <section class="panel" aria-label="Luồng xử lý">
+    <div class="panel-h">
+      <h2>Luồng xử lý</h2>
+      <span class="hint">Bấm một giai đoạn để lọc danh sách</span>
+    </div>
+    <div class="flow" id="flow"></div>
+  </section>
+
+  <div class="main">
+    <section class="panel" aria-label="Danh sách ticket">
+      <div class="panel-h">
+        <h2>Ticket</h2>
+        <span class="hint" id="filter-hint"></span>
+        <div class="right" id="type-filters"></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticket</th>
+              <th>Tiêu đề</th>
+              <th>Giai đoạn</th>
+              <th>Lần thử</th>
+              <th>Validation Gate</th>
+              <th style="text-align:right">Tokens</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="legend" id="legend"></div>
+    </section>
+
+    <aside class="panel detail" id="detail" aria-label="Chi tiết ticket"></aside>
+  </div>
+
+  <div class="lower">
+    <section class="panel" aria-label="Pass rate trên eval set">
+      <div class="panel-h">
+        <h2>Pass rate trên eval set</h2>
+        <span class="hint" id="eval-hint"></span>
+      </div>
+      <div class="chart-box">
+        <svg id="chart" viewBox="0 0 640 230" role="img" aria-label="Biểu đồ pass rate theo phiên bản"></svg>
+        <div class="chart-note" id="chart-note"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Sự kiện gần nhất">
+      <div class="panel-h">
+        <h2>Sự kiện gần nhất</h2>
+        <span class="hint">Log orchestrator</span>
+      </div>
+      <ul class="log" id="log"></ul>
+    </section>
+  </div>
+
+  <p class="footnote">Dữ liệu đọc từ <code>monitor/data.js</code>. Khi có orchestrator thật, xuất state ra đúng cấu trúc đó để monitor hiển thị số liệu thật.</p>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var STAGES = [
+    { key: "backlog", label: "Backlog" },
+    { key: "triage", label: "Triage · JEV" },
+    { key: "agent", label: "Agent xử lý" },
+    { key: "gate", label: "Validation Gate" },
+    { key: "review", label: "Chờ review" },
+    { key: "done", label: "Hoàn tất" }
+  ];
+  var ESC = { key: "escalated", label: "Cần người" };
+  var STAGE_LABEL = {};
+  STAGES.concat([ESC]).forEach(function (s) { STAGE_LABEL[s.key] = s.label; });
+
+  var GATE = [
+    ["build", "Build"], ["unit", "Unit test"], ["regression", "Regression vùng impact"],
+    ["coverage", "Coverage vùng impact"], ["lint", "Lint"], ["scan", "Security scan"],
+    ["diff", "Kích thước diff"], ["reviewer", "Reviewer agent"]
+  ];
+  var GATE_ST = { pass: "Pass", fail: "Fail", warn: "Cảnh báo", run: "Đang chạy", pending: "Chưa chạy", skip: "Bỏ qua" };
+  var TYPES = [["ALL", "Tất cả"], ["BUG", "Bug"], ["CR", "CR"], ["SEC", "Security"], ["ISSUE", "Issue"]];
+  var TYPE_LABEL = { BUG: "Bug", CR: "CR", SEC: "Security", ISSUE: "Issue" };
+
+  var SRC = window.MONITOR_DATA;
+  var state, ui = { stage: null, type: "ALL", sel: null, flash: null, newLog: 0 };
+  var timer = null, stepIdx = 0;
+
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+  function find(id) { return state.tickets.filter(function (t) { return t.id === id; })[0]; }
+  function gateOf(t) {
+    var g = {};
+    GATE.forEach(function (k) { g[k[0]] = (t.gate && t.gate[k[0]]) || "pending"; });
+    return g;
+  }
+  function kfmt(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n || 0); }
+  function toMin(hhmm) { var p = hhmm.split(":"); return (+p[0]) * 60 + (+p[1]); }
+  function fromMin(m) { var h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? "0" : "") + h + ":" + (mm < 10 ? "0" : "") + mm; }
+
+  function reset() {
+    state = clone(SRC);
+    state.clockMin = toMin(state.meta.clock);
+    stepIdx = 0;
+    ui.flash = null; ui.newLog = 0;
+    if (!ui.sel) ui.sel = "BUG-102";
+    stopSim();
+    $("btn-sim").disabled = false;
+    $("sim-label").textContent = "Chạy mô phỏng";
+    render();
+  }
+
+  /* ---------- KPI ---------- */
+  function renderKpis() {
+    var T = state.tickets, runs = state.evalRuns;
+    var last = runs[runs.length - 1], prev = runs[runs.length - 2];
+    var pr = Math.round(last.passed / last.total * 100);
+    var pp = Math.round(prev.passed / prev.total * 100);
+    var d = pr - pp;
+    var count = function (k) { return T.filter(function (t) { return t.stage === k; }).length; };
+    var running = count("triage") + count("agent") + count("gate");
+    var started = T.filter(function (t) { return t.stage !== "backlog"; }).length;
+    var escN = count("escalated");
+    var escRate = started ? Math.round(escN / started * 100) : 0;
+    var tried = T.filter(function (t) { return t.attempts > 0; });
+    var avgAtt = tried.length ? tried.reduce(function (a, t) { return a + t.attempts; }, 0) / tried.length : 0;
+    var withTok = T.filter(function (t) { return t.tokens > 0; });
+    var avgTok = withTok.length ? withTok.reduce(function (a, t) { return a + t.tokens; }, 0) / withTok.length : 0;
+    var avgMin = withTok.length ? withTok.reduce(function (a, t) { return a + (t.minutes || 0); }, 0) / withTok.length : 0;
+
+    var tiles = [
+      { l: "Pass rate eval set", v: pr + '<small>%</small>', f: '<span class="' + (d >= 0 ? "up" : "down") + '">' + (d >= 0 ? "+" : "") + d + " điểm</span> so với " + esc(prev.version) },
+      { l: "Đang xử lý", v: running, f: "Triage, agent và gate" },
+      { l: "Chờ review", v: count("review"), f: "PR đã qua gate" },
+      { l: "Cần người", v: escN, f: escRate + "% ticket đã bắt đầu", alert: escN > 0 },
+      { l: "Lần thử trung bình", v: avgAtt.toFixed(1) + '<small> / ' + state.meta.maxAttempts + '</small>', f: "Trên " + tried.length + " ticket" },
+      { l: "Chi phí trung bình", v: kfmt(avgTok) + '<small> tokens</small>', f: Math.round(avgMin) + " phút mỗi ticket" }
+    ];
+    $("kpis").innerHTML = tiles.map(function (k) {
+      return '<div class="kpi' + (k.alert ? " alert" : "") + '"><span class="lbl">' + k.l + '</span><span class="val">' + k.v + '</span><span class="foot">' + k.f + "</span></div>";
+    }).join("");
+  }
+
+  /* ---------- Flow ---------- */
+  function renderFlow() {
+    var T = state.tickets;
+    var n = function (k) { return T.filter(function (t) { return t.stage === k; }).length; };
+    var html = STAGES.map(function (s, i) {
+      return (i ? '<span class="arrow" aria-hidden="true">→</span>' : "") +
+        '<button type="button" class="stage-btn' + (ui.stage === s.key ? " active" : "") + '" data-stage="' + s.key + '" aria-pressed="' + (ui.stage === s.key) + '">' +
+        '<span class="n">' + n(s.key) + '</span><span class="s">' + s.label + "</span></button>";
+    }).join("");
+    html += '<span class="sep" aria-hidden="true"></span><button type="button" class="stage-btn esc' + (ui.stage === ESC.key ? " active" : "") + '" data-stage="escalated" aria-pressed="' + (ui.stage === ESC.key) + '">' +
+      '<span class="n">' + n("escalated") + '</span><span class="s">' + ESC.label + "</span></button>";
+    $("flow").innerHTML = html;
+  }
+
+  /* ---------- Table ---------- */
+  function pips(t) {
+    var max = state.meta.maxAttempts, a = t.attempts || 0, out = "";
+    for (var i = 1; i <= max; i++) out += '<i class="' + (i <= a ? "on" : "") + (i === a && a > 1 ? " last" : "") + '"></i>';
+    return '<span class="pips' + (a >= max ? " max" : "") + '" title="' + a + "/" + max + ' lần thử">' + out + "</span>" +
+      ' <span class="mono" style="font-size:12px;color:var(--ink-3)">' + a + "/" + max + "</span>";
+  }
+  function gateCells(t) {
+    if (!t.gate) return '<span style="color:var(--ink-3);font-size:12px">—</span>';
+    var g = gateOf(t);
+    return '<span class="gate">' + GATE.map(function (k) {
+      return '<i class="g-' + g[k[0]] + '" title="' + esc(k[1] + ": " + GATE_ST[g[k[0]]]) + '"></i>';
+    }).join("") + "</span>";
+  }
+  function renderFilters() {
+    $("type-filters").innerHTML = TYPES.map(function (x) {
+      return '<button type="button" class="fchip' + (ui.type === x[0] ? " on" : "") + '" data-type="' + x[0] + '" aria-pressed="' + (ui.type === x[0]) + '">' + x[1] + "</button>";
+    }).join("");
+    $("filter-hint").textContent = ui.stage ? "Đang lọc: " + STAGE_LABEL[ui.stage] : "";
+  }
+  function renderTable() {
+    var rank = function (t) {
+      var r = { escalated: 0, gate: 1, agent: 2, triage: 3, review: 4, backlog: 5, done: 6 };
+      return r[t.stage];
+    };
+    var rows = state.tickets.filter(function (t) {
+      return (!ui.stage || t.stage === ui.stage) && (ui.type === "ALL" || t.type === ui.type);
+    }).sort(function (a, b) { return rank(a) - rank(b) || a.priority.localeCompare(b.priority) || a.id.localeCompare(b.id); });
+
+    if (!rows.length) {
+      $("rows").innerHTML = '<tr class="empty-row"><td colspan="6">Không có ticket nào khớp bộ lọc.</td></tr>';
+      return;
+    }
+    $("rows").innerHTML = rows.map(function (t) {
+      var sub = t.agent ? esc(t.agent) : (t.stage === "backlog" ? "Chưa phân loại" : "JEV");
+      if (t.linked && t.linked.length) sub += " · liên kết " + esc(t.linked.join(", "));
+      return '<tr data-id="' + t.id + '" tabindex="0" class="' + (ui.sel === t.id ? "sel" : "") + (ui.flash === t.id ? " flash" : "") + '">' +
+        '<td class="id"><span class="type ' + t.type + '">' + TYPE_LABEL[t.type] + '</span><span class="mono">' + t.id + '</span> <span class="prio ' + t.priority + '">' + t.priority + "</span></td>" +
+        '<td class="title"><div class="t">' + esc(t.title) + '</div><div class="sub">' + sub + "</div></td>" +
+        '<td><span class="pill ' + t.stage + '">' + STAGE_LABEL[t.stage] + "</span>" + (t.phase && t.stage === "agent" ? '<span class="phase">' + esc(t.phase) + "</span>" : "") + "</td>" +
+        "<td>" + (t.attempts != null ? pips(t) : '<span style="color:var(--ink-3)">—</span>') + "</td>" +
+        "<td>" + gateCells(t) + "</td>" +
+        '<td class="num">' + (t.tokens ? kfmt(t.tokens) : "—") + "</td></tr>";
+    }).join("");
+  }
+  function renderLegend() {
+    $("legend").innerHTML = '<span style="font-weight:600">Gate (8 ô theo thứ tự):</span> ' +
+      GATE.map(function (k, i) { return (i + 1) + ". " + k[1]; }).join(" · ") +
+      '<span style="flex-basis:100%;height:0"></span>' +
+      ["pass", "fail", "warn", "run", "pending", "skip"].map(function (s) {
+        return '<span><i class="g-' + s + '"></i>' + GATE_ST[s] + "</span>";
+      }).join("");
+  }
+
+  /* ---------- Detail ---------- */
+  function renderDetail() {
+    var t = ui.sel && find(ui.sel);
+    if (!t) { $("detail").innerHTML = '<div class="d-empty">Chọn một ticket để xem chi tiết.</div>'; return; }
+    var h = [];
+    h.push('<div class="panel-h"><h2>Chi tiết</h2></div><div class="d-body">');
+    h.push('<div><div class="d-id"><span class="type ' + t.type + '">' + TYPE_LABEL[t.type] + '</span><span class="mono">' + t.id + '</span><span class="prio ' + t.priority + '">' + t.priority + "</span></div>");
+    h.push('<h3 class="d-title">' + esc(t.title) + "</h3>");
+    h.push('<div class="d-stage"><span class="pill ' + t.stage + '">' + STAGE_LABEL[t.stage] + "</span>" + (t.phase && t.stage === "agent" ? "Bước hiện tại: <b>" + esc(t.phase) + "</b>" : "") + "</div></div>");
+
+    if (t.stage === "escalated" && t.reason) h.push('<div class="callout crit"><b>Lý do chuyển người</b>' + esc(t.reason) + "</div>");
+    else if (t.note) h.push('<div class="callout ok"><b>Kết quả</b>' + esc(t.note) + "</div>");
+    if (t.linked && t.linked.length) h.push('<div class="callout info"><b>Ticket liên kết</b>Cùng root cause với ' + esc(t.linked.join(", ")) + "</div>");
+
+    if (t.stage !== "backlog") {
+      var budget = state.meta.tokenBudget, pct = Math.min(100, Math.round((t.tokens || 0) / budget * 100));
+      var th = state.meta.confidenceThreshold;
+      h.push('<dl class="meta">');
+      h.push("<div><dt>Agent</dt><dd>" + esc(t.agent || "JEV (triage)") + "</dd></div>");
+      h.push("<div><dt>Confidence</dt><dd class=\"mono\">" + (t.confidence != null ? '<span class="' + (t.confidence < th ? "low" : "") + '">' + t.confidence.toFixed(2) + "</span> / ngưỡng " + th.toFixed(2) : "—") + "</dd></div>");
+      h.push("<div><dt>Branch</dt><dd class=\"mono\">" + esc(t.branch || "—") + "</dd></div>");
+      h.push("<div><dt>Thời gian</dt><dd class=\"mono\">" + (t.minutes ? t.minutes + " phút" : "—") + "</dd></div>");
+      h.push('<div class="full"><dt>Budget tokens</dt><dd class="mono">' + kfmt(t.tokens || 0) + " / " + kfmt(budget) + " (" + pct + '%)<div class="bar' + (pct > 60 ? " hot" : "") + '"><i style="width:' + pct + '%"></i></div></dd></div>');
+      h.push("</dl>");
+    }
+
+    if (t.gate) {
+      var g = gateOf(t), nPass = GATE.filter(function (k) { return g[k[0]] === "pass"; }).length;
+      h.push('<div><div class="sec-h">Validation Gate <span>' + nPass + "/8 pass" + (t.attempts ? " · lần thử " + t.attempts + "/" + state.meta.maxAttempts : "") + '</span></div><ul class="checks">');
+      GATE.forEach(function (k) {
+        var s = g[k[0]];
+        h.push('<li class="' + s + '"><i class="g-' + s + '"></i>' + k[1] + '<span class="st">' + GATE_ST[s] + "</span></li>");
+      });
+      h.push("</ul></div>");
+    }
+
+    if (t.trace && t.trace.length) {
+      h.push('<div><div class="sec-h">Trace <span>' + t.trace.length + ' bước</span></div><ol class="trace">');
+      t.trace.forEach(function (x) {
+        h.push('<li><span class="tm">' + esc(x.t) + '</span><span class="dot ' + x.s + '"></span><span class="what"><b>' + esc(x.step) + "</b>" + (x.tool ? '<span class="tool">' + esc(x.tool) + "</span>" : "") + '<span class="msg">' + esc(x.msg) + "</span></span></li>");
+      });
+      h.push("</ol></div>");
+    } else {
+      h.push('<div class="callout info"><b>Chưa bắt đầu</b>Ticket đang chờ trong backlog, orchestrator sẽ lấy theo độ ưu tiên.</div>');
+    }
+
+    if (t.impact && t.impact.length) {
+      h.push('<div><div class="sec-h">Vùng impact <span>từ CodeGraph</span></div><ul class="files">' +
+        t.impact.map(function (f) { return "<li>" + esc(f) + "</li>"; }).join("") + "</ul></div>");
+    }
+
+    if (t.pr) {
+      h.push('<div><div class="sec-h">Pull Request <span class="mono">#' + t.pr.number + '</span></div><dl class="pr">' +
+        "<div><dt>Root cause</dt><dd>" + esc(t.pr.rootCause) + "</dd></div>" +
+        "<div><dt>Cách fix</dt><dd>" + esc(t.pr.fix) + "</dd></div>" +
+        "<div><dt>Phương án đã loại</dt><dd>" + esc(t.pr.rejected) + "</dd></div>" +
+        "<div><dt>Bằng chứng test</dt><dd>" + esc(t.pr.tests) + "</dd></div></dl></div>");
+    }
+    h.push("</div>");
+    $("detail").innerHTML = h.join("");
+  }
+
+  /* ---------- Chart ---------- */
+  function renderChart(activeIdx) {
+    var runs = state.evalRuns, W = 640, H = 230, L = 40, R = 56, T = 14, B = 30;
+    var pw = W - L - R, ph = H - T - B, target = state.meta.evalTarget;
+    var x = function (i) { return L + (runs.length === 1 ? pw / 2 : i * pw / (runs.length - 1)); };
+    var y = function (v) { return T + ph - v / 100 * ph; };
+    var pct = runs.map(function (r) { return Math.round(r.passed / r.total * 100); });
+    var s = [];
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      s.push('<line class="grid-l" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>');
+      s.push('<text class="ax" x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>");
+    });
+    s.push('<line class="target-l" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(target) + '" y2="' + y(target) + '"/>');
+    s.push('<text class="target-t" x="' + (L + 6) + '" y="' + (y(target) - 6) + '">Mục tiêu MVP ' + target + "%</text>");
+    var pts = pct.map(function (v, i) { return x(i) + "," + y(v); });
+    s.push('<path class="area-p" d="M' + x(0) + "," + y(0) + " L" + pts.join(" L") + " L" + x(runs.length - 1) + "," + y(0) + ' Z"/>');
+    s.push('<path class="line-p" d="M' + pts.join(" L") + '"/>');
+    runs.forEach(function (r, i) {
+      s.push('<text class="ax" x="' + x(i) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(r.version) + "</text>");
+    });
+    runs.forEach(function (r, i) {
+      var end = i === runs.length - 1;
+      s.push('<circle class="pt' + (end ? " end" : "") + (activeIdx === i ? " on" : "") + '" data-i="' + i + '" cx="' + x(i) + '" cy="' + y(pct[i]) + '" r="' + (end ? 5 : 4) + '" tabindex="0"><title>' + esc(r.version + ": " + pct[i] + "% (" + r.passed + "/" + r.total + ") · " + r.note) + "</title></circle>");
+    });
+    var li = runs.length - 1;
+    s.push('<text class="end-t" x="' + (x(li) + 10) + '" y="' + (y(pct[li]) + 4) + '">' + pct[li] + "%</text>");
+    $("chart").innerHTML = s.join("");
+    chartNote(activeIdx == null ? li : activeIdx);
+    $("eval-hint").textContent = runs[0].total + " ticket có fix thật";
+  }
+  function chartNote(i) {
+    var r = state.evalRuns[i], p = Math.round(r.passed / r.total * 100);
+    $("chart-note").innerHTML = "<b>" + esc(r.version) + "</b> · " + p + "% (" + r.passed + "/" + r.total + " ticket) · " + esc(r.note);
+    Array.prototype.forEach.call($("chart").querySelectorAll(".pt"), function (c) {
+      c.classList.toggle("on", +c.getAttribute("data-i") === i);
+    });
+  }
+
+  /* ---------- Log ---------- */
+  function renderLog() {
+    var all = [];
+    state.tickets.forEach(function (t) {
+      (t.trace || []).forEach(function (x, i) { all.push({ id: t.id, x: x, k: toMin(x.t) * 100 + i, seq: x.seq || 0 }); });
+    });
+    all.sort(function (a, b) { return (b.seq - a.seq) || (b.k - a.k); });
+    $("log").innerHTML = all.slice(0, 16).map(function (e, i) {
+      return '<li class="' + (i < ui.newLog ? "new" : "") + '"><span class="tm">' + esc(e.x.t) + '</span><span class="dt ' + e.x.s + '"></span>' +
+        '<button type="button" class="tid" data-id="' + e.id + '">' + e.id + '</button><span class="m"><b>' + esc(e.x.step) + "</b> " + esc(e.x.msg) + "</span></li>";
+    }).join("");
+  }
+
+  function render() {
+    $("repo").textContent = state.meta.project + " · " + state.meta.repo;
+    $("sample-badge").hidden = !state.meta.sample;
+    $("clock").textContent = fromMin(state.clockMin);
+    renderKpis(); renderFlow(); renderFilters(); renderTable(); renderDetail(); renderLog();
+  }
+
+  /* ---------- Mô phỏng ---------- */
+  var seq = 1;
+  function tr(id, step, msg, s, tool) {
+    var t = find(id);
+    t.trace.push({ t: fromMin(state.clockMin), step: step, msg: msg, s: s || "ok", tool: tool, seq: seq++ });
+  }
+  function settle(id) { // đánh dấu bước "run" trước đó là xong
+    find(id).trace.forEach(function (x) { if (x.s === "run") x.s = "ok"; });
+  }
+  var STEPS = [
+    function () { var t = find("BUG-103"); settle("BUG-103");
+      tr("BUG-103", "Reproduce", "PaginationTest#lastPage FAIL (đúng kỳ vọng)", "ok", "Sandbox");
+      t.phase = "Plan"; t.tokens += 14000; t.minutes += 2; return ["BUG-103", 1]; },
+    function () { var t = find("BUG-102"); settle("BUG-102");
+      t.gate.regression = "pass"; t.gate.coverage = "warn";
+      tr("BUG-102", "Gate", "Regression 41/41 pass", "ok");
+      tr("BUG-102", "Gate", "Coverage vùng impact 71% < 80%, agent sinh thêm test", "warn");
+      t.tokens += 18000; t.minutes += 3; return ["BUG-102", 2]; },
+    function () { var t = find("ISSUE-401"); settle("ISSUE-401");
+      t.stage = "escalated"; t.reason = "Confidence 0.48 dưới ngưỡng 0.70: chưa rõ là Bug hay Performance, cần người phân loại.";
+      tr("ISSUE-401", "Escalate", "Confidence thấp, chuyển người phân loại", "warn"); return ["ISSUE-401", 1]; },
+    function () { var t = find("SEC-301"); settle("SEC-301");
+      tr("SEC-301", "Fix", "Whitelist cột sortBy, dùng Sort.by()", "ok", "Sandbox");
+      t.stage = "gate"; t.phase = null;
+      GATE.forEach(function (k) { t.gate[k[0]] = "pending"; }); t.gate.build = "run";
+      tr("SEC-301", "Gate", "Chạy lại gate cho lần thử 2", "run");
+      t.tokens += 21000; t.minutes += 3; return ["SEC-301", 2]; },
+    function () { var t = find("BUG-102"); settle("BUG-102");
+      t.gate.coverage = "pass"; t.gate.lint = "pass"; t.gate.scan = "pass"; t.gate.reviewer = "pass";
+      tr("BUG-102", "Gate", "Coverage 83%, lint và scan sạch, reviewer agent đồng ý", "ok");
+      t.stage = "review";
+      t.pr = { number: 48,
+        rootCause: "ReportService trả null khi tháng không có đơn, ReportExporter gọi phương thức trên kết quả null.",
+        fix: "Trả Optional.empty(), exporter vẫn ghi header và một dòng 'Không có dữ liệu'.",
+        rejected: "Bắt NullPointerException ở controller: che lỗi, không sửa gốc.",
+        tests: "Thêm 4 test. 218/218 unit pass, 41 test regression vùng impact pass." };
+      tr("BUG-102", "PR", "Tạo PR #48, cập nhật ticket", "ok", "Git");
+      t.tokens += 9000; t.minutes += 2; return ["BUG-102", 2]; },
+    function () { var t = find("ISSUE-402"); settle("ISSUE-402");
+      t.stage = "done"; t.note = "Đóng do trùng root cause với BUG-102 (PR #48).";
+      t.linked = ["BUG-102"];
+      tr("ISSUE-402", "Triage", "Dedup: trùng root cause với BUG-102, đóng và liên kết", "ok"); return ["ISSUE-402", 1]; },
+    function () { var t = find("BUG-103"); settle("BUG-103");
+      tr("BUG-103", "Plan", "Thêm id làm khóa sort phụ để phân trang ổn định", "ok");
+      t.phase = "Fix"; tr("BUG-103", "Fix", "Sửa OrderRepository.findPage()", "run", "Sandbox");
+      t.tokens += 22000; t.minutes += 3; return ["BUG-103", 2]; },
+    function () { var t = find("SEC-301"); settle("SEC-301");
+      GATE.forEach(function (k) { t.gate[k[0]] = "pass"; });
+      tr("SEC-301", "Gate", "8/8 check pass, scan không còn finding", "ok");
+      t.stage = "review";
+      t.pr = { number: 49,
+        rootCause: "OrderSearchRepository nối chuỗi keyword và sortBy trực tiếp vào câu SQL.",
+        fix: "Keyword dùng tham số bind, sortBy kiểm tra theo whitelist và build bằng Sort.by().",
+        rejected: "Escape ký tự đặc biệt: dễ sót, không triệt để.",
+        tests: "Thêm 5 test (gồm payload injection). 219/219 unit pass, SAST sạch." };
+      tr("SEC-301", "PR", "Tạo PR #49, cập nhật ticket", "ok", "Git");
+      t.tokens += 16000; t.minutes += 4; return ["SEC-301", 2]; },
+    function () { var t = find("BUG-106");
+      t.stage = "triage"; t.confidence = 0.91;
+      tr("BUG-106", "Triage", "JEV phân loại Bug, confidence 0.91", "ok");
+      t.stage = "agent"; t.phase = "Analyze"; t.agent = "Bug Agent"; t.attempts = 1;
+      t.tokens = 12000; t.minutes = 1; t.branch = "agent/BUG-106";
+      tr("BUG-106", "Analyze", "symbol_search PhoneNormalizer", "run", "CodeGraph");
+      return ["BUG-106", 2]; },
+    function () { var t = find("BUG-101");
+      t.stage = "done"; t.note = "Đã merge PR #47";
+      tr("BUG-101", "Merge", "Reviewer duyệt, đã merge", "ok"); return ["BUG-101", 1]; },
+    function () { var t = find("BUG-103"); settle("BUG-103");
+      t.stage = "gate"; t.phase = null;
+      t.gate = { build: "pass", unit: "run", regression: "pending", coverage: "pending", lint: "pending", scan: "pending", diff: "pass", reviewer: "pending" };
+      tr("BUG-103", "Gate", "Build pass, đang chạy unit test", "run");
+      t.tokens += 8000; t.minutes += 2; return ["BUG-103", 1]; }
+  ];
+
+  function step() {
+    if (stepIdx >= STEPS.length) {
+      stopSim();
+      $("btn-sim").disabled = true;
+      $("sim-label").textContent = "Hết kịch bản";
+      return;
+    }
+    state.clockMin += 2;
+    var r = STEPS[stepIdx++]();
+    ui.flash = r[0]; ui.newLog = r[1];
+    render();
+    ui.flash = null; ui.newLog = 0;
+  }
+  function startSim() {
+    $("btn-sim").classList.add("running");
+    $("sim-label").textContent = "Tạm dừng";
+    step();
+    timer = setInterval(step, 2400);
+  }
+  function stopSim() {
+    if (timer) clearInterval(timer);
+    timer = null;
+    $("btn-sim").classList.remove("running");
+    if (stepIdx < STEPS.length) $("sim-label").textContent = stepIdx ? "Tiếp tục" : "Chạy mô phỏng";
+  }
+
+  /* ---------- Sự kiện ---------- */
+  function select(id) {
+    ui.sel = id;
+    renderTable(); renderDetail();
+    if (window.matchMedia("(max-width: 1000px)").matches) $("detail").scrollIntoView({ block: "start" });
+  }
+  $("flow").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-stage]"); if (!b) return;
+    ui.stage = ui.stage === b.dataset.stage ? null : b.dataset.stage;
+    renderFlow(); renderFilters(); renderTable();
+  });
+  $("type-filters").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-type]"); if (!b) return;
+    ui.type = b.dataset.type; renderFilters(); renderTable();
+  });
+  $("rows").addEventListener("click", function (e) {
+    var r = e.target.closest("tr[data-id]"); if (r) select(r.dataset.id);
+  });
+  $("rows").addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var r = e.target.closest("tr[data-id]"); if (r) { e.preventDefault(); select(r.dataset.id); }
+  });
+  $("log").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-id]"); if (!b) return;
+    ui.stage = null; ui.type = "ALL"; renderFlow(); renderFilters(); select(b.dataset.id);
+  });
+  $("chart").addEventListener("mouseover", function (e) {
+    var c = e.target.closest("[data-i]"); if (c) chartNote(+c.getAttribute("data-i"));
+  });
+  $("chart").addEventListener("focusin", function (e) {
+    var c = e.target.closest("[data-i]"); if (c) chartNote(+c.getAttribute("data-i"));
+  });
+  $("btn-sim").addEventListener("click", function () { timer ? stopSim() : startSim(); });
+  $("btn-reset").addEventListener("click", function () { seq = 1; reset(); });
+
+  renderLegend();
+  reset();
+  renderChart(null);
+})();
+</script>
+</body>
+</html>

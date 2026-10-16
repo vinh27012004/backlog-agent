@@ -1,0 +1,47 @@
+---
+name: resolve-pi
+description: Resolve a Production Incident in any stack. Investigate thoroughly but fast with a time-boxed checklist, confirm the root cause with evidence, apply a minimal fix. Score depends on submit time.
+---
+
+# PI (Production Incident)
+
+A PI arrives with little information. The score depends on how early the team submits, so speed comes
+from a fixed checklist, prepared tools and stopping as soon as evidence is found — not from skipping
+steps. Use `<pi_triage>` below to map symptoms to likely causes.
+
+## Time box (fractions of `minutes_left` in `<item_meta>`)
+| Step | Budget |
+|---|---|
+| 1–3 symptoms, entry point, evidence | ≤ 25% |
+| 4–5 hypotheses and confirmation | ≤ 35% |
+| 6 fix and verify | ≥ 40% |
+Over budget on a step? Move on with the best information you have.
+
+## Checklist
+1. **Symptoms** (from the brief): who, what, where, since when, always or sometimes, all users or some.
+2. **Entry point**: map the symptom to an endpoint/page/job and its call chain with the system map and
+   `codegraph`.
+3. **Evidence** (cheap first):
+   - error text / stack trace in the item → error signature;
+   - recent changes on the path: `git log --since="3 days ago" --oneline -- <paths>` and the diff of
+     suspicious commits;
+   - configuration on the path (env files, application config, feature flags, time zone, limits);
+   - data assumptions (empty table, null column, new enum value, date boundary).
+4. **Hypotheses**: 2–4 causes, most likely first, each with the evidence that would confirm it.
+5. **Confirm**: reproduce by calling the running app through `runner.app_call`, or a targeted test.
+   **Stop investigating at the first hypothesis confirmed by evidence.**
+6. **Fix the root cause** minimally; make the reproduction pass; run tests directly related to the
+   changed code. Not the full suite.
+
+## Rules
+- Prefer the fix that restores correct behaviour for all users over a workaround for the reported case.
+- A configuration or data-handling fix is fine if that is the root cause; say so in `root_cause`.
+- No hypothesis confirmed when the fix budget starts: set `status` = `partial`, list hypotheses with what
+  was checked in `verification`, low `confidence`. The orchestrator may launch parallel checkers.
+
+## Report
+`root_cause` with the evidence (file:line, request → response, log line, commit id) · `summary` of the fix
+· `verification` lists the reproduction before/after.
+
+## Done when
+Root cause confirmed with evidence · reproduction passes after the fix · directly related tests pass.

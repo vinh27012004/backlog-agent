@@ -1,0 +1,6 @@
+{"type": "thread.started", "thread_id": "mock-jev-0001"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "mcp_tool_call", "server": "codegraph", "tool": "callers", "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "sed -n 60,120p src/main/java/com/shop/order/OrderService.java", "exit_code": 0, "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_final", "type": "agent_message", "text": "{\"summary\": \"Mã giảm % bị áp hai lần: một lần trên từng dòng hàng và một lần trên tổng.\", \"criteria\": [\"Đơn 1.000.000đ với mã 10% có tổng trước thuế 900.000đ\", \"Mã giảm cố định không bị ảnh hưởng\", \"Đơn không có mã giữ nguyên tổng\"], \"symptoms\": [], \"suspects\": [{\"symbol\": \"OrderService.calculateTotal\", \"file\": \"src/main/java/com/shop/order/OrderService.java\", \"reason\": \"tính tổng và gọi giảm giá\"}, {\"symbol\": \"OrderLine.applyDiscount\", \"file\": \"src/main/java/com/shop/order/OrderLine.java\", \"reason\": \"giảm giá trên từng dòng\"}], \"related\": [], \"difficulty\": \"easy\", \"est_files_to_change\": 1, \"ambiguities\": []}"}}
+{"type": "turn.completed", "usage": {"input_tokens": 18400, "cached_input_tokens": 12800, "output_tokens": 620}}

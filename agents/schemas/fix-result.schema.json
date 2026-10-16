@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fix-result",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "fixed",
+        "partial",
+        "cannot_fix"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "description": "what was changed and why, for the submission"
+    },
+    "root_cause": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "BUG/PI: the cause; null for TASK/CR"
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests_added": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "test class#method"
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "not_run"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "check",
+          "command",
+          "result",
+          "note"
+        ]
+      }
+    },
+    "needs_dependency": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "groupId:artifactId:version the orchestrator must download"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "root_cause",
+    "changed_files",
+    "tests_added",
+    "verification",
+    "needs_dependency",
+    "risks",
+    "confidence"
+  ]
+}
