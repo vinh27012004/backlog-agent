@@ -2,6 +2,7 @@
 
 > Phiên bản: **v0.4** · Runtime: **Codex CLI / Codex SDK** · Ngân sách: **$50** (dev + practice + thi)
 > v0.4: thêm Codex Plugin của BTC, Orchestrator Agent, kết nối Game Master, lịch Training Camp.
+> v0.5: **JEV = Jev của TypeSafe AI** (model ra quyết định có kiểu) cho các quyết định nhanh; không còn agent phân tích riêng: **fixer tự phân tích** ở bước đầu (tiết kiệm 1 lần gọi Codex mỗi item, quan trọng với PI).
 > Bản vẽ: `docs/diagrams.html` (01 Architecture, 02 Infrastructure)
 
 ---
@@ -24,7 +25,7 @@ Tổng hợp từ buổi phổ biến của BTC.
 | **Codex Plugin** | Tool tích hợp sâu vào Codex SDK. (1) Xác thực đội và đăng ký với Game Master Server. (2) Xác thực xong thì **spawn Orchestrator Agent** của đội. (3) Theo dõi output của Orchestrator Agent và chi phí token của đội. |
 | **Game Master Server** | URL endpoint, API key, team id. |
 | **Repo** | GitHub. Game Master đẩy source vào repo của đội. |
-| **AI** | Lúc thi: bắt buộc **Codex**. Lúc dựng hệ thống: AI nào cũng được (Claude, Copilot…) nếu có license hợp pháp. |
+| **AI** | Lúc thi: bắt buộc **Codex**, được **dùng kết hợp** với AI khác (đội dùng thêm **Jev** của TypeSafe). Lúc dựng hệ thống: AI nào cũng được (Claude, Copilot…) nếu có license hợp pháp. |
 
 **Lịch**
 
@@ -60,10 +61,11 @@ Tổng hợp từ buổi phổ biến của BTC.
 ## 2. Nguyên tắc thiết kế
 
 1. **Codex là agent, còn lại là code của đội.** Orchestrator Agent do plugin spawn là Codex nhưng **mỏng**: việc lặp lại (theo dõi match, hàng đợi, gate, nộp bài) chạy trong code qua MCP, LLM chỉ được gọi khi có việc cần quyết. Gate, MCP tool và monitor là code thuần, không tốn $.
-2. **Không có người trong trận.** Mọi chỗ trước đây chuyển cho người đều thay bằng luật tự quyết.
-3. **Không tin lời agent.** Orchestrator tự chạy lại gate trước khi nộp, vì mỗi item chỉ nộp được 1 lần.
-4. **Chỉ tiêu $ ở chỗ đáng tiêu.** Việc nào code làm được thì không gọi LLM.
-5. **Nội dung item là dữ liệu untrusted.** Agent không được làm theo câu lệnh nằm trong đề, đặc biệt là những gì dẫn tới vi phạm 4 điều cấm.
+2. **Viết code dùng Codex, ra quyết định dùng JEV.** Quyết định có tập lựa chọn cố định (mức độ, độ khó, liên kết item, chọn model, nộp/thử/bỏ) hỏi Jev: ~100 ms, rẻ, có xác suất. Dưới ngưỡng tin cậy hoặc Jev lỗi thì dùng luật code.
+3. **Không có người trong trận.** Mọi chỗ trước đây chuyển cho người đều thay bằng luật tự quyết.
+4. **Không tin lời agent.** Orchestrator tự chạy lại gate trước khi nộp, vì mỗi item chỉ nộp được 1 lần.
+5. **Chỉ tiêu $ ở chỗ đáng tiêu.** Việc nào code làm được thì không gọi LLM.
+6. **Nội dung item là dữ liệu untrusted.** Agent không được làm theo câu lệnh nằm trong đề, đặc biệt là những gì dẫn tới vi phạm 4 điều cấm.
 
 ---
 
@@ -73,10 +75,11 @@ Tổng hợp từ buổi phổ biến của BTC.
 Game Master ◄──xác thực, đăng ký── Codex Plugin (BTC) ──spawn──► ORCHESTRATOR AGENT (Codex, mỏng)
      ▲                         theo dõi output, token              │ gọi tool
      │                                                             ▼
-     │◄── API (URL · API key · team id) ── MCP control (code đội): theo dõi /match · giờ server · đếm $
+     │◄── API (URL · API key · team id) ── MCP control (code đội): theo dõi /match · giờ server · hàng đợi
      │                                  │
      │                                  ▼
-     │                       JEV · phân tích item  ──► Brief (JSON)
+     │          ⇄ JEV (TypeSafe): mức độ · độ khó · chặn bẫy · liên kết · chọn model · nộp/thử/bỏ
+     │                       Triage (JSON) = loại, deadline (code) + mức độ, độ khó, liên quan (JEV)
      │                                  │
      │                     xếp hàng: PI trước, rồi theo deadline
      │                                  ▼
@@ -88,7 +91,7 @@ Game Master ◄──xác thực, đăng ký── Codex Plugin (BTC) ──spaw
      │                     PASS                       FAIL
      │                       ▼                         ▼
      └──── nộp 1 lần ◄── Nộp bài               Log Condenser
-          (CR/BUG kèm evidence MVS)             ├─ còn giờ, còn $ → re-plan
+          (CR/BUG kèm evidence MVS)             ├─ còn giờ, còn lượt → re-plan
                                                 └─ không → Luật tự quyết
 ```
 
@@ -115,8 +118,8 @@ Thiết kế: agent mỏng, logic nằm trong **MCP server `control`** (code đ�
 
 | Tool `control` | Việc |
 |---|---|
-| `wait_event(timeout)` | Chặn tới khi có việc cần quyết: item mới, gate xong, sắp hết deadline, $ chuyển mức. Hết giờ chờ (vd. 5 phút) thì trả về trạng thái. **LLM không tự poll**, nên lúc chờ không tốn token. |
-| `status()` | Bảng tóm tắt: item, trạng thái, deadline theo giờ server, $ đã dùng. |
+| `wait_event(timeout)` | Chặn tới khi có việc cần quyết: item mới, gate xong, sắp hết deadline. Hết giờ chờ (vd. 5 phút) thì trả về trạng thái. **LLM không tự poll**, nên lúc chờ không tốn token. |
+| `status()` | Bảng tóm tắt: item, trạng thái, deadline theo giờ server, số lần thử. |
 | `act(action, item)` | `start` · `submit` · `retry` · `drop`. Code kiểm luật trước khi làm (vd. không nộp khi gate chưa pass, không nộp lần 2). |
 
 - **Mặc định chạy tự động**: luật tự quyết (mục 4.6) nằm trong code và tự thực hiện. Agent nhận sự kiện, ghi tiến độ ra output để plugin theo dõi được, và chỉ quyết khi code trả về "cần quyết" (vd. 2 item cùng sắp hết hạn).
@@ -126,11 +129,11 @@ Thiết kế: agent mỏng, logic nằm trong **MCP server `control`** (code đ�
 
 - Theo dõi trang `/match/<id>` liên tục, phát hiện item mới.
 - Báo "bắt đầu làm" trước khi giao việc.
-- Hàng đợi: **PI trước**, sau đó theo deadline còn lại, giá trị và độ khó (lấy từ brief).
-- Gọi worker `codex exec` cho từng việc (JEV, fixer, reviewer), mỗi item một git worktree, mỗi lần một phiên mới.
+- Hàng đợi: **PI trước**, sau đó theo deadline còn lại, giá trị và độ khó (lấy từ triage).
+- Gọi worker `codex exec` cho từng việc (fixer, reviewer, PI hypothesis), mỗi item một git worktree, mỗi lần một phiên mới.
 - Tự chạy lại gate, quyết định nộp hay re-plan hay bỏ.
 - Nộp bài, đính kèm evidence MVS cho CR và BUG.
-- Đếm chi phí từ số token worker báo về, ghi vào SQLite.
+- Ghi trạng thái, thời gian và trace của từng lần chạy agent vào SQLite (không đếm token, không tính tiền — plugin BTC làm việc đó).
 
 **Chờ Training Camp xác nhận** (có phương án dự phòng):
 
@@ -141,29 +144,34 @@ Thiết kế: agent mỏng, logic nằm trong **MCP server `control`** (code đ�
 | Worker `codex exec` riêng có được phép, và plugin có tính token của chúng? | Dùng tính năng sub-agent của chính Codex (`multi_agent`) để mọi việc nằm trong thread plugin theo dõi. |
 | Plugin có cấp sẵn tool gọi Game Master không? | `control` gọi thẳng HTTP API bằng URL + API key + team id (mục 4.7). |
 
-### 4.3 JEV · phân tích item
+### 4.3 JEV và triage
 
-Việc phân loại không còn cần LLM: loại item lấy từ tiền tố mã, deadline lấy từ giờ server. JEV chuyển sang vai trò hiểu đề và lập kế hoạch.
-
-| Việc | Làm bằng |
-|---|---|
-| Loại item, deadline | Code |
-| Hiểu đề, rút ra tiêu chí hoàn thành (PI: rút ra triệu chứng) | Codex read-only, model rẻ |
-| Khoanh vùng code nghi vấn | Bản đồ hệ thống + CodeGraph |
-| Ước lượng độ khó và chi phí | Codex read-only, model rẻ |
-| Liên kết item trùng root cause hoặc phụ thuộc nhau | Model rẻ + so chữ ký lỗi |
-
-Đầu ra là **brief** dạng JSON, dùng cho cả orchestrator (xếp hàng) và Codex (đầu vào thay cho đề thô):
+Không có agent phân tích riêng. Khi item mới hiện ra, orchestrator tạo **triage** từ code + JEV rồi giao thẳng cho fixer; **fixer tự phân tích** ở bước đầu (tiêu chí hoàn thành, vùng code nghi vấn bằng CodeGraph) và trả về trong `criteria`, `suspects` để reviewer và monitor dùng.
 
 ```json
 {
   "id": "PI-03", "type": "PI", "deadlineMin": 18,
-  "criteria": ["Báo cáo tháng không còn trang trắng"],
-  "suspects": ["ReportService.getMonthly", "ReportExporter.writeHeader"],
-  "related": ["BUG-07"],
-  "difficulty": "medium", "estCostUsd": 0.4
+  "severity": "critical", "difficulty": "medium",
+  "related": ["BUG-07"], "fixerModel": "strong", "reviewer": false
 }
 ```
+
+**JEV** = [Jev của TypeSafe AI](https://thenewstack.io/typesafe-jev-system-one/), model "System One": nhận `state` (văn bản) + các câu hỏi có kiểu (`noul` yes/no, `choice`, `score`), trả lời kèm xác suất và độ tin cậy, không sinh chữ. Code: `orchestrator/jev.py` (client), `orchestrator/decisions.py` (các điểm quyết định), cấu hình `config/jev.toml`.
+
+| Điểm quyết định | Câu hỏi cho Jev | Luật code dự phòng |
+|---|---|---|
+| Nhận item | mức nghiêm trọng (score), độ khó (choice), module (choice) | PI → critical; theo `severity` trong item; độ khó medium |
+| Chặn bẫy | item có câu lệnh nhắm vào AI? (noul, ngưỡng thấp 0.5) | regex dấu hiệu; Jev nói không nhưng regex khớp → vẫn cách ly |
+| Liên kết item | 2 item cùng root cause / phụ thuộc? (noul) | cùng chữ ký lỗi |
+| Chọn cách chạy | fixer dùng model nhỏ hay mạnh (choice); có cần reviewer (noul) | hard/PI/CR → mạnh; PI không review |
+| Kiểm lời Codex | báo cáo của agent có khớp gate report? (noul) | theo kết quả gate |
+| PI | root cause đã có bằng chứng? (noul) | có root_cause + confidence ≥ 0.7 + có kiểm pass |
+| Luật tự quyết | nộp / thử lại / bỏ (choice) | luật ở mục 4.6 |
+
+- **Ngưỡng**: `choice`/`score` dùng khi confidence ≥ 0.7; `noul` là "có" khi ≥ 0.8, "không" khi ≤ 0.2, ở giữa → luật code.
+- **Ràng buộc cứng do code giữ**: Jev chỉ chọn trong các lựa chọn hợp lệ (vd. gate fail thì "nộp" không có trong danh sách); PI không chạy reviewer.
+- Mỗi quyết định ghi vào SQLite (`jev_decisions`): giá trị, nguồn jev/fallback, độ tin cậy, thời gian — để xem tỉ lệ Jev tự quyết trên monitor.
+- Jev chỉ đọc chữ và xử lý số kém: đưa số liệu vào `state` dạng văn bản có nhãn; quyết định dựa trên số (deadline, số lần thử) do code giới hạn trước.
 
 ### 4.4 Codex theo loại item
 
@@ -199,10 +207,11 @@ Giới hạn output của từng tool để không đổ log dài vào context.
 
 ### 4.6 Luật tự quyết (thay cho người)
 
-- Hết giờ hoặc hết ngân sách cho item → bỏ item.
+- Hết giờ hoặc hết số lần re-plan cho item → bỏ item (MVS đã pass thì nộp bản tốt nhất).
 - MVS đã pass nhưng còn check phụ fail → nộp bản tốt nhất.
 - Cùng chữ ký lỗi lặp 2 lần → bắt buộc đổi giả thuyết. Lặp tiếp → bỏ item.
-- Mức đỏ (sắp hết $) → chỉ làm nốt item sắp xong.
+- Khi có nhiều lựa chọn hợp lệ (nộp / thử lại / bỏ), hỏi JEV; dưới ngưỡng tin cậy thì theo luật trên.
+- Nhiều item cùng sắp hết hạn → ưu tiên PI, rồi item gần xong nhất.
 
 ### 4.7 Kết nối Game Master
 
@@ -275,16 +284,22 @@ Dừng điều tra **khi có bằng chứng**, không dừng vì đã hết nử
 
 ## 8. Ngân sách $50
 
+**Orchestrator không đọc token và không tính chi phí.** Codex Plugin của BTC đã theo dõi token và chi phí của đội, nên đội không làm lại việc đó. Chi phí được giữ trong tầm kiểm soát bằng **giới hạn cố định**, chỉnh theo số liệu xem trên plugin ở các phase practice và trial.
+
 | Giai đoạn | Gợi ý |
 |---|---|
 | Dựng hệ thống | ~$5–8 |
-| Trial, practice | ~$10–12, dùng để đo chi phí thật từng loại item |
-| **Ngày thi** | **≥ $30, khóa cứng** |
+| Trial, practice | ~$10–12, xem chi phí từng loại item trên plugin để chỉnh giới hạn |
+| **Ngày thi** | **≥ $30** |
 
 - Dựng bằng Claude, chạy bằng Codex: phần lớn hệ thống là code thuần, dựng không tốn $50.
 - **Chế độ mock**: chạy Codex thật một lần, lưu output JSON, phát lại để test orchestrator và monitor.
-- **3 mức trong trận**: xanh (bình thường) · vàng > ~60% (bỏ song song, bỏ reviewer ở TASK) · đỏ > ~85% (chỉ làm PI, BUG, CR còn kịp, item sắp xong).
-- Trần chi phí riêng cho mỗi loại item, đặt theo số đo từ practice.
+- **Giới hạn cố định** (trong `config/agents.toml` và luật tự quyết):
+  - số lần re-plan tối đa mỗi item;
+  - thời gian chờ tối đa cho từng vai trò (fixer, reviewer, PI hypothesis);
+  - model và mức suy luận theo vai trò: rẻ cho reviewer, PI hypothesis; fixer nhỏ hoặc mạnh do JEV chọn theo từng item;
+  - kiểm giả thuyết song song chỉ khi PI bị kẹt;
+  - số lần gọi `web_search` mỗi item.
 
 ---
 
@@ -293,10 +308,10 @@ Dừng điều tra **khi có bằng chứng**, không dừng vì đã hết nử
 Một máy của đội (VPS):
 
 - **Tiến trình**: Codex Plugin (BTC) → Orchestrator Agent (thread Codex) → MCP `control` (code đội) → các worker `codex exec`; MCP tool local (stdio).
-- **Lưu trữ**: SQLite cho state, trace, token và chi phí. Monitor đọc từ SQLite.
+- **Lưu trữ**: SQLite cho state và trace. Monitor đọc từ SQLite. Token và chi phí xem trên plugin BTC.
 - **Toolchain cài sẵn** trên VPS cho mọi stack có thể gặp: JDK + Maven/Gradle, Node + pnpm/yarn, Python + pip/poetry, .NET SDK, Go, PHP + Composer.
 - **Vùng làm việc**: repo của đội, cache dependency, app chạy sẵn, mỗi item một git worktree. Sandbox Codex tắt mạng.
-- **Ra ngoài** (môi trường thi có mạng): plugin xác thực với Game Master; `control` gọi Game Master API (URL + API key + team id), pull repo GitHub và tải dependency; Codex CLI gọi OpenAI API (key BTC); tool `web_search` tra web tự do (trừ Game Master/Admin/Grader). Lệnh Codex tự chạy trong sandbox không ra mạng.
+- **Ra ngoài** (môi trường thi có mạng): plugin xác thực với Game Master; `control` gọi JEV (TypeSafe API, key `TYPESAFE_API_KEY` trong `.env`); `control` gọi Game Master API (URL + API key + team id), pull repo GitHub và tải dependency; Codex CLI gọi OpenAI API (key BTC); tool `web_search` tra web tự do (trừ Game Master/Admin/Grader). Lệnh Codex tự chạy trong sandbox không ra mạng.
 - **Người**: nhóm thi chỉ xem monitor, không can thiệp.
 
 ---
@@ -306,7 +321,7 @@ Một máy của đội (VPS):
 `monitor/index.html`, đọc state từ SQLite (hiện chạy bằng dữ liệu mẫu trong `monitor/data.js`).
 
 - Chỉ số tổng, luồng xử lý, danh sách item, chi tiết item (trace, gate, vùng impact).
-- **Cần bổ sung cho v0.3**: số $ đã dùng / $30 ngày thi, chi phí từng item, deadline còn lại theo giờ server, 4 loại TASK / CR / BUG / PI.
+- **Cần bổ sung**: deadline còn lại theo giờ server, 4 loại TASK / CR / BUG / PI, số lần thử mỗi item.
 
 ---
 
@@ -315,17 +330,18 @@ Một máy của đội (VPS):
 **Trước Training Camp (đến 25/10)**
 
 1. ✅ Cài và **pin phiên bản Codex** (đã kiểm với codex-cli 0.162.1).
-2. ✅ Agent: JEV và brief; luật chung, vai trò, 4 skill v2 TASK / CR / BUG / PI; reviewer, PI hypothesis; tài liệu tham khảo; gói 6 stack; nhận diện stack (`agents/`, `orchestrator/profile.py`).
-3. ✅ Runner gọi `codex exec`, chế độ mock, đếm token và chi phí, SQLite (`orchestrator/`).
+2. ✅ Agent: fixer (tự phân tích + sửa); luật chung, vai trò, 4 skill v2 TASK / CR / BUG / PI; reviewer, PI hypothesis; tài liệu tham khảo; gói 6 stack; nhận diện stack (`agents/`, `orchestrator/profile.py`).
+3. ✅ Runner gọi `codex exec`, chế độ mock, SQLite (`orchestrator/`).
+3b. ✅ Client JEV (TypeSafe) + 6 điểm quyết định có luật dự phòng (`orchestrator/jev.py`, `decisions.py`). Cần key `TYPESAFE_API_KEY` để chạy thật.
 4. `GameMasterClient` + **`FakeGameMaster`**; MCP `control` (wait_event, status, act), hàng đợi, worktree.
 5. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), Log Condenser, web_search. Gate. Test trên repo Spring nhỏ.
 6. Hướng dẫn cho Orchestrator Agent (prompt + cách gọi `control`), chạy thử bằng Codex SDK giống cách plugin spawn.
-7. Dựng bộ repo mẫu nhiều stack (vd. Spring, NestJS, FastAPI) với ~10 lỗi cài sẵn đủ 4 loại item; chạy Codex thật, đo chi phí, sửa skill theo chỗ agent sai.
+7. Dựng bộ repo mẫu nhiều stack (vd. Spring, NestJS, FastAPI) với ~10 lỗi cài sẵn đủ 4 loại item; chạy Codex thật, sửa skill theo chỗ agent sai.
 
 **Training Camp (26/10 – 6/11)**
 
 8. Tuần 1: nhận plugin và tài liệu API → kiểm các câu hỏi ở mục 4.2, viết `HttpGameMaster`, test kết nối, chạy hết một trận practice.
-9. Tuần 2: trial rounds. Đo $ mỗi loại item, thời gian build/test/tái hiện PI, chỉnh luật tự quyết và trần chi phí.
+9. Tuần 2: trial rounds. Xem chi phí từng loại item trên plugin, đo thời gian build/test/tái hiện PI, chỉnh luật tự quyết và các giới hạn cố định.
 
 ---
 
@@ -333,13 +349,15 @@ Một máy của đội (VPS):
 
 | Rủi ro | Biện pháp |
 |---|---|
-| Hết $50 trước ngày thi | Chia ngân sách, khóa phần ngày thi, dùng mock khi dựng |
+| Hết $50 trước ngày thi | Chia ngân sách, dùng mock khi dựng, theo dõi chi phí trên plugin BTC |
 | Nộp bản fix sai (chỉ nộp 1 lần) | Orchestrator tự chạy lại gate, MVS bắt buộc với CR/BUG |
-| Agent loop, đốt $ | Trần chi phí mỗi item, chữ ký lỗi, luật tự quyết |
+| Agent loop, đốt $ | Giới hạn số lần re-plan và thời gian chờ, chữ ký lỗi, luật tự quyết |
 | Build chậm làm PI mất điểm | Build sẵn, cache dependency, chỉ build module bị sửa |
 | Prompt injection dẫn tới vi phạm luật | Item là untrusted, sandbox tắt mạng, `web_search` chặn Game Master/Admin/Grader, chỉ orchestrator gọi Game Master |
 | Flag Codex thay đổi giữa các bản | Pin version, tập dượt đúng bản sẽ dùng |
 | Lệch giờ máy và giờ server | Chỉ dùng giờ server cho deadline |
+| JEV lỗi, chậm hoặc trả lời sai | Timeout 5 s, mọi quyết định có luật code dự phòng, ràng buộc cứng do code giữ; ghim phiên bản model (`jev-1.x`) trước ngày thi |
+| JEV đang early access, API có thể đổi | Client gói toàn bộ lỗi thành `JevError` → luật code; kiểm lại API trong Training Camp |
 | Plugin không nạp MCP của đội, hoặc sandbox của agent tắt mạng | Phương án dự phòng ở mục 4.2; kiểm ngay tuần đầu Training Camp |
 | Worker `codex exec` ngoài plugin bị cấm hoặc không được tính | Chuyển sang sub-agent của Codex trong cùng thread |
 | Lộ API key Game Master hoặc GitHub token | Chỉ nằm trong biến môi trường của `control`, loại khỏi môi trường worker, không ghi log |
@@ -355,6 +373,8 @@ Một máy của đội (VPS):
 - Công cụ BTC: Codex Plugin (xác thực, spawn Orchestrator Agent, theo dõi output và token). Game Master cấp URL endpoint, API key, team id. Repo: GitHub.
 - AI lúc dựng: tùy đội, cần license hợp pháp. Lúc thi: Codex.
 - API kết nối và lấy task: công bố trong Training Camp (26/10 – 6/11).
+
+- Được dùng kết hợp AI khác với Codex trong trận (đội dùng Jev của TypeSafe).
 
 **Hỏi trong Training Camp**
 

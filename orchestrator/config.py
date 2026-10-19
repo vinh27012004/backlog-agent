@@ -38,13 +38,6 @@ class RoleConfig:
         return ROOT / "agents" / "schemas" / f"{self.schema}.schema.json"
 
 
-@dataclass
-class Pricing:
-    input: float
-    cached_input: float
-    output: float
-
-
 def _resolve(p: str) -> Path:
     path = Path(os.path.expanduser(p))
     return path if path.is_absolute() else (ROOT / path)
@@ -57,10 +50,6 @@ class AgentsConfig:
             self.raw = tomllib.load(f)
         self.defaults = self.raw.get("defaults", {})
         self.roles = self.raw.get("roles", {})
-        self.pricing = {
-            name: Pricing(float(p.get("input", 0)), float(p.get("cached_input", 0)), float(p.get("output", 0)))
-            for name, p in self.raw.get("pricing", {}).items()
-        }
 
     def role(self, name: str, itype: str | None = None) -> RoleConfig:
         if name not in self.roles:
@@ -79,6 +68,6 @@ class AgentsConfig:
             effort=merged.get("effort", "medium"),
             timeout_sec=int(merged.get("timeout_sec", 900)),
             codex_bin=merged.get("codex_bin", "codex"),
-            codex_home=_resolve(merged.get("codex_home", "codex-home")),
+            codex_home=_resolve(merged.get("codex_home", "config/codex-home")),
             add_dirs=[_resolve(d) for d in merged.get("add_dirs", [])],
         )

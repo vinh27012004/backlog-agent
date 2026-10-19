@@ -9,7 +9,7 @@ A TASK asks for new work (feature, endpoint, report, refactor, technical task). 
 the team's own tests are the only proof, and the grader judges the result against the description.
 
 ## 1. Acceptance criteria
-- Start from the brief's criteria. Make each one concrete: input → expected output/effect.
+- Derive criteria from the description. Make each one concrete: input → expected output/effect.
 - Add only the edge cases that follow from the description: invalid input, empty result, not found,
   unauthorized (if the area is protected), large input (if paging/export is involved).
 - Ambiguous? Pick the interpretation closest to how similar features already behave in this project.

@@ -1,8 +1,8 @@
 """Ghép prompt cho từng lần gọi codex exec.
 
 Thứ tự: phần cố định trước (luật chung → vai trò → skill → tài liệu tham khảo → gói stack →
-project profile), phần thay đổi sau (item, brief, diff, lần thử trước). Phần đầu giống nhau
-giữa các lần gọi nên được prompt cache của API tính rẻ hơn (cached_input_tokens).
+project profile), phần thay đổi sau (item, triage, kết quả fixer, diff, lần thử trước). Phần đầu giống nhau
+giữa các lần gọi nên được prompt cache của API tính rẻ hơn.
 
 Chỉ ghép thứ cần cho việc đang làm:
   - skill theo loại item: fixer, reviewer
@@ -74,7 +74,8 @@ def build_prompt(
     *,
     profile: dict | None = None,
     deadline_min: float | None = None,
-    brief: dict | None = None,
+    triage: dict | None = None,
+    fix_result: dict | None = None,
     other_items: list[dict] | None = None,
     diff: str | None = None,
     gate_report: str | None = None,
@@ -102,8 +103,10 @@ def build_prompt(
     if deadline_min is not None:
         meta["minutes_left"] = round(deadline_min, 1)
     parts.append("# Task data\n\n" + _fence("item_meta", meta))
-    if brief is not None:
-        parts.append(_fence("brief", brief))
+    if triage is not None:
+        parts.append(_fence("triage", triage))
+    if fix_result is not None:
+        parts.append(_fence("fix_result", fix_result))
     parts.append(_fence("item", item))
     if other_items:
         parts.append(_fence("other_items", other_items))

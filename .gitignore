@@ -2,8 +2,8 @@
 runs/
 
 # Codex tự sinh session, log, auth trong CODEX_HOME — chỉ giữ config.toml
-codex-home/*
-!codex-home/config.toml
+config/codex-home/*
+!config/codex-home/config.toml
 
 __pycache__/
 *.pyc

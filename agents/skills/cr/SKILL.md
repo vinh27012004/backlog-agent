@@ -13,8 +13,8 @@ pass, and existing behaviour outside the change must stay intact.
 |---|---|
 | new/changed rule, field, endpoint, status code, message, default, permission | everything the spec does not mention |
 
-Spec unclear? Use the assumption in the brief's `ambiguities`; prefer the option that breaks the fewest
-existing callers.
+Spec unclear? Pick the interpretation that breaks the fewest existing callers and state the assumption
+in `summary`.
 
 ## 2. Find every place the change touches
 Use `codegraph` from the thing you change outward. Typical chain in a web app:

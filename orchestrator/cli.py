@@ -1,11 +1,12 @@
 """Chạy thử từng agent bằng tay.
 
-  python -m orchestrator.cli prompt jev --item samples/items/BUG-07.json
-  python -m orchestrator.cli agent jev --item samples/items/BUG-07.json --mock
-  python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json \
-        --brief runs/BUG-07/brief.json --workdir D:/work/BUG-07
-  python -m orchestrator.cli cost
+  python -m orchestrator.cli prompt fixer --item samples/items/BUG-07.json
+  python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
+  python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --workdir D:/work/BUG-07
+  python -m orchestrator.cli agent reviewer --item ... --fix-result runs/BUG-07/fixer-1.last.json --diff d.patch
+  python -m orchestrator.cli runs                           # thống kê số lần chạy agent
   python -m orchestrator.cli profile D:/path/to/repo        # nhận diện stack
+  python -m orchestrator.cli decide triage --item samples/items/PI-03.json [--mock]   # hỏi Jev
 """
 from __future__ import annotations
 
@@ -33,8 +34,10 @@ def _load(path: str | None):
 
 def _prompt_kwargs(a) -> dict:
     kw = {}
-    if a.brief:
-        kw["brief"] = _load(a.brief)
+    if a.triage:
+        kw["triage"] = _load(a.triage)
+    if a.fix_result:
+        kw["fix_result"] = _load(a.fix_result)
     if a.diff:
         kw["diff"] = _load(a.diff)
     if a.previous:
@@ -49,13 +52,17 @@ def _prompt_kwargs(a) -> dict:
 
 
 def main(argv=None) -> int:
+    # console Windows mặc định cp1252, không in được tiếng Việt trong output agent
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="orchestrator.cli")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("prompt", "agent"):
         p = sub.add_parser(name)
-        p.add_argument("role", choices=["jev", "fixer", "reviewer", "pi_hypothesis"])
+        p.add_argument("role", choices=["fixer", "reviewer", "pi_hypothesis"])
         p.add_argument("--item", required=True)
-        p.add_argument("--brief")
+        p.add_argument("--triage", help="JSON triage (loại, deadline, mức độ, độ khó...)")
+        p.add_argument("--fix-result", dest="fix_result", help="JSON kết quả fixer (cho reviewer)")
         p.add_argument("--diff")
         p.add_argument("--previous", help="JSON lần thử trước: fail_kind, signature, log rút gọn")
         p.add_argument("--hypothesis")
@@ -67,23 +74,41 @@ def main(argv=None) -> int:
             p.add_argument("--workdir", default=".")
             p.add_argument("--attempt", type=int, default=1)
             p.add_argument("--mock", action="store_true")
-    sub.add_parser("cost")
+    sub.add_parser("runs")
     pp = sub.add_parser("profile")
     pp.add_argument("repo")
+    pd = sub.add_parser("decide", help="thử một điểm quyết định của Jev")
+    pd.add_argument("what", choices=["triage", "route"])
+    pd.add_argument("--item", required=True)
+    pd.add_argument("--triage", help="triage JSON có difficulty (cho route)")
+    pd.add_argument("--modules", help="danh sách module, cách nhau bởi dấu phẩy (cho triage)")
+    pd.add_argument("--mock", action="store_true", help="trả lời giả, không gọi API")
     a = ap.parse_args(argv)
+
+    if a.cmd == "decide":
+        from .decisions import Decider, mock_transport
+        from .jev import JevClient
+        jev = JevClient.from_config(transport=mock_transport if a.mock else None)
+        if not jev.available:
+            print("Jev chưa sẵn sàng (thiếu TYPESAFE_API_KEY hoặc enabled=false) → toàn bộ dùng luật code.")
+        decider = Decider(jev, Store(DB_PATH))
+        item = _load(a.item)
+        if a.what == "triage":
+            res = decider.triage(item, modules=a.modules.split(",") if a.modules else None)
+        else:
+            res = decider.route(item, _load(a.triage) if a.triage else {"difficulty": "medium"})
+        print(json.dumps({k: vars(v) for k, v in res.items()}, ensure_ascii=False, indent=2))
+        return 0
 
     if a.cmd == "profile":
         print(json.dumps(detect(Path(a.repo)), ensure_ascii=False, indent=2))
         return 0
 
-    if a.cmd == "cost":
-        rows = Store(DB_PATH).cost_summary()
-        print(f"{'role':<14}{'mode':<6}{'runs':>5}{'input':>10}{'cached':>10}{'output':>9}{'$':>10}")
+    if a.cmd == "runs":
+        rows = Store(DB_PATH).run_summary()
+        print(f"{'role':<14}{'mode':<6}{'runs':>5}{'ok':>5}{'avg s':>8}")
         for r in rows:
-            cost = "?" if r["cost"] is None else f"{r['cost']:.4f}"
-            print(f"{r['role']:<14}{r['mode']:<6}{r['runs']:>5}{r['input'] or 0:>10}"
-                  f"{r['cached'] or 0:>10}{r['output'] or 0:>9}{cost:>10}"
-                  + (f"  ({r['unpriced']} lần chưa có giá)" if r["unpriced"] else ""))
+            print(f"{r['role']:<14}{r['mode']:<6}{r['runs']:>5}{r['ok'] or 0:>5}{r['avg_sec'] or 0:>8}")
         return 0
 
     item = _load(a.item)
@@ -102,7 +127,6 @@ def main(argv=None) -> int:
     res = runner.run(a.role, item, workdir=Path(a.workdir), attempt=a.attempt, **kw)
     print(json.dumps({
         "status": res.status, "seconds": res.seconds,
-        "tokens": vars(res.usage), "cost_usd": res.cost_usd,
         "errors": res.errors, "output": res.output,
     }, ensure_ascii=False, indent=2))
     return 0 if res.ok else 1

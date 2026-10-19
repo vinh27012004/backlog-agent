@@ -1,5 +1,5 @@
 # Cấu hình Codex CLI dành riêng cho đội (đặt CODEX_HOME trỏ vào thư mục này).
-# Kiểm cú pháp:  CODEX_HOME=codex-home codex --strict-config features list
+# Kiểm cú pháp:  CODEX_HOME=config/codex-home codex --strict-config features list
 # Đã kiểm với codex-cli 0.162.1. Đổi phiên bản thì kiểm lại.
 
 # Model: để trống thì Codex dùng mặc định. Orchestrator truyền -m theo vai trò

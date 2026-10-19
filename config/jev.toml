@@ -1,0 +1,16 @@
+# Jev (TypeSafe AI) — model "System One": nhận state + câu hỏi có kiểu, trả lời kèm xác suất.
+# Dùng cho các quyết định nhanh, có tập lựa chọn cố định. Dưới ngưỡng tin cậy hoặc lỗi → luật code.
+# API key đọc từ biến môi trường (mặc định TYPESAFE_API_KEY), không ghi vào file này.
+
+enabled = true
+base_url = "https://api.typesafe.ai"   # client gọi {base_url}/v1/systemone
+model = "jev-latest"                    # ghim phiên bản (vd. "jev-1.14.0") trước ngày thi
+api_key_env = "TYPESAFE_API_KEY"
+timeout_sec = 5
+retries = 1                             # thử lại 1 lần khi lỗi mạng / 429 / 5xx
+
+[thresholds]
+choice = 0.70          # choice/score: confidence >= ngưỡng thì làm theo Jev
+noul_yes = 0.80        # yes/no: xác suất >= 0.80 coi là "có"
+noul_no = 0.20         # yes/no: xác suất <= 0.20 coi là "không"; ở giữa → luật code
+injection = 0.50       # chặn bẫy: thấp hơn để an toàn (thà cách ly nhầm còn hơn bỏ lọt)

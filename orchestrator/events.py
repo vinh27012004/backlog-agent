@@ -1,25 +1,14 @@
 """Đọc luồng JSONL của `codex exec --json`.
 
 Đã đối chiếu với codex-cli 0.162.1: thread.started, turn.started, item.started,
-item.updated, item.completed, turn.completed (có usage), turn.failed, error.
+item.updated, item.completed, turn.completed, turn.failed, error.
+Số token/chi phí do plugin của BTC theo dõi, orchestrator không đọc.
 Chấp nhận cả tên cũ (trước 0.44: item_type, assistant_message) cho chắc.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-
-
-@dataclass
-class Usage:
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    output_tokens: int = 0
-
-    def add(self, u: dict) -> None:
-        self.input_tokens += int(u.get("input_tokens", 0) or 0)
-        self.cached_input_tokens += int(u.get("cached_input_tokens", 0) or 0)
-        self.output_tokens += int(u.get("output_tokens", 0) or 0)
 
 
 @dataclass
@@ -32,7 +21,6 @@ class TraceEvent:
 @dataclass
 class EventState:
     thread_id: str | None = None
-    usage: Usage = field(default_factory=Usage)
     last_message: str | None = None
     errors: list[str] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
@@ -81,8 +69,6 @@ def feed(state: EventState, line: str) -> TraceEvent | None:
     t = ev.get("type", "")
     if t == "thread.started":
         state.thread_id = ev.get("thread_id")
-    elif t == "turn.completed":
-        state.usage.add(ev.get("usage") or {})
     elif t == "turn.failed":
         state.turn_failed = True
         msg = (ev.get("error") or {}).get("message", "turn failed")

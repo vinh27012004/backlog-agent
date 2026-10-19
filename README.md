@@ -8,12 +8,11 @@ Hệ thống được dựng bằng Claude, lúc thi chạy bằng **Codex CLI**
 ```
 backlog-agent/
 ├── docs/
-│   ├── ARCHITECTURE.md    kiến trúc v0.3, gate, PI, log, ngân sách $50, hạ tầng, rủi ro
+│   ├── ARCHITECTURE.md    kiến trúc, gate, PI, log, ngân sách $50, hạ tầng, rủi ro
 │   └── diagrams.html      2 bản vẽ: Architecture và Infrastructure
 ├── agents/                prompt các agent: luật chung, vai trò, skill, schema (xem agents/README.md)
-├── codex-home/            cấu hình Codex của đội (CODEX_HOME)
-├── config/agents.toml     model, effort, timeout, sandbox từng vai trò; bảng giá
-├── orchestrator/          code Python: chạy agent, đọc token, SQLite, CLI
+├── config/                cấu hình agent, JEV và Codex (CODEX_HOME)
+├── orchestrator/          code Python: chạy agent, nhận diện stack, SQLite, CLI
 ├── samples/               item mẫu và output mock
 ├── tests/                 test không tốn $
 └── monitor/               trang monitor (đang dùng dữ liệu mẫu v0.2)
@@ -23,9 +22,12 @@ backlog-agent/
 
 ```bash
 python -m unittest discover -s tests -v                                   # Python 3.11+
-python -m orchestrator.cli agent jev --item samples/items/BUG-07.json --mock
-python -m orchestrator.cli cost
+python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
+python -m orchestrator.cli decide triage --item samples/items/PI-03.json --mock   # JEV (TypeSafe)
+python -m orchestrator.cli runs
 ```
+
+`config/codex-home/config.toml` là cấu hình Codex được quản lý trong repo; session và thông tin đăng nhập Codex phát sinh tại đây sẽ không được commit.
 
 Monitor: mở `monitor/index.html` bằng trình duyệt.
 
@@ -33,7 +35,8 @@ Monitor: mở `monitor/index.html` bằng trình duyệt.
 
 | Phần | Trạng thái |
 |---|---|
-| Agent: JEV, fixer (4 skill), reviewer, PI hypothesis | Đã dựng, test bằng mock và codex giả |
+| Agent Codex: fixer (tự phân tích + 4 skill), reviewer, PI hypothesis | Đã dựng, test bằng mock và codex giả |
+| JEV (TypeSafe): client + 6 điểm quyết định có luật dự phòng | Đã dựng, test bằng server giả; cần `TYPESAFE_API_KEY` để chạy thật |
 | Cấu hình Codex | Đã kiểm với codex-cli 0.162.1 |
 | Gate | Chưa dựng |
 | MCP tool: codegraph, runner, web | Chưa dựng (đã khai báo, đang tắt) |

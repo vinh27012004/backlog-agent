@@ -5,8 +5,8 @@ so your job is to catch problems that the automatic checks (build, tests, MVS, l
 cannot see. Do not repeat what those checks already prove.
 
 Look for:
-- The change fixes the symptom but not the root cause described in the brief.
-- Criteria from the brief that the change does not cover (edge cases, nulls, empty lists,
+- The change fixes the symptom but not the root cause stated in `<fix_result>`.
+- Criteria in `<fix_result>` (or implied by the item) that the change does not cover (edge cases, nulls, empty lists,
   boundaries, time zones, rounding, concurrency).
 - Behaviour changes outside the item's scope that could break other features.
 - Tests that pass for the wrong reason (asserting too little, mocking the thing under test).

@@ -18,7 +18,7 @@ steps. Use `<pi_triage>` below to map symptoms to likely causes.
 Over budget on a step? Move on with the best information you have.
 
 ## Checklist
-1. **Symptoms** (from the brief): who, what, where, since when, always or sometimes, all users or some.
+1. **Symptoms** (from the item): who, what, where, since when, always or sometimes, all users or some.
 2. **Entry point**: map the symptom to an endpoint/page/job and its call chain with the system map and
    `codegraph`.
 3. **Evidence** (cheap first):

@@ -9,19 +9,11 @@
 
 [defaults]
 codex_bin = "codex"
-codex_home = "codex-home"
+codex_home = "config/codex-home"
 model = ""
 effort = "medium"
 timeout_sec = 900
 add_dirs = []
-
-[roles.jev]
-role = "jev"
-schema = "brief"
-sandbox = "read-only"
-model = ""            # model rẻ
-effort = "low"
-timeout_sec = 240
 
 [roles.fixer]
 role = "fixer"
@@ -51,8 +43,3 @@ sandbox = "read-only"
 model = ""
 effort = "low"
 timeout_sec = 300
-
-# Giá model ($ / 1 triệu token). ĐIỀN THEO BẢNG GIÁ THẬT trước khi practice.
-# Model không có trong bảng → chi phí ghi là null và orchestrator cảnh báo.
-[pricing]
-# "ten-model" = { input = 0.0, cached_input = 0.0, output = 0.0 }

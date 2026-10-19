@@ -1,12 +1,13 @@
 """Chạy một agent = một lần `codex exec`.
 
     runner = AgentRunner(store, mode="live")          # hoặc mode="mock"
-    res = runner.run("jev", item, workdir=repo)
-    res = runner.run("fixer", item, workdir=worktree, brief=res.output)
-    res = runner.run("reviewer", item, workdir=worktree, brief=brief, diff=diff_text)
+    triage = {...}                                     # loại, deadline (code) + mức độ, độ khó (JEV)
+    fix = runner.run("fixer", item, workdir=worktree, triage=triage)
+    rev = runner.run("reviewer", item, workdir=worktree, fix_result=fix.output, diff=diff_text)
 
 Mỗi lần chạy: phiên mới (--ephemeral), prompt qua stdin, đầu ra ép theo JSON schema,
-token và trace ghi vào SQLite, log JSONL thô lưu ở runs/<item>/.
+trace ghi vào SQLite, log JSONL thô lưu ở runs/<item>/.
+Không đọc token, không tính chi phí: plugin của BTC theo dõi việc đó.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ROOT, AgentsConfig, RoleConfig, item_type
-from .events import EventState, Usage, feed
+from .events import EventState, feed
 from .prompt import build_prompt
 from .store import Store
 
@@ -35,8 +36,6 @@ class AgentResult:
     role: str
     status: str                    # ok | failed | timeout | invalid_output
     output: dict | None
-    usage: Usage
-    cost_usd: float | None
     seconds: float
     errors: list[str] = field(default_factory=list)
 
@@ -140,13 +139,11 @@ class AgentRunner:
                     status = "invalid_output"
                     state.errors.extend(problems)
 
-        cost = self._cost(cfg.model, state.usage)
         self.store.finish_run(
-            run_id, status=status, thread_id=state.thread_id, usage=state.usage,
-            cost_usd=cost, output=output, error="; ".join(state.errors) or None,
+            run_id, status=status, thread_id=state.thread_id,
+            output=output, error="; ".join(state.errors) or None,
         )
-        return AgentResult(run_id, role_name, status, output, state.usage, cost,
-                           round(time.time() - t0, 1), state.errors)
+        return AgentResult(run_id, role_name, status, output, round(time.time() - t0, 1), state.errors)
 
     # ---------------------------------------------------------------- internal
     def _run_live(self, cfg, prompt, workdir, state, run_id, jsonl_path, last_msg_path) -> str:
@@ -209,14 +206,3 @@ class AgentRunner:
                 if te:
                     self.store.add_event(run_id, te.kind, te.summary, te.status)
         return "failed" if state.turn_failed else "ok"
-
-    def _cost(self, model: str, usage: Usage) -> float | None:
-        price = self.config.pricing.get(model) if model else None
-        if price is None:
-            return None
-        fresh = max(usage.input_tokens - usage.cached_input_tokens, 0)
-        return round(
-            (fresh * price.input + usage.cached_input_tokens * price.cached_input
-             + usage.output_tokens * price.output) / 1_000_000,
-            6,
-        )

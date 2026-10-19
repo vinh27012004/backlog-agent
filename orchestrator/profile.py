@@ -66,7 +66,7 @@ def _java(repo: Path, d: Path, files: list[str]) -> Stack | None:
         mvn = "./mvnw" if "mvnw" in files else "mvn"
         fw = ["spring-boot"] if "spring-boot" in pom else (["quarkus"] if "quarkus" in pom else [])
         return Stack(
-            "java", _rel(repo, d), "maven", fw, "junit" if "junit" in pom else "",
+            "java", _rel(repo, d), "maven", fw, "junit" if ("junit" in pom or "spring-boot-starter-test" in pom) else "",
             build=f"{mvn} -q -B -DskipTests compile",
             test_all=f"{mvn} -q -B test",
             test_one=f"{mvn} -q -B test -Dtest={{target}} -Dsurefire.failIfNoSpecifiedTests=false",

@@ -1,4 +1,4 @@
-"""SQLite lưu mỗi lần chạy agent: token, chi phí, trace. Monitor đọc từ đây."""
+"""SQLite lưu mỗi lần chạy agent: trạng thái, thời gian, đầu ra, trace. Monitor đọc từ đây."""
 from __future__ import annotations
 
 import json
@@ -19,10 +19,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   started_at    REAL NOT NULL,
   ended_at      REAL,
   thread_id     TEXT,
-  input_tokens  INTEGER DEFAULT 0,
-  cached_tokens INTEGER DEFAULT 0,
-  output_tokens INTEGER DEFAULT 0,
-  cost_usd      REAL,                       -- null nếu chưa có giá model
   output_json   TEXT,
   error         TEXT,
   jsonl_path    TEXT
@@ -35,6 +31,17 @@ CREATE TABLE IF NOT EXISTS agent_events (
   summary  TEXT NOT NULL,
   status   TEXT
 );
+CREATE TABLE IF NOT EXISTS jev_decisions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          REAL NOT NULL,
+  item_id     TEXT NOT NULL,
+  name        TEXT NOT NULL,                -- triage: severity/difficulty/injection/module, route, next_action...
+  value       TEXT,                         -- JSON
+  source      TEXT NOT NULL,                -- jev | fallback
+  confidence  REAL,
+  latency_ms  REAL,
+  reason      TEXT                          -- vì sao dùng fallback
+);
 CREATE INDEX IF NOT EXISTS idx_runs_item ON agent_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON agent_events(run_id);
 """
@@ -46,6 +53,15 @@ class Store:
         self.db = sqlite3.connect(str(path))
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+
+    def close(self) -> None:
+        self.db.close()
+
+    def __enter__(self) -> "Store":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def start_run(self, *, item_id, item_type, role, attempt, mode, model, jsonl_path) -> int:
         cur = self.db.execute(
@@ -63,22 +79,37 @@ class Store:
         )
         self.db.commit()
 
-    def finish_run(self, run_id: int, *, status, thread_id, usage, cost_usd, output, error) -> None:
+    def finish_run(self, run_id: int, *, status, thread_id, output, error) -> None:
         self.db.execute(
-            "UPDATE agent_runs SET status=?, ended_at=?, thread_id=?, input_tokens=?, cached_tokens=?,"
-            " output_tokens=?, cost_usd=?, output_json=?, error=? WHERE id=?",
+            "UPDATE agent_runs SET status=?, ended_at=?, thread_id=?, output_json=?, error=? WHERE id=?",
             (
-                status, time.time(), thread_id, usage.input_tokens, usage.cached_input_tokens,
-                usage.output_tokens, cost_usd,
+                status, time.time(), thread_id,
                 json.dumps(output, ensure_ascii=False) if output is not None else None,
                 error, run_id,
             ),
         )
         self.db.commit()
 
-    def cost_summary(self) -> list[sqlite3.Row]:
+    def add_decision(self, *, item_id, name, value, source, confidence, latency_ms, reason) -> None:
+        self.db.execute(
+            "INSERT INTO jev_decisions(ts,item_id,name,value,source,confidence,latency_ms,reason)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (time.time(), item_id, name, json.dumps(value, ensure_ascii=False), source,
+             confidence, round(latency_ms, 1), reason or None),
+        )
+        self.db.commit()
+
+    def decision_summary(self) -> list[sqlite3.Row]:
+        """Tỉ lệ quyết định do Jev đưa ra (so với luật code dự phòng) theo từng loại."""
         return self.db.execute(
-            "SELECT role, mode, COUNT(*) runs, SUM(input_tokens) input, SUM(cached_tokens) cached,"
-            " SUM(output_tokens) output, SUM(cost_usd) cost, SUM(cost_usd IS NULL) unpriced"
+            "SELECT name, COUNT(*) n, SUM(source = 'jev') by_jev, ROUND(AVG(latency_ms), 0) avg_ms"
+            " FROM jev_decisions GROUP BY name ORDER BY name"
+        ).fetchall()
+
+    def run_summary(self) -> list[sqlite3.Row]:
+        """Số lần chạy, số lần thành công, thời gian trung bình theo vai trò."""
+        return self.db.execute(
+            "SELECT role, mode, COUNT(*) runs, SUM(status = 'ok') ok,"
+            " ROUND(AVG(ended_at - started_at), 1) avg_sec"
             " FROM agent_runs GROUP BY role, mode ORDER BY role"
         ).fetchall()
