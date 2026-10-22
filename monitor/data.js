@@ -1,213 +1,1548 @@
-// DỮ LIỆU MẪU cho monitor.
-// Khi có orchestrator thật: xuất state ra đúng cấu trúc này (xem README.md).
-// Dùng file .js (không phải .json) để mở index.html trực tiếp bằng file:// vẫn đọc được.
-
+// DỮ LIỆU MẪU cho monitor, sinh bằng: python -m orchestrator.cli monitor --db <state.db> --export monitor/data.js
+// Mở qua `cli monitor` thì monitor đọc /api/state thay cho file này.
 window.MONITOR_DATA = {
-  meta: {
-    project: "Master the Machine 2026",
-    repo: "order-service (Spring Boot)",
-    sample: true,
-    clock: "10:30",
-    maxAttempts: 3,
-    tokenBudget: 400000,
-    confidenceThreshold: 0.7,
-    evalTarget: 70
-  },
-
-  evalRuns: [
-    { version: "v0.1", passed: 16, total: 50, note: "Baseline: 1 prompt, chưa reproduce" },
-    { version: "v0.2", passed: 19, total: 50, note: "Thêm CodeGraph symbol search" },
-    { version: "v0.3", passed: 21, total: 50, note: "Bắt buộc failing test trước khi fix" },
-    { version: "v0.4", passed: 25, total: 50, note: "Impact analysis chọn regression test" },
-    { version: "v0.5", passed: 27, total: 50, note: "Đưa log lỗi gate vào re-plan" },
-    { version: "v0.6", passed: 26, total: 50, note: "Đổi model bước plan (giảm nhẹ)" },
-    { version: "v0.7", passed: 31, total: 50, note: "Parse Spring config bù cạnh DI" },
-    { version: "v0.8", passed: 34, total: 50, note: "Thêm reviewer agent độc lập" }
-  ],
-
-  tickets: [
+ "meta": {
+  "match_id": "t",
+  "status": "RUNNING",
+  "minutes_left": 32.0,
+  "match_updated_at": 1792651464.4272566,
+  "generated_at": 1792651466.2145815,
+  "db": "samples (mock match)",
+  "sample": true,
+  "max_attempts": 4
+ },
+ "items": [
+  {
+   "id": "BUG-07",
+   "type": "BUG",
+   "title": "Tổng tiền đơn hàng sai khi có mã giảm giá phần trăm",
+   "state": "submitted",
+   "phase": null,
+   "attempts": 2,
+   "tier": "small",
+   "note": null,
+   "updated_at": 1792651460.9544146,
+   "severity": "high",
+   "difficulty": "medium",
+   "injection": false,
+   "deadline_min": 40.0,
+   "minutes_left": 32.0,
+   "gm_status": "CLOSED",
+   "gate": {
+    "attempt": 2,
+    "passed": true,
+    "fail_kind": null,
+    "signature": null,
+    "log": "",
+    "checks": [
+     {
+      "name": "diff",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": "2 file, 18 dòng (giới hạn 15/600)"
+     },
+     {
+      "name": "forbidden",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": ""
+     },
+     {
+      "name": "build",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "target_tests",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "regression",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "mvs",
+      "status": "skipped",
+      "seconds": 0.0,
+      "note": "chưa có MVS runner"
+     }
+    ]
+   },
+   "review": {
+    "verdict": "approve",
+    "summary": "Sửa đúng nguyên nhân, test bao phủ trường hợp mã %.",
+    "issues": []
+   },
+   "fix": {
+    "status": "fixed",
+    "summary": "Mã giảm % bị áp hai lần: một lần trong line_total cho từng dòng, một lần trên tổng. Bỏ phần giảm giá trong line_total để mã % chỉ áp một lần trên tổng trước thuế. Thêm test tái hiện đơn 1.000.000đ với mã 10%.",
+    "root_cause": "line_total áp mã % cho từng dòng, order_total áp lại lần nữa trên tổng.",
+    "confidence": 0.9,
+    "changed_files": [
+     "shop/order.py",
+     "tests/test_coupon.py"
+    ],
+    "tests_added": [
+     "tests.test_coupon"
+    ],
+    "risks": []
+   },
+   "submission": {
+    "status": "accepted",
+    "reason": null,
+    "score": 100,
+    "warnings": []
+   },
+   "trace": [
     {
-      id: "BUG-101", type: "BUG", priority: "P1",
-      title: "Tổng tiền sai khi áp 2 mã giảm giá liên tiếp",
-      stage: "review", agent: "Bug Agent", confidence: 0.93,
-      attempts: 1, tokens: 148000, minutes: 11, branch: "agent/BUG-101",
-      gate: { build: "pass", unit: "pass", regression: "pass", coverage: "pass", lint: "pass", scan: "pass", diff: "pass", reviewer: "pass" },
-      impact: ["order/PricingService.java", "order/DiscountPolicy.java", "test/order/PricingServiceTest.java"],
-      pr: {
-        number: 47,
-        rootCause: "DiscountPolicy.apply() tính trên giá gốc thay vì giá sau lần giảm trước, nên mã thứ hai bị trừ trùng.",
-        fix: "Áp mã tuần tự trên subtotal hiện tại, giới hạn tổng giảm không vượt subtotal.",
-        rejected: "Chặn áp mã thứ hai: thay đổi nghiệp vụ, ngoài phạm vi ticket.",
-        tests: "Thêm 3 test. 214/214 unit pass, 38 test regression vùng impact pass."
-      },
-      trace: [
-        { t: "09:12", step: "Triage", msg: "JEV phân loại Bug, confidence 0.93", s: "ok" },
-        { t: "09:13", step: "Analyze", tool: "CodeGraph", msg: "symbol_search applyDiscount: 3 call site", s: "ok" },
-        { t: "09:15", step: "Reproduce", tool: "Sandbox", msg: "PricingServiceTest#twoCoupons FAIL (đúng kỳ vọng)", s: "ok" },
-        { t: "09:17", step: "Plan", msg: "Sửa DiscountPolicy.apply, giữ nguyên API public", s: "ok" },
-        { t: "09:19", step: "Fix", tool: "Sandbox", msg: "Diff +24 −9 trên 2 file", s: "ok" },
-        { t: "09:22", step: "Gate", msg: "8/8 check pass", s: "ok" },
-        { t: "09:23", step: "PR", tool: "Git", msg: "Tạo PR #47, cập nhật ticket", s: "ok" }
-      ]
+     "ts": 1792651459.3683503,
+     "step": "quyết định severity",
+     "msg": "high (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
     },
     {
-      id: "BUG-102", type: "BUG", priority: "P1",
-      title: "NullPointerException khi xuất báo cáo tháng không có đơn",
-      stage: "gate", agent: "Bug Agent", confidence: 0.88,
-      attempts: 2, tokens: 236000, minutes: 19, branch: "agent/BUG-102",
-      linked: ["ISSUE-402"],
-      gate: { build: "pass", unit: "pass", regression: "run", coverage: "pending", lint: "pending", scan: "pending", diff: "pass", reviewer: "pending" },
-      impact: ["report/ReportService.java", "report/ReportController.java", "report/ReportExporter.java"],
-      trace: [
-        { t: "09:41", step: "Triage", msg: "JEV phân loại Bug, confidence 0.88", s: "ok" },
-        { t: "09:43", step: "Analyze", tool: "CodeGraph", msg: "impact: ReportController → ReportService → OrderRepository", s: "ok" },
-        { t: "09:46", step: "Reproduce", tool: "Sandbox", msg: "ReportServiceTest#emptyMonth FAIL (đúng kỳ vọng)", s: "ok" },
-        { t: "09:49", step: "Fix", tool: "Sandbox", msg: "Trả về null khi không có dữ liệu", s: "ok" },
-        { t: "09:52", step: "Gate", msg: "Unit test: ReportExportTest#header FAIL, header null", s: "fail" },
-        { t: "09:53", step: "Re-plan", msg: "Đưa log lỗi vào plan, lần thử 2/3", s: "warn" },
-        { t: "09:58", step: "Fix", tool: "Sandbox", msg: "Trả Optional.empty(), exporter vẫn ghi header", s: "ok" },
-        { t: "10:01", step: "Gate", msg: "Đang chạy regression vùng impact (41 test)", s: "run" }
-      ]
+     "ts": 1792651459.3715582,
+     "step": "quyết định difficulty",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
     },
     {
-      id: "BUG-103", type: "BUG", priority: "P2",
-      title: "Phân trang trả về bản ghi trùng ở trang cuối",
-      stage: "agent", phase: "Reproduce", agent: "Bug Agent", confidence: 0.9,
-      attempts: 1, tokens: 61000, minutes: 6, branch: "agent/BUG-103",
-      impact: ["order/OrderQueryService.java", "order/OrderRepository.java"],
-      trace: [
-        { t: "10:18", step: "Triage", msg: "JEV phân loại Bug, confidence 0.90", s: "ok" },
-        { t: "10:20", step: "Analyze", tool: "CodeGraph", msg: "findPage() sort theo createdAt, không có khóa phụ", s: "ok" },
-        { t: "10:24", step: "Reproduce", tool: "Sandbox", msg: "Seed 25 đơn trùng createdAt, chạy test", s: "run" }
-      ]
+     "ts": 1792651459.374559,
+     "step": "quyết định injection",
+     "msg": "False (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
     },
     {
-      id: "BUG-104", type: "BUG", priority: "P2",
-      title: "Ngày sinh lệch 1 ngày sau khi lưu",
-      stage: "escalated", agent: "Bug Agent", confidence: 0.86,
-      attempts: 1, tokens: 97000, minutes: 9, branch: "agent/BUG-104",
-      reason: "Không reproduce được trong sandbox (TZ=UTC). Cần timezone và phiên bản JDK của môi trường production.",
-      impact: ["customer/CustomerMapper.java", "config/JacksonConfig.java"],
-      trace: [
-        { t: "09:30", step: "Triage", msg: "JEV phân loại Bug, confidence 0.86", s: "ok" },
-        { t: "09:32", step: "Analyze", tool: "CodeGraph", msg: "LocalDate đi qua JacksonConfig và CustomerMapper", s: "ok" },
-        { t: "09:35", step: "Reproduce", tool: "Sandbox", msg: "CustomerMapperTest#birthDate PASS, không tái hiện lỗi", s: "fail" },
-        { t: "09:37", step: "Reproduce", tool: "Sandbox", msg: "Thử TZ=Asia/Saigon: vẫn PASS", s: "fail" },
-        { t: "09:38", step: "Escalate", msg: "Chuyển người: thiếu thông tin môi trường", s: "warn" }
-      ]
+     "ts": 1792651459.3811364,
+     "step": "quyết định model",
+     "msg": "small (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
     },
     {
-      id: "BUG-105", type: "BUG", priority: "P2",
-      title: "Email xác nhận gửi 2 lần khi retry thanh toán",
-      stage: "done", agent: "Bug Agent", confidence: 0.91,
-      attempts: 1, tokens: 121000, minutes: 10, branch: "agent/BUG-105",
-      note: "Đã merge PR #44",
-      gate: { build: "pass", unit: "pass", regression: "pass", coverage: "pass", lint: "pass", scan: "pass", diff: "pass", reviewer: "pass" },
-      impact: ["payment/PaymentRetryHandler.java", "notify/OrderMailer.java"],
-      pr: {
-        number: 44,
-        rootCause: "Sự kiện PaymentSucceeded được publish ở cả lần thử đầu và lần retry.",
-        fix: "Thêm idempotency key theo orderId cho OrderMailer.",
-        rejected: "Bỏ retry thanh toán: ảnh hưởng tỉ lệ thanh toán thành công.",
-        tests: "Thêm 2 test. 211/211 unit pass."
-      },
-      trace: [
-        { t: "08:40", step: "Triage", msg: "JEV phân loại Bug, confidence 0.91", s: "ok" },
-        { t: "08:44", step: "Reproduce", tool: "Sandbox", msg: "PaymentRetryTest#mailOnce FAIL (đúng kỳ vọng)", s: "ok" },
-        { t: "08:50", step: "Gate", msg: "8/8 check pass", s: "ok" },
-        { t: "08:51", step: "PR", tool: "Git", msg: "Tạo PR #44", s: "ok" },
-        { t: "09:05", step: "Merge", msg: "Reviewer duyệt, đã merge", s: "ok" }
-      ]
+     "ts": 1792651459.3843682,
+     "step": "quyết định reviewer",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
     },
     {
-      id: "BUG-106", type: "BUG", priority: "P3",
-      title: "Sai định dạng số điện thoại khi import CSV",
-      stage: "backlog", trace: []
+     "ts": 1792651459.5094733,
+     "step": "fixer lần 1",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
     },
     {
-      id: "CR-201", type: "CR", priority: "P2",
-      title: "Thêm bộ lọc theo trạng thái cho danh sách đơn hàng",
-      stage: "agent", phase: "Plan", agent: "CR Agent", confidence: 0.91,
-      attempts: 1, tokens: 88000, minutes: 8, branch: "agent/CR-201",
-      impact: ["order/OrderController.java", "order/OrderQueryService.java", "order/OrderSpecification.java"],
-      trace: [
-        { t: "10:05", step: "Triage", msg: "JEV phân loại CR, confidence 0.91", s: "ok" },
-        { t: "10:08", step: "Clarify", msg: "Yêu cầu đủ rõ: lọc theo 1 hoặc nhiều trạng thái", s: "ok" },
-        { t: "10:12", step: "Analyze", tool: "CodeGraph", msg: "Đã có OrderSpecification, mở rộng thay vì viết mới", s: "ok" },
-        { t: "10:15", step: "Plan", msg: "Thêm tham số status[] vào GET /api/orders", s: "run" }
-      ]
+     "ts": 1792651459.514766,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_coupon",
+     "s": "fail",
+     "tool": null
     },
     {
-      id: "CR-202", type: "CR", priority: "P3",
-      title: "Cho phép xuất danh sách khách hàng",
-      stage: "escalated", agent: "CR Agent", confidence: 0.82,
-      attempts: 0, tokens: 23000, minutes: 3,
-      reason: "Yêu cầu mơ hồ: chưa rõ định dạng (CSV hay Excel) và các cột cần xuất. Agent đã gửi câu hỏi làm rõ vào ticket.",
-      trace: [
-        { t: "09:55", step: "Triage", msg: "JEV phân loại CR, confidence 0.82", s: "ok" },
-        { t: "09:57", step: "Clarify", msg: "Thiếu định dạng và danh sách cột", s: "warn" },
-        { t: "09:58", step: "Escalate", msg: "Gửi 2 câu hỏi làm rõ, chờ người trả lời", s: "warn" }
-      ]
+     "ts": 1792651459.5196104,
+     "step": "fixer · file_change",
+     "msg": "shop/order.py, tests/test_coupon.py",
+     "s": "ok",
+     "tool": null
     },
     {
-      id: "CR-203", type: "CR", priority: "P3",
-      title: "Đổi thông báo lỗi đăng nhập sang tiếng Việt",
-      stage: "backlog", trace: []
+     "ts": 1792651459.5242944,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_coupon",
+     "s": "ok",
+     "tool": null
     },
     {
-      id: "SEC-301", type: "SEC", priority: "P1",
-      title: "SQL injection ở endpoint /api/orders/search",
-      stage: "agent", phase: "Fix", agent: "Security Agent", confidence: 0.97,
-      attempts: 2, tokens: 172000, minutes: 15, branch: "agent/SEC-301",
-      gate: { build: "pass", unit: "pass", regression: "pass", coverage: "pass", lint: "pass", scan: "fail", diff: "pass", reviewer: "skip" },
-      impact: ["order/OrderSearchRepository.java", "order/OrderSearchController.java"],
-      trace: [
-        { t: "09:48", step: "Triage", msg: "JEV phân loại Security, confidence 0.97", s: "ok" },
-        { t: "09:49", step: "Scan", tool: "SAST", msg: "1 finding HIGH: nối chuỗi SQL tại OrderSearchRepository:58", s: "ok" },
-        { t: "09:52", step: "Fix", tool: "Sandbox", msg: "Chuyển keyword sang tham số bind", s: "ok" },
-        { t: "09:56", step: "Gate", msg: "Security scan: còn 1 finding ở tham số sortBy", s: "fail" },
-        { t: "09:57", step: "Re-plan", msg: "Đưa kết quả scan vào plan, lần thử 2/3", s: "warn" },
-        { t: "10:02", step: "Fix", tool: "Sandbox", msg: "Whitelist cột sortBy", s: "run" }
-      ]
+     "ts": 1792651459.5282154,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Mã giảm % bị áp hai lần: một lần trong line_total cho từng dòng, một lần trên tổng. Bỏ phần giảm giá trong line_total để mã % c…",
+     "s": "ok",
+     "tool": null
     },
     {
-      id: "SEC-302", type: "SEC", priority: "P1",
-      title: "jackson-databind có CVE mức High",
-      stage: "done", agent: "Security Agent", confidence: 0.99,
-      attempts: 1, tokens: 54000, minutes: 5, branch: "agent/SEC-302",
-      note: "Đã merge PR #45",
-      gate: { build: "pass", unit: "pass", regression: "pass", coverage: "pass", lint: "pass", scan: "pass", diff: "pass", reviewer: "pass" },
-      impact: ["pom.xml"],
-      pr: {
-        number: 45,
-        rootCause: "SCA phát hiện jackson-databind 2.13.2 có CVE mức High.",
-        fix: "Nâng lên bản vá cùng nhánh minor, không đổi API.",
-        rejected: "Nâng major version: rủi ro breaking change.",
-        tests: "211/211 unit pass, scan sạch."
-      },
-      trace: [
-        { t: "08:20", step: "Scan", tool: "SCA", msg: "1 dependency có CVE mức High", s: "ok" },
-        { t: "08:23", step: "Fix", tool: "Sandbox", msg: "Nâng version trong pom.xml", s: "ok" },
-        { t: "08:27", step: "Gate", msg: "8/8 check pass", s: "ok" },
-        { t: "08:28", step: "PR", tool: "Git", msg: "Tạo PR #45", s: "ok" },
-        { t: "08:45", step: "Merge", msg: "Reviewer duyệt, đã merge", s: "ok" }
-      ]
+     "ts": 1792651459.5758643,
+     "step": "fixer lần 1",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
     },
     {
-      id: "ISSUE-401", type: "ISSUE", priority: "P2",
-      title: "API /reports chậm hơn 5 giây giờ cao điểm",
-      stage: "triage", confidence: 0.48,
-      trace: [
-        { t: "10:26", step: "Triage", msg: "JEV đang phân loại: Bug hay Performance?", s: "run" }
-      ]
+     "ts": 1792651460.1551418,
+     "step": "gate lần 1",
+     "msg": "fail (original_still_failing) · AssertionError@tests/test_coupon.py:test_percent_coupon_applied_once · 0.6s",
+     "s": "fail",
+     "tool": "Gate"
     },
     {
-      id: "ISSUE-402", type: "ISSUE", priority: "P2",
-      title: "Báo cáo tháng 9 xuất ra trang trắng",
-      stage: "triage", confidence: 0.84,
-      trace: [
-        { t: "10:27", step: "Triage", msg: "JEV kiểm tra trùng lặp với ticket đang mở", s: "run" }
-      ]
+     "ts": 1792651460.159856,
+     "step": "quyết định next_action",
+     "msg": "retry (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651460.244003,
+     "step": "fixer lần 2",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651460.2479193,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_coupon",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651460.2510948,
+     "step": "fixer · file_change",
+     "msg": "shop/order.py, tests/test_coupon.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651460.2552288,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_coupon",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651460.2586987,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Mã giảm % bị áp hai lần: một lần trong line_total cho từng dòng, một lần trên tổng. Bỏ phần giảm giá trong line_total để mã % c…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651460.2910798,
+     "step": "fixer lần 2",
+     "msg": "xong sau 0.0s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651460.7585201,
+     "step": "gate lần 2",
+     "msg": "pass · 0.5s",
+     "s": "ok",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651460.7626548,
+     "step": "quyết định claims_supported",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651460.8187208,
+     "step": "reviewer lần 2",
+     "msg": "bắt đầu (mock)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651460.8226187,
+     "step": "reviewer · message",
+     "msg": "{\"verdict\": \"approve\", \"root_cause_addressed\": true, \"issues\": [{\"severity\": \"low\", \"file\": \"src/main/java/com/shop/order/OrderService.java\", \"line\": 97, \"prob…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651460.8262374,
+     "step": "reviewer lần 2",
+     "msg": "xong sau 0.0s · approve",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651460.829514,
+     "step": "quyết định next_action",
+     "msg": "submit (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651460.9508648,
+     "step": "nộp bài",
+     "msg": "accepted · điểm tạm 100",
+     "s": "ok",
+     "tool": "Game Master"
     }
-  ]
+   ]
+  },
+  {
+   "id": "TASK-01",
+   "type": "TASK",
+   "title": "API xuất danh sách khách hàng ra CSV",
+   "state": "dropped",
+   "phase": null,
+   "attempts": 3,
+   "tier": "small",
+   "note": "chữ ký lỗi lặp lại: ImportError@tests/test_export.py:<module>",
+   "updated_at": 1792651462.865187,
+   "severity": "medium",
+   "difficulty": "medium",
+   "injection": false,
+   "deadline_min": 40.0,
+   "minutes_left": 32.0,
+   "gm_status": "OPEN",
+   "gate": {
+    "attempt": 3,
+    "passed": false,
+    "fail_kind": "original_still_failing",
+    "signature": "ImportError@tests/test_export.py:<module>",
+    "log": "ERROR: test_export (unittest.loader._FailedTest)\nImportError: Failed to import test module: test_export\nTraceback (most recent call last):\n  File \"tests\\test_export.py\", line 3, in <module>\nImportError: cannot import name 'export_csv' from 'shop.customers' (shop\\customers.py)\nFAILED (errors=1)",
+    "checks": [
+     {
+      "name": "diff",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": "1 file, 8 dòng (giới hạn 15/600)"
+     },
+     {
+      "name": "forbidden",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": ""
+     },
+     {
+      "name": "build",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "target_tests",
+      "status": "fail",
+      "seconds": 0.1,
+      "note": ""
+     }
+    ]
+   },
+   "review": null,
+   "fix": {
+    "status": "fixed",
+    "summary": "Thêm export_csv trả CSV gồm id, họ tên, email, ngày tạo, lọc theo khoảng ngày tạo (gồm cả hai đầu). Test kiểm header, số dòng và bộ lọc.",
+    "root_cause": null,
+    "confidence": 0.85,
+    "changed_files": [
+     "shop/customers.py",
+     "tests/test_export.py"
+    ],
+    "tests_added": [
+     "tests.test_export"
+    ],
+    "risks": []
+   },
+   "submission": null,
+   "trace": [
+    {
+     "ts": 1792651459.351224,
+     "step": "quyết định severity",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651459.3584268,
+     "step": "quyết định difficulty",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651459.3616233,
+     "step": "quyết định injection",
+     "msg": "False (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651460.9577234,
+     "step": "quyết định model",
+     "msg": "small (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651460.960646,
+     "step": "quyết định reviewer",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651461.0820794,
+     "step": "fixer lần 1",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651461.086358,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.0897846,
+     "step": "fixer · file_change",
+     "msg": "shop/customers.py, tests/test_export.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.0932848,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.096727,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Thêm export_csv trả CSV gồm id, họ tên, email, ngày tạo, lọc theo khoảng ngày tạo (gồm cả hai đầu). Test kiểm header, số dòng v…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.1309144,
+     "step": "fixer lần 1",
+     "msg": "xong sau 0.0s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651461.6445594,
+     "step": "gate lần 1",
+     "msg": "fail (original_still_failing) · ImportError@tests/test_export.py:<module> · 0.5s",
+     "s": "fail",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651461.6489673,
+     "step": "quyết định next_action",
+     "msg": "retry (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651461.7302113,
+     "step": "fixer lần 2",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651461.7348187,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.7382529,
+     "step": "fixer · file_change",
+     "msg": "shop/customers.py, tests/test_export.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.74162,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.7449496,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Thêm export_csv trả CSV gồm id, họ tên, email, ngày tạo, lọc theo khoảng ngày tạo (gồm cả hai đầu). Test kiểm header, số dòng v…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651461.792372,
+     "step": "fixer lần 2",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651462.3007915,
+     "step": "gate lần 2",
+     "msg": "fail (original_still_failing) · ImportError@tests/test_export.py:<module> · 0.5s",
+     "s": "fail",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651462.307018,
+     "step": "quyết định next_action",
+     "msg": "retry (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651462.403091,
+     "step": "fixer lần 3",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651462.4080038,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651462.4116116,
+     "step": "fixer · file_change",
+     "msg": "shop/customers.py, tests/test_export.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651462.4152863,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_export",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651462.4188442,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Thêm export_csv trả CSV gồm id, họ tên, email, ngày tạo, lọc theo khoảng ngày tạo (gồm cả hai đầu). Test kiểm header, số dòng v…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651462.4561572,
+     "step": "fixer lần 3",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651462.8613307,
+     "step": "gate lần 3",
+     "msg": "fail (original_still_failing) · ImportError@tests/test_export.py:<module> · 0.4s",
+     "s": "fail",
+     "tool": "Gate"
+    }
+   ]
+  },
+  {
+   "id": "CR-02",
+   "type": "CR",
+   "title": "Thêm giới hạn 5 lần đổi mật khẩu mỗi ngày",
+   "state": "submitted",
+   "phase": null,
+   "attempts": 2,
+   "tier": "strong",
+   "note": null,
+   "updated_at": 1792651464.3977616,
+   "severity": "medium",
+   "difficulty": "medium",
+   "injection": false,
+   "deadline_min": 30.0,
+   "minutes_left": 26.0,
+   "gm_status": "CLOSED",
+   "gate": {
+    "attempt": 2,
+    "passed": true,
+    "fail_kind": null,
+    "signature": null,
+    "log": "",
+    "checks": [
+     {
+      "name": "diff",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": "2 file, 27 dòng (giới hạn 15/600)"
+     },
+     {
+      "name": "forbidden",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": ""
+     },
+     {
+      "name": "build",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "target_tests",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "regression",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "mvs",
+      "status": "skipped",
+      "seconds": 0.0,
+      "note": "chưa có MVS runner"
+     }
+    ]
+   },
+   "review": {
+    "verdict": "approve",
+    "summary": "Sửa đúng nguyên nhân, test bao phủ trường hợp mã %.",
+    "issues": []
+   },
+   "fix": {
+    "status": "fixed",
+    "summary": "Giới hạn 5 lần đổi mật khẩu trong 24 giờ trượt; lần thứ 6 trả HTTP 429 với mã PASSWORD_CHANGE_LIMIT. Chỉ giữ các mốc đổi trong 24 giờ gần nhất.",
+    "root_cause": null,
+    "confidence": 0.85,
+    "changed_files": [
+     "shop/account.py",
+     "tests/test_password_limit.py"
+    ],
+    "tests_added": [
+     "tests.test_password_limit"
+    ],
+    "risks": []
+   },
+   "submission": {
+    "status": "accepted",
+    "reason": null,
+    "score": 100,
+    "warnings": []
+   },
+   "trace": [
+    {
+     "ts": 1792651462.8943667,
+     "step": "quyết định severity",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651462.897777,
+     "step": "quyết định difficulty",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651462.9014432,
+     "step": "quyết định injection",
+     "msg": "False (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651462.9078827,
+     "step": "quyết định model",
+     "msg": "strong (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651462.9107995,
+     "step": "quyết định reviewer",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651463.028933,
+     "step": "fixer lần 1",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651463.0332956,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_password_limit",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.0370708,
+     "step": "fixer · file_change",
+     "msg": "shop/account.py, tests/test_password_limit.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.0404036,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_password_limit",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.0442066,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Giới hạn 5 lần đổi mật khẩu trong 24 giờ trượt; lần thứ 6 trả HTTP 429 với mã PASSWORD_CHANGE_LIMIT. Chỉ giữ các mốc đổi trong …",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.0816734,
+     "step": "fixer lần 1",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651463.514982,
+     "step": "gate lần 1",
+     "msg": "pass · 0.4s",
+     "s": "ok",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651463.5195115,
+     "step": "quyết định claims_supported",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651463.6018877,
+     "step": "reviewer lần 1",
+     "msg": "bắt đầu (mock)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651463.6069384,
+     "step": "reviewer · message",
+     "msg": "{\"verdict\": \"request_changes\", \"root_cause_addressed\": true, \"summary\": \"Thiếu kiểm mốc đúng 24 giờ.\", \"issues\": [{\"severity\": \"high\", \"file\": \"shop/account.py…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.6136563,
+     "step": "reviewer lần 1",
+     "msg": "xong sau 0.0s · request_changes",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651463.6176996,
+     "step": "quyết định next_action",
+     "msg": "retry (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651463.7178068,
+     "step": "fixer lần 2",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651463.7217262,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_password_limit",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.7250826,
+     "step": "fixer · file_change",
+     "msg": "shop/account.py, tests/test_password_limit.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.728513,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_password_limit",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.7330124,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Giới hạn 5 lần đổi mật khẩu trong 24 giờ trượt; lần thứ 6 trả HTTP 429 với mã PASSWORD_CHANGE_LIMIT. Chỉ giữ các mốc đổi trong …",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651463.7762322,
+     "step": "fixer lần 2",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651464.1970422,
+     "step": "gate lần 2",
+     "msg": "pass · 0.4s",
+     "s": "ok",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651464.201076,
+     "step": "quyết định claims_supported",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.261562,
+     "step": "reviewer lần 2",
+     "msg": "bắt đầu (mock)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651464.264911,
+     "step": "reviewer · message",
+     "msg": "{\"verdict\": \"approve\", \"root_cause_addressed\": true, \"issues\": [{\"severity\": \"low\", \"file\": \"src/main/java/com/shop/order/OrderService.java\", \"line\": 97, \"prob…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651464.2696576,
+     "step": "reviewer lần 2",
+     "msg": "xong sau 0.0s · approve",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651464.273196,
+     "step": "quyết định next_action",
+     "msg": "submit (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.3940055,
+     "step": "nộp bài",
+     "msg": "accepted · điểm tạm 100",
+     "s": "ok",
+     "tool": "Game Master"
+    }
+   ]
+  },
+  {
+   "id": "PI-03",
+   "type": "PI",
+   "title": "Báo cáo doanh thu tháng hiển thị trang trắng",
+   "state": "submitted",
+   "phase": null,
+   "attempts": 2,
+   "tier": "strong",
+   "note": null,
+   "updated_at": 1792651465.9305537,
+   "severity": "critical",
+   "difficulty": "medium",
+   "injection": false,
+   "deadline_min": 18.0,
+   "minutes_left": 18.0,
+   "gm_status": "VISIBLE",
+   "gate": {
+    "attempt": 2,
+    "passed": true,
+    "fail_kind": null,
+    "signature": null,
+    "log": "",
+    "checks": [
+     {
+      "name": "diff",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": "2 file, 12 dòng (giới hạn 15/600)"
+     },
+     {
+      "name": "forbidden",
+      "status": "pass",
+      "seconds": 0.0,
+      "note": ""
+     },
+     {
+      "name": "build",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "target_tests",
+      "status": "pass",
+      "seconds": 0.1,
+      "note": ""
+     },
+     {
+      "name": "regression",
+      "status": "pass",
+      "seconds": 0.2,
+      "note": ""
+     }
+    ]
+   },
+   "review": null,
+   "fix": {
+    "status": "fixed",
+    "summary": "Báo cáo tháng trống vì monthly_report so 10 ký tự đầu của ngày (YYYY-MM-DD) với tháng (YYYY-MM) nên không đơn nào khớp; báo cáo ngày dùng đúng 10 ký tự nên vẫn chạy. Sửa so 7 ký tự đầu, thêm test tái hiện.",
+    "root_cause": "shop/report.py monthly_report so o['date'][:10] (ngày) với chuỗi tháng YYYY-MM.",
+    "confidence": 0.9,
+    "changed_files": [
+     "shop/report.py",
+     "tests/test_monthly_report.py"
+    ],
+    "tests_added": [
+     "tests.test_monthly_report"
+    ],
+    "risks": []
+   },
+   "submission": {
+    "status": "accepted",
+    "reason": null,
+    "score": 100,
+    "warnings": []
+   },
+   "trace": [
+    {
+     "ts": 1792651464.4309082,
+     "step": "quyết định severity",
+     "msg": "critical (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.4343107,
+     "step": "quyết định difficulty",
+     "msg": "medium (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.4371977,
+     "step": "quyết định injection",
+     "msg": "False (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.4440925,
+     "step": "quyết định model",
+     "msg": "strong (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.4475772,
+     "step": "quyết định reviewer",
+     "msg": "False (fallback) · PI skips review",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651464.5968883,
+     "step": "fixer lần 1",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651464.600957,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_monthly_report",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651464.6039076,
+     "step": "fixer · file_change",
+     "msg": "shop/report.py, tests/test_monthly_report.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651464.6071987,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_monthly_report",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651464.6105924,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Báo cáo tháng trống vì monthly_report so 10 ký tự đầu của ngày (YYYY-MM-DD) với tháng (YYYY-MM) nên không đơn nào khớp; báo cáo…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651464.644386,
+     "step": "fixer lần 1",
+     "msg": "xong sau 0.0s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.1023557,
+     "step": "gate lần 1",
+     "msg": "fail (original_still_failing) · AssertionError@tests/test_monthly_report.py:test_month · 0.5s",
+     "s": "fail",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651465.1066444,
+     "step": "quyết định next_action",
+     "msg": "retry (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651465.1875796,
+     "step": "pi_hypothesis lần 1",
+     "msg": "bắt đầu (mock)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.187667,
+     "step": "pi_hypothesis lần 1",
+     "msg": "bắt đầu (mock)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.1933618,
+     "step": "pi_hypothesis · mcp",
+     "msg": "runner.app_call",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.1976118,
+     "step": "pi_hypothesis · mcp",
+     "msg": "runner.app_call",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2007883,
+     "step": "pi_hypothesis · message",
+     "msg": "{\"hypothesis\": \"Truy vấn báo cáo tháng lọc sai múi giờ\", \"verdict\": \"supported\", \"evidence\": [\"ReportRepository.java:41 dùng LocalDate.now() theo UTC\", \"Gọi GE…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2046235,
+     "step": "pi_hypothesis · message",
+     "msg": "{\"hypothesis\": \"Truy vấn báo cáo tháng lọc sai múi giờ\", \"verdict\": \"supported\", \"evidence\": [\"ReportRepository.java:41 dùng LocalDate.now() theo UTC\", \"Gọi GE…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2085028,
+     "step": "pi_hypothesis lần 1",
+     "msg": "xong sau 0.0s · supported",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.2121103,
+     "step": "pi_hypothesis lần 1",
+     "msg": "xong sau 0.0s · supported",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.2249053,
+     "step": "fixer lần 2",
+     "msg": "bắt đầu (mock, gpt-6-luna)",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.229545,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_monthly_report",
+     "s": "fail",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2341378,
+     "step": "fixer · file_change",
+     "msg": "shop/report.py, tests/test_monthly_report.py",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2377234,
+     "step": "fixer · command",
+     "msg": "python -m unittest tests.test_monthly_report",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.2411785,
+     "step": "fixer · message",
+     "msg": "{\"status\": \"fixed\", \"summary\": \"Báo cáo tháng trống vì monthly_report so 10 ký tự đầu của ngày (YYYY-MM-DD) với tháng (YYYY-MM) nên không đơn nào khớp; báo cáo…",
+     "s": "ok",
+     "tool": null
+    },
+    {
+     "ts": 1792651465.277458,
+     "step": "fixer lần 2",
+     "msg": "xong sau 0.1s · fixed",
+     "s": "ok",
+     "tool": "Codex"
+    },
+    {
+     "ts": 1792651465.7720716,
+     "step": "gate lần 2",
+     "msg": "pass · 0.5s",
+     "s": "ok",
+     "tool": "Gate"
+    },
+    {
+     "ts": 1792651465.7760746,
+     "step": "quyết định claims_supported",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651465.7794936,
+     "step": "quyết định root_cause_confirmed",
+     "msg": "True (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651465.7829318,
+     "step": "quyết định next_action",
+     "msg": "submit (fallback) · Jev disabled or API key missing",
+     "s": "ok",
+     "tool": "Luật"
+    },
+    {
+     "ts": 1792651465.9273562,
+     "step": "nộp bài",
+     "msg": "accepted · điểm tạm 100",
+     "s": "ok",
+     "tool": "Game Master"
+    }
+   ]
+  }
+ ],
+ "events": [
+  {
+   "item": "PI-03",
+   "ts": 1792651465.9273562,
+   "step": "nộp bài",
+   "msg": "accepted · điểm tạm 100",
+   "s": "ok",
+   "tool": "Game Master"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.7829318,
+   "step": "quyết định next_action",
+   "msg": "submit (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.7794936,
+   "step": "quyết định root_cause_confirmed",
+   "msg": "True (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.7760746,
+   "step": "quyết định claims_supported",
+   "msg": "True (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.7720716,
+   "step": "gate lần 2",
+   "msg": "pass · 0.5s",
+   "s": "ok",
+   "tool": "Gate"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.277458,
+   "step": "fixer lần 2",
+   "msg": "xong sau 0.1s · fixed",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2411785,
+   "step": "fixer · message",
+   "msg": "{\"status\": \"fixed\", \"summary\": \"Báo cáo tháng trống vì monthly_report so 10 ký tự đầu của ngày (YYYY-MM-DD) với tháng (YYYY-MM) nên không đơn nào khớp; báo cáo…",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2377234,
+   "step": "fixer · command",
+   "msg": "python -m unittest tests.test_monthly_report",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2341378,
+   "step": "fixer · file_change",
+   "msg": "shop/report.py, tests/test_monthly_report.py",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.229545,
+   "step": "fixer · command",
+   "msg": "python -m unittest tests.test_monthly_report",
+   "s": "fail",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2249053,
+   "step": "fixer lần 2",
+   "msg": "bắt đầu (mock, gpt-6-luna)",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2121103,
+   "step": "pi_hypothesis lần 1",
+   "msg": "xong sau 0.0s · supported",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2085028,
+   "step": "pi_hypothesis lần 1",
+   "msg": "xong sau 0.0s · supported",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2046235,
+   "step": "pi_hypothesis · message",
+   "msg": "{\"hypothesis\": \"Truy vấn báo cáo tháng lọc sai múi giờ\", \"verdict\": \"supported\", \"evidence\": [\"ReportRepository.java:41 dùng LocalDate.now() theo UTC\", \"Gọi GE…",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.2007883,
+   "step": "pi_hypothesis · message",
+   "msg": "{\"hypothesis\": \"Truy vấn báo cáo tháng lọc sai múi giờ\", \"verdict\": \"supported\", \"evidence\": [\"ReportRepository.java:41 dùng LocalDate.now() theo UTC\", \"Gọi GE…",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.1976118,
+   "step": "pi_hypothesis · mcp",
+   "msg": "runner.app_call",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.1933618,
+   "step": "pi_hypothesis · mcp",
+   "msg": "runner.app_call",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.187667,
+   "step": "pi_hypothesis lần 1",
+   "msg": "bắt đầu (mock)",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.1875796,
+   "step": "pi_hypothesis lần 1",
+   "msg": "bắt đầu (mock)",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.1066444,
+   "step": "quyết định next_action",
+   "msg": "retry (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651465.1023557,
+   "step": "gate lần 1",
+   "msg": "fail (original_still_failing) · AssertionError@tests/test_monthly_report.py:test_month · 0.5s",
+   "s": "fail",
+   "tool": "Gate"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.644386,
+   "step": "fixer lần 1",
+   "msg": "xong sau 0.0s · fixed",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.6105924,
+   "step": "fixer · message",
+   "msg": "{\"status\": \"fixed\", \"summary\": \"Báo cáo tháng trống vì monthly_report so 10 ký tự đầu của ngày (YYYY-MM-DD) với tháng (YYYY-MM) nên không đơn nào khớp; báo cáo…",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.6071987,
+   "step": "fixer · command",
+   "msg": "python -m unittest tests.test_monthly_report",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.6039076,
+   "step": "fixer · file_change",
+   "msg": "shop/report.py, tests/test_monthly_report.py",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.600957,
+   "step": "fixer · command",
+   "msg": "python -m unittest tests.test_monthly_report",
+   "s": "fail",
+   "tool": null
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.5968883,
+   "step": "fixer lần 1",
+   "msg": "bắt đầu (mock, gpt-6-luna)",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.4475772,
+   "step": "quyết định reviewer",
+   "msg": "False (fallback) · PI skips review",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.4440925,
+   "step": "quyết định model",
+   "msg": "strong (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.4371977,
+   "step": "quyết định injection",
+   "msg": "False (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.4343107,
+   "step": "quyết định difficulty",
+   "msg": "medium (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "PI-03",
+   "ts": 1792651464.4309082,
+   "step": "quyết định severity",
+   "msg": "critical (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.3940055,
+   "step": "nộp bài",
+   "msg": "accepted · điểm tạm 100",
+   "s": "ok",
+   "tool": "Game Master"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.273196,
+   "step": "quyết định next_action",
+   "msg": "submit (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.2696576,
+   "step": "reviewer lần 2",
+   "msg": "xong sau 0.0s · approve",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.264911,
+   "step": "reviewer · message",
+   "msg": "{\"verdict\": \"approve\", \"root_cause_addressed\": true, \"issues\": [{\"severity\": \"low\", \"file\": \"src/main/java/com/shop/order/OrderService.java\", \"line\": 97, \"prob…",
+   "s": "ok",
+   "tool": null
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.261562,
+   "step": "reviewer lần 2",
+   "msg": "bắt đầu (mock)",
+   "s": "ok",
+   "tool": "Codex"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.201076,
+   "step": "quyết định claims_supported",
+   "msg": "True (fallback) · Jev disabled or API key missing",
+   "s": "ok",
+   "tool": "Luật"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651464.1970422,
+   "step": "gate lần 2",
+   "msg": "pass · 0.4s",
+   "s": "ok",
+   "tool": "Gate"
+  },
+  {
+   "item": "CR-02",
+   "ts": 1792651463.7762322,
+   "step": "fixer lần 2",
+   "msg": "xong sau 0.1s · fixed",
+   "s": "ok",
+   "tool": "Codex"
+  }
+ ],
+ "jev": [
+  {
+   "name": "claims_supported",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "difficulty",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "injection",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "model",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "next_action",
+   "n": 8,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "reviewer",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "root_cause_confirmed",
+   "n": 1,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  },
+  {
+   "name": "severity",
+   "n": 4,
+   "by_jev": 0,
+   "avg_ms": 0.0
+  }
+ ],
+ "agents": [
+  {
+   "role": "fixer",
+   "mode": "mock",
+   "runs": 9,
+   "ok": 9,
+   "avg_sec": 0.1
+  },
+  {
+   "role": "pi_hypothesis",
+   "mode": "mock",
+   "runs": 2,
+   "ok": 2,
+   "avg_sec": 0.0
+  },
+  {
+   "role": "reviewer",
+   "mode": "mock",
+   "runs": 3,
+   "ok": 3,
+   "avg_sec": 0.0
+  }
+ ]
 };

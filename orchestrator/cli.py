@@ -1,6 +1,7 @@
 """Chạy thử từng agent bằng tay, hoặc cả trận với Game Master giả.
 
   python -m orchestrator.cli match --mock --jev-mock        # cả trận giả trên repo mẫu, không tốn $
+  python -m orchestrator.cli monitor                        # xem trận mới nhất: http://127.0.0.1:8765
 
   python -m orchestrator.cli prompt fixer --item samples/items/BUG-07.json
   python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
@@ -141,6 +142,10 @@ def main(argv=None) -> int:
     pm.add_argument("--until-idle", dest="until_idle", action="store_true",
                     help="dừng khi mọi item đã thấy đều xong, không chờ hết trận")
     pm.add_argument("--db", help="file SQLite (mặc định runs/<match>/state.db)")
+    pw = sub.add_parser("monitor", help="mở monitor (http://127.0.0.1:8765) đọc SQLite của một trận")
+    pw.add_argument("--db", help="state.db của trận (mặc định: trận mới nhất trong runs/)")
+    pw.add_argument("--port", type=int, default=8765)
+    pw.add_argument("--export", help="ghi snapshot ra file .js (vd. monitor/data.js) rồi thoát")
     a = ap.parse_args(argv)
 
     if a.cmd == "decide":
@@ -160,6 +165,19 @@ def main(argv=None) -> int:
 
     if a.cmd == "match":
         return _match(a)
+
+    if a.cmd == "monitor":
+        from .monitor import export_js, latest_db, serve
+        db = Path(a.db) if a.db else latest_db()
+        if db is None or not db.exists():
+            print("Không tìm thấy state.db: chạy `match` trước hoặc truyền --db.")
+            return 1
+        if a.export:
+            export_js(db, Path(a.export))
+            print(f"Đã ghi {a.export} từ {db}")
+            return 0
+        serve(db, port=a.port)
+        return 0
 
     if a.cmd == "gate":
         from .gate import Gate

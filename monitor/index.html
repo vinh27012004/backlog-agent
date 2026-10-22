@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: bảng điều khiển vận hành — chỉ số tổng → luồng giai đoạn → danh sách + chi tiết → eval + sự kiện */
+/* Layout: bảng điều khiển trận đấu — chỉ số tổng → luồng trạng thái → danh sách item + chi tiết → Jev/agent + sự kiện */
 :root {
   --bg: #EDF0F3;
   --panel: #FFFFFF;
@@ -250,22 +250,6 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
 
 .d-empty { padding: 48px 20px; text-align: center; color: var(--ink-3); }
 
-/* Chart */
-.chart-box { padding: 12px 16px 16px; }
-.chart-box svg { width: 100%; height: auto; display: block; overflow: visible; }
-.chart-note { font-size: 12px; color: var(--ink-2); margin-top: 6px; min-height: 18px; }
-.chart-note b { font-family: var(--f-mono); font-weight: 500; color: var(--ink); }
-.ax { fill: var(--ink-3); font-family: var(--f-mono); font-size: 11px; }
-.grid-l { stroke: var(--line); stroke-width: 1; }
-.target-l { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 4; }
-.target-t { fill: var(--warn); font-size: 11px; font-family: var(--f-ui); font-weight: 500; }
-.line-p { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
-.area-p { fill: var(--accent); opacity: .1; }
-.pt { fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: pointer; }
-.pt:hover, .pt.on { fill: var(--accent); }
-.pt.end { fill: var(--accent); }
-.end-t { fill: var(--ink); font-family: var(--f-mono); font-size: 12px; font-weight: 500; }
-
 /* Log */
 .log { list-style: none; margin: 0; padding: 4px 0; max-height: 360px; overflow: auto; }
 .log li { display: grid; grid-template-columns: 44px 8px 74px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 6px 16px; font-size: 12.5px; }
@@ -302,6 +286,32 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
 @media (prefers-reduced-motion: reduce) {
   *, *::before { animation: none !important; }
 }
+
+/* Mô hình trận đấu: 4 loại item, trạng thái item, deadline theo giờ server */
+.type.TASK { color: var(--ink-2); } .type.PI { color: var(--crit); }
+.pill.queued { color: var(--ink-3); background: var(--idle-soft); }
+.pill.working { color: var(--run); background: var(--run-soft); }
+.pill.working::before { animation: pulse 1.4s ease-in-out infinite; }
+.pill.submitted { color: var(--ok); background: var(--ok-soft); }
+.pill.dropped { color: var(--warn); background: var(--warn-soft); }
+.pill.failed, .pill.unknown { color: var(--crit); background: var(--crit-soft); }
+.gate { grid-template-columns: repeat(7, 10px); }
+.left { font-family: var(--f-mono); font-size: 12px; white-space: nowrap; }
+.left.warm { color: var(--warn); font-weight: 500; } .left.hot { color: var(--crit); font-weight: 600; }
+.sev { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
+.sev.critical, .sev.high { color: var(--crit); font-weight: 500; }
+.callout.warn { background: var(--warn-soft); } .callout.warn b { color: var(--warn); }
+.conn { font-size: 12px; color: var(--ink-3); }
+.conn.err { color: var(--crit); font-weight: 500; }
+.btn.paused .live-dot { animation: none; opacity: .4; }
+pre.box { margin: 6px 0 0; font-family: var(--f-mono); font-size: 11.5px; line-height: 1.45; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.issues { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
+.stats-wrap { padding: 4px 0 8px; display: grid; gap: 10px; }
+.stats-wrap h3 { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 8px 16px 0; }
+.stats td, .stats th { padding: 6px 16px; }
+.stats tbody tr { cursor: default; }
+.stats tbody tr:hover td { background: transparent; }
+.empty { padding: 16px; color: var(--ink-3); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -310,13 +320,13 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
   <header class="top">
     <div class="brand">
       <h1>Backlog Agent Monitor</h1>
-      <span class="sub" id="repo"></span>
-      <span class="sample" id="sample-badge">Dữ liệu mẫu</span>
+      <span class="sub" id="match"></span>
+      <span class="sample" id="sample-badge" hidden>Dữ liệu mẫu</span>
     </div>
     <div class="controls">
-      <span class="clock">Giờ mô phỏng <b class="mono" id="clock">--:--</b></span>
-      <button class="btn primary" id="btn-sim" type="button"><span class="live-dot"></span><span id="sim-label">Chạy mô phỏng</span></button>
-      <button class="btn" id="btn-reset" type="button">Đặt lại</button>
+      <span class="clock">Trận <b class="mono" id="mstatus">—</b> · còn <b class="mono" id="mleft">—</b></span>
+      <span class="conn" id="conn"></span>
+      <button class="btn" id="btn-pause" type="button" hidden><span class="live-dot"></span><span id="pause-label">Tạm dừng cập nhật</span></button>
     </div>
   </header>
 
@@ -325,15 +335,15 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
   <section class="panel" aria-label="Luồng xử lý">
     <div class="panel-h">
       <h2>Luồng xử lý</h2>
-      <span class="hint">Bấm một giai đoạn để lọc danh sách</span>
+      <span class="hint">Bấm một trạng thái để lọc danh sách</span>
     </div>
     <div class="flow" id="flow"></div>
   </section>
 
   <div class="main">
-    <section class="panel" aria-label="Danh sách ticket">
+    <section class="panel" aria-label="Danh sách item">
       <div class="panel-h">
-        <h2>Ticket</h2>
+        <h2>Item</h2>
         <span class="hint" id="filter-hint"></span>
         <div class="right" id="type-filters"></div>
       </div>
@@ -341,12 +351,12 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
         <table>
           <thead>
             <tr>
-              <th>Ticket</th>
+              <th>Item</th>
               <th>Tiêu đề</th>
-              <th>Giai đoạn</th>
+              <th>Trạng thái</th>
+              <th style="text-align:right">Còn lại</th>
               <th>Lần thử</th>
-              <th>Validation Gate</th>
-              <th style="text-align:right">Tokens</th>
+              <th>Gate</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -355,31 +365,28 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
       <div class="legend" id="legend"></div>
     </section>
 
-    <aside class="panel detail" id="detail" aria-label="Chi tiết ticket"></aside>
+    <aside class="panel detail" id="detail" aria-label="Chi tiết item"></aside>
   </div>
 
   <div class="lower">
-    <section class="panel" aria-label="Pass rate trên eval set">
+    <section class="panel" aria-label="Jev và agent">
       <div class="panel-h">
-        <h2>Pass rate trên eval set</h2>
-        <span class="hint" id="eval-hint"></span>
+        <h2>Jev và agent</h2>
+        <span class="hint">Tỉ lệ Jev tự quyết (còn lại theo luật code) · thời gian chạy agent</span>
       </div>
-      <div class="chart-box">
-        <svg id="chart" viewBox="0 0 640 230" role="img" aria-label="Biểu đồ pass rate theo phiên bản"></svg>
-        <div class="chart-note" id="chart-note"></div>
-      </div>
+      <div class="stats-wrap" id="stats"></div>
     </section>
 
     <section class="panel" aria-label="Sự kiện gần nhất">
       <div class="panel-h">
         <h2>Sự kiện gần nhất</h2>
-        <span class="hint">Log orchestrator</span>
+        <span class="hint">Agent, gate, quyết định, nộp bài</span>
       </div>
       <ul class="log" id="log"></ul>
     </section>
   </div>
 
-  <p class="footnote">Dữ liệu đọc từ <code>monitor/data.js</code>. Khi có orchestrator thật, xuất state ra đúng cấu trúc đó để monitor hiển thị số liệu thật.</p>
+  <p class="footnote" id="footnote"></p>
 </div>
 
 <script src="data.js"></script>
@@ -387,111 +394,57 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
 (function () {
   "use strict";
 
-  var STAGES = [
-    { key: "backlog", label: "Backlog" },
-    { key: "triage", label: "Triage · JEV" },
-    { key: "agent", label: "Agent xử lý" },
-    { key: "gate", label: "Validation Gate" },
-    { key: "review", label: "Chờ review" },
-    { key: "done", label: "Hoàn tất" }
-  ];
-  var ESC = { key: "escalated", label: "Cần người" };
-  var STAGE_LABEL = {};
-  STAGES.concat([ESC]).forEach(function (s) { STAGE_LABEL[s.key] = s.label; });
+  /* Nguồn dữ liệu: mở qua `python -m orchestrator.cli monitor` thì đọc /api/state mỗi 3 giây (SQLite của trận);
+     mở index.html bằng file:// thì dùng window.MONITOR_DATA trong data.js (sinh từ một trận mock). */
+  var LIVE = location.protocol === "http:" || location.protocol === "https:";
+  var POLL_MS = 3000;
 
+  var STATES = [
+    { key: "queued", label: "Chờ" },
+    { key: "working", label: "Đang làm" },
+    { key: "submitted", label: "Đã nộp" }
+  ];
+  var SIDE = [{ key: "dropped", label: "Bỏ" }, { key: "failed", label: "Lỗi / chưa rõ" }];
+  var STATE_LABEL = { queued: "Chờ", working: "Đang làm", submitted: "Đã nộp", dropped: "Bỏ", failed: "Lỗi", unknown: "Chưa rõ" };
   var GATE = [
-    ["build", "Build"], ["unit", "Unit test"], ["regression", "Regression vùng impact"],
-    ["coverage", "Coverage vùng impact"], ["lint", "Lint"], ["scan", "Security scan"],
-    ["diff", "Kích thước diff"], ["reviewer", "Reviewer agent"]
+    ["diff", "Kích thước diff"], ["forbidden", "Luật cấm"], ["build", "Build"], ["target_tests", "Test agent viết"],
+    ["regression", "Regression"], ["mvs", "MVS"], ["reviewer", "Reviewer"]
   ];
   var GATE_ST = { pass: "Pass", fail: "Fail", warn: "Cảnh báo", run: "Đang chạy", pending: "Chưa chạy", skip: "Bỏ qua" };
-  var TYPES = [["ALL", "Tất cả"], ["BUG", "Bug"], ["CR", "CR"], ["SEC", "Security"], ["ISSUE", "Issue"]];
-  var TYPE_LABEL = { BUG: "Bug", CR: "CR", SEC: "Security", ISSUE: "Issue" };
+  var TYPES = [["ALL", "Tất cả"], ["TASK", "TASK"], ["CR", "CR"], ["BUG", "BUG"], ["PI", "PI"]];
+  var RANK = { working: 0, queued: 1, submitted: 2, dropped: 3, unknown: 4, failed: 4 };
 
-  var SRC = window.MONITOR_DATA;
-  var state, ui = { stage: null, type: "ALL", sel: null, flash: null, newLog: 0 };
-  var timer = null, stepIdx = 0;
+  var data = null, ui = { state: null, type: "ALL", sel: null }, paused = false, seen = {};
 
-  function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
   function $(id) { return document.getElementById(id); }
-  function find(id) { return state.tickets.filter(function (t) { return t.id === id; })[0]; }
+  function find(id) { return data.items.filter(function (t) { return t.id === id; })[0]; }
+  function hhmmss(ts) {
+    if (!ts) return "--:--";
+    var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+  function mins(v) { return v == null ? "—" : (Math.round(v * 10) / 10) + "′"; }
+  function stateKey(t) { return t.state === "unknown" ? "failed" : t.state; }
+
+  /* ---------- Gate ---------- */
   function gateOf(t) {
-    var g = {};
-    GATE.forEach(function (k) { g[k[0]] = (t.gate && t.gate[k[0]]) || "pending"; });
+    var g = {}, worst = { fail: 4, warn: 3, pass: 2, skip: 1, pending: 0 };
+    GATE.forEach(function (k) { g[k[0]] = "pending"; });
+    if (t.gate) t.gate.checks.forEach(function (c) {
+      var key = c.name.split("[")[0], s = c.status === "skipped" ? "skip" : c.status;
+      if (key === "tests_declared") key = "target_tests";
+      if (!(key in g)) return;
+      if (g[key] === "pending" || worst[s] > worst[g[key]]) g[key] = s;
+    });
+    if (t.review) g.reviewer = t.review.verdict === "approve" ? "pass" : "fail";
+    else if (t.type === "PI") g.reviewer = "skip";
+    if (t.state === "working" && t.phase && t.phase.indexOf("reviewer") === 0) g.reviewer = "run";
     return g;
-  }
-  function kfmt(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n || 0); }
-  function toMin(hhmm) { var p = hhmm.split(":"); return (+p[0]) * 60 + (+p[1]); }
-  function fromMin(m) { var h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? "0" : "") + h + ":" + (mm < 10 ? "0" : "") + mm; }
-
-  function reset() {
-    state = clone(SRC);
-    state.clockMin = toMin(state.meta.clock);
-    stepIdx = 0;
-    ui.flash = null; ui.newLog = 0;
-    if (!ui.sel) ui.sel = "BUG-102";
-    stopSim();
-    $("btn-sim").disabled = false;
-    $("sim-label").textContent = "Chạy mô phỏng";
-    render();
-  }
-
-  /* ---------- KPI ---------- */
-  function renderKpis() {
-    var T = state.tickets, runs = state.evalRuns;
-    var last = runs[runs.length - 1], prev = runs[runs.length - 2];
-    var pr = Math.round(last.passed / last.total * 100);
-    var pp = Math.round(prev.passed / prev.total * 100);
-    var d = pr - pp;
-    var count = function (k) { return T.filter(function (t) { return t.stage === k; }).length; };
-    var running = count("triage") + count("agent") + count("gate");
-    var started = T.filter(function (t) { return t.stage !== "backlog"; }).length;
-    var escN = count("escalated");
-    var escRate = started ? Math.round(escN / started * 100) : 0;
-    var tried = T.filter(function (t) { return t.attempts > 0; });
-    var avgAtt = tried.length ? tried.reduce(function (a, t) { return a + t.attempts; }, 0) / tried.length : 0;
-    var withTok = T.filter(function (t) { return t.tokens > 0; });
-    var avgTok = withTok.length ? withTok.reduce(function (a, t) { return a + t.tokens; }, 0) / withTok.length : 0;
-    var avgMin = withTok.length ? withTok.reduce(function (a, t) { return a + (t.minutes || 0); }, 0) / withTok.length : 0;
-
-    var tiles = [
-      { l: "Pass rate eval set", v: pr + '<small>%</small>', f: '<span class="' + (d >= 0 ? "up" : "down") + '">' + (d >= 0 ? "+" : "") + d + " điểm</span> so với " + esc(prev.version) },
-      { l: "Đang xử lý", v: running, f: "Triage, agent và gate" },
-      { l: "Chờ review", v: count("review"), f: "PR đã qua gate" },
-      { l: "Cần người", v: escN, f: escRate + "% ticket đã bắt đầu", alert: escN > 0 },
-      { l: "Lần thử trung bình", v: avgAtt.toFixed(1) + '<small> / ' + state.meta.maxAttempts + '</small>', f: "Trên " + tried.length + " ticket" },
-      { l: "Chi phí trung bình", v: kfmt(avgTok) + '<small> tokens</small>', f: Math.round(avgMin) + " phút mỗi ticket" }
-    ];
-    $("kpis").innerHTML = tiles.map(function (k) {
-      return '<div class="kpi' + (k.alert ? " alert" : "") + '"><span class="lbl">' + k.l + '</span><span class="val">' + k.v + '</span><span class="foot">' + k.f + "</span></div>";
-    }).join("");
-  }
-
-  /* ---------- Flow ---------- */
-  function renderFlow() {
-    var T = state.tickets;
-    var n = function (k) { return T.filter(function (t) { return t.stage === k; }).length; };
-    var html = STAGES.map(function (s, i) {
-      return (i ? '<span class="arrow" aria-hidden="true">→</span>' : "") +
-        '<button type="button" class="stage-btn' + (ui.stage === s.key ? " active" : "") + '" data-stage="' + s.key + '" aria-pressed="' + (ui.stage === s.key) + '">' +
-        '<span class="n">' + n(s.key) + '</span><span class="s">' + s.label + "</span></button>";
-    }).join("");
-    html += '<span class="sep" aria-hidden="true"></span><button type="button" class="stage-btn esc' + (ui.stage === ESC.key ? " active" : "") + '" data-stage="escalated" aria-pressed="' + (ui.stage === ESC.key) + '">' +
-      '<span class="n">' + n("escalated") + '</span><span class="s">' + ESC.label + "</span></button>";
-    $("flow").innerHTML = html;
-  }
-
-  /* ---------- Table ---------- */
-  function pips(t) {
-    var max = state.meta.maxAttempts, a = t.attempts || 0, out = "";
-    for (var i = 1; i <= max; i++) out += '<i class="' + (i <= a ? "on" : "") + (i === a && a > 1 ? " last" : "") + '"></i>';
-    return '<span class="pips' + (a >= max ? " max" : "") + '" title="' + a + "/" + max + ' lần thử">' + out + "</span>" +
-      ' <span class="mono" style="font-size:12px;color:var(--ink-3)">' + a + "/" + max + "</span>";
   }
   function gateCells(t) {
     if (!t.gate) return '<span style="color:var(--ink-3);font-size:12px">—</span>';
@@ -500,39 +453,85 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
       return '<i class="g-' + g[k[0]] + '" title="' + esc(k[1] + ": " + GATE_ST[g[k[0]]]) + '"></i>';
     }).join("") + "</span>";
   }
+
+  /* ---------- KPI ---------- */
+  function renderKpis() {
+    var T = data.items, n = function (f) { return T.filter(f).length; };
+    var sub = T.filter(function (t) { return t.state === "submitted"; });
+    var score = sub.reduce(function (a, t) { return a + ((t.submission && t.submission.score) || 0); }, 0);
+    var bad = n(function (t) { return t.state === "failed" || t.state === "unknown"; });
+    var dropped = n(function (t) { return t.state === "dropped"; });
+    var pis = T.filter(function (t) { return t.type === "PI"; });
+    var tried = T.filter(function (t) { return t.attempts > 0; });
+    var avgAtt = tried.length ? tried.reduce(function (a, t) { return a + t.attempts; }, 0) / tried.length : 0;
+    var dec = (data.jev || []).reduce(function (a, r) { a.n += r.n; a.j += r.by_jev || 0; return a; }, { n: 0, j: 0 });
+    var tiles = [
+      { l: "Đã nộp", v: sub.length + '<small> / ' + T.length + '</small>', f: "Điểm tạm " + score },
+      { l: "Đang làm", v: n(function (t) { return t.state === "working"; }), f: "Chờ: " + n(function (t) { return t.state === "queued"; }) },
+      { l: "Bỏ / lỗi", v: dropped + bad, f: bad ? bad + " lỗi hoặc chưa rõ nộp" : "Không có lỗi", alert: bad > 0 },
+      { l: "PI", v: pis.length, f: "Đã nộp " + pis.filter(function (t) { return t.state === "submitted"; }).length },
+      { l: "Lần thử trung bình", v: avgAtt.toFixed(1) + '<small> / ' + data.meta.max_attempts + '</small>', f: "Trên " + tried.length + " item" },
+      { l: "Jev tự quyết", v: (dec.n ? Math.round(dec.j / dec.n * 100) : 0) + '<small>%</small>', f: dec.n + " quyết định, còn lại theo luật code" }
+    ];
+    $("kpis").innerHTML = tiles.map(function (k) {
+      return '<div class="kpi' + (k.alert ? " alert" : "") + '"><span class="lbl">' + k.l + '</span><span class="val">' + k.v + '</span><span class="foot">' + k.f + "</span></div>";
+    }).join("");
+  }
+
+  /* ---------- Flow ---------- */
+  function renderFlow() {
+    var n = function (k) { return data.items.filter(function (t) { return stateKey(t) === k; }).length; };
+    var btn = function (s, extra) {
+      return '<button type="button" class="stage-btn' + (extra || "") + (ui.state === s.key ? " active" : "") + '" data-state="' + s.key + '" aria-pressed="' + (ui.state === s.key) + '">' +
+        '<span class="n">' + n(s.key) + '</span><span class="s">' + s.label + "</span></button>";
+    };
+    var html = STATES.map(function (s, i) { return (i ? '<span class="arrow" aria-hidden="true">→</span>' : "") + btn(s); }).join("");
+    html += '<span class="sep" aria-hidden="true"></span>' + btn(SIDE[0]) + '<span class="arrow" aria-hidden="true"></span>' + btn(SIDE[1], " esc");
+    $("flow").innerHTML = html;
+  }
+
+  /* ---------- Table ---------- */
+  function pips(t) {
+    var max = data.meta.max_attempts, a = t.attempts || 0, out = "";
+    for (var i = 1; i <= max; i++) out += '<i class="' + (i <= a ? "on" : "") + (i === a && a > 1 ? " last" : "") + '"></i>';
+    return '<span class="pips' + (a >= max ? " max" : "") + '" title="' + a + "/" + max + ' lần thử">' + out + "</span>" +
+      ' <span class="mono" style="font-size:12px;color:var(--ink-3)">' + a + "/" + max + "</span>";
+  }
+  function leftCell(t) {
+    if (t.state === "submitted" || t.state === "dropped" || t.minutes_left == null) return '<span class="left" style="color:var(--ink-3)">—</span>';
+    var cls = t.minutes_left < 5 ? " hot" : (t.minutes_left < 10 ? " warm" : "");
+    return '<span class="left' + cls + '" title="Deadline ' + esc(t.deadline_min) + ' phút, theo giờ Game Master">' + mins(t.minutes_left) + "</span>";
+  }
   function renderFilters() {
     $("type-filters").innerHTML = TYPES.map(function (x) {
       return '<button type="button" class="fchip' + (ui.type === x[0] ? " on" : "") + '" data-type="' + x[0] + '" aria-pressed="' + (ui.type === x[0]) + '">' + x[1] + "</button>";
     }).join("");
-    $("filter-hint").textContent = ui.stage ? "Đang lọc: " + STAGE_LABEL[ui.stage] : "";
+    $("filter-hint").textContent = ui.state ? "Đang lọc: " + STATE_LABEL[ui.state] : "";
   }
-  function renderTable() {
-    var rank = function (t) {
-      var r = { escalated: 0, gate: 1, agent: 2, triage: 3, review: 4, backlog: 5, done: 6 };
-      return r[t.stage];
-    };
-    var rows = state.tickets.filter(function (t) {
-      return (!ui.stage || t.stage === ui.stage) && (ui.type === "ALL" || t.type === ui.type);
-    }).sort(function (a, b) { return rank(a) - rank(b) || a.priority.localeCompare(b.priority) || a.id.localeCompare(b.id); });
-
+  function renderTable(flash) {
+    var rows = data.items.filter(function (t) {
+      return (!ui.state || stateKey(t) === ui.state) && (ui.type === "ALL" || t.type === ui.type);
+    }).sort(function (a, b) {
+      return RANK[a.state] - RANK[b.state] || (a.type === "PI" ? 0 : 1) - (b.type === "PI" ? 0 : 1) ||
+        (a.minutes_left == null ? 1e9 : a.minutes_left) - (b.minutes_left == null ? 1e9 : b.minutes_left) || a.id.localeCompare(b.id);
+    });
     if (!rows.length) {
-      $("rows").innerHTML = '<tr class="empty-row"><td colspan="6">Không có ticket nào khớp bộ lọc.</td></tr>';
+      $("rows").innerHTML = '<tr class="empty-row"><td colspan="6">' + (data.items.length ? "Không có item nào khớp bộ lọc." : "Chưa có item nào.") + "</td></tr>";
       return;
     }
     $("rows").innerHTML = rows.map(function (t) {
-      var sub = t.agent ? esc(t.agent) : (t.stage === "backlog" ? "Chưa phân loại" : "JEV");
-      if (t.linked && t.linked.length) sub += " · liên kết " + esc(t.linked.join(", "));
-      return '<tr data-id="' + t.id + '" tabindex="0" class="' + (ui.sel === t.id ? "sel" : "") + (ui.flash === t.id ? " flash" : "") + '">' +
-        '<td class="id"><span class="type ' + t.type + '">' + TYPE_LABEL[t.type] + '</span><span class="mono">' + t.id + '</span> <span class="prio ' + t.priority + '">' + t.priority + "</span></td>" +
-        '<td class="title"><div class="t">' + esc(t.title) + '</div><div class="sub">' + sub + "</div></td>" +
-        '<td><span class="pill ' + t.stage + '">' + STAGE_LABEL[t.stage] + "</span>" + (t.phase && t.stage === "agent" ? '<span class="phase">' + esc(t.phase) + "</span>" : "") + "</td>" +
-        "<td>" + (t.attempts != null ? pips(t) : '<span style="color:var(--ink-3)">—</span>') + "</td>" +
-        "<td>" + gateCells(t) + "</td>" +
-        '<td class="num">' + (t.tokens ? kfmt(t.tokens) : "—") + "</td></tr>";
+      var sub = [t.tier ? "fixer " + t.tier : null, t.difficulty, t.injection ? "⚠ nghi bẫy prompt" : null].filter(Boolean).join(" · ");
+      return '<tr data-id="' + esc(t.id) + '" tabindex="0" class="' + (ui.sel === t.id ? "sel" : "") + (flash[t.id] ? " flash" : "") + '">' +
+        '<td class="id"><span class="type ' + esc(t.type) + '">' + esc(t.type) + '</span><span class="mono">' + esc(t.id) + '</span> <span class="sev ' + esc(t.severity) + '">' + esc(t.severity || "") + "</span></td>" +
+        '<td class="title"><div class="t">' + esc(t.title) + '</div><div class="sub">' + esc(sub) + "</div></td>" +
+        '<td><span class="pill ' + esc(t.state) + '">' + esc(STATE_LABEL[t.state] || t.state) + "</span>" + (t.phase ? '<span class="phase">' + esc(t.phase) + "</span>" : "") + "</td>" +
+        '<td class="num">' + leftCell(t) + "</td>" +
+        "<td>" + (t.attempts ? pips(t) : '<span style="color:var(--ink-3)">—</span>') + "</td>" +
+        "<td>" + gateCells(t) + "</td></tr>";
     }).join("");
   }
   function renderLegend() {
-    $("legend").innerHTML = '<span style="font-weight:600">Gate (8 ô theo thứ tự):</span> ' +
+    $("legend").innerHTML = '<span style="font-weight:600">Gate (7 ô theo thứ tự):</span> ' +
       GATE.map(function (k, i) { return (i + 1) + ". " + k[1]; }).join(" · ") +
       '<span style="flex-basis:100%;height:0"></span>' +
       ["pass", "fail", "warn", "run", "pending", "skip"].map(function (s) {
@@ -543,237 +542,152 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
   /* ---------- Detail ---------- */
   function renderDetail() {
     var t = ui.sel && find(ui.sel);
-    if (!t) { $("detail").innerHTML = '<div class="d-empty">Chọn một ticket để xem chi tiết.</div>'; return; }
+    if (!t) { $("detail").innerHTML = '<div class="d-empty">Chọn một item để xem chi tiết.</div>'; return; }
     var h = [];
     h.push('<div class="panel-h"><h2>Chi tiết</h2></div><div class="d-body">');
-    h.push('<div><div class="d-id"><span class="type ' + t.type + '">' + TYPE_LABEL[t.type] + '</span><span class="mono">' + t.id + '</span><span class="prio ' + t.priority + '">' + t.priority + "</span></div>");
+    h.push('<div><div class="d-id"><span class="type ' + esc(t.type) + '">' + esc(t.type) + '</span><span class="mono">' + esc(t.id) + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity || "") + "</span></div>");
     h.push('<h3 class="d-title">' + esc(t.title) + "</h3>");
-    h.push('<div class="d-stage"><span class="pill ' + t.stage + '">' + STAGE_LABEL[t.stage] + "</span>" + (t.phase && t.stage === "agent" ? "Bước hiện tại: <b>" + esc(t.phase) + "</b>" : "") + "</div></div>");
+    h.push('<div class="d-stage"><span class="pill ' + esc(t.state) + '">' + esc(STATE_LABEL[t.state] || t.state) + "</span>" + (t.phase ? "Bước hiện tại: <b>" + esc(t.phase) + "</b>" : "") + "</div></div>");
 
-    if (t.stage === "escalated" && t.reason) h.push('<div class="callout crit"><b>Lý do chuyển người</b>' + esc(t.reason) + "</div>");
-    else if (t.note) h.push('<div class="callout ok"><b>Kết quả</b>' + esc(t.note) + "</div>");
-    if (t.linked && t.linked.length) h.push('<div class="callout info"><b>Ticket liên kết</b>Cùng root cause với ' + esc(t.linked.join(", ")) + "</div>");
-
-    if (t.stage !== "backlog") {
-      var budget = state.meta.tokenBudget, pct = Math.min(100, Math.round((t.tokens || 0) / budget * 100));
-      var th = state.meta.confidenceThreshold;
-      h.push('<dl class="meta">');
-      h.push("<div><dt>Agent</dt><dd>" + esc(t.agent || "JEV (triage)") + "</dd></div>");
-      h.push("<div><dt>Confidence</dt><dd class=\"mono\">" + (t.confidence != null ? '<span class="' + (t.confidence < th ? "low" : "") + '">' + t.confidence.toFixed(2) + "</span> / ngưỡng " + th.toFixed(2) : "—") + "</dd></div>");
-      h.push("<div><dt>Branch</dt><dd class=\"mono\">" + esc(t.branch || "—") + "</dd></div>");
-      h.push("<div><dt>Thời gian</dt><dd class=\"mono\">" + (t.minutes ? t.minutes + " phút" : "—") + "</dd></div>");
-      h.push('<div class="full"><dt>Budget tokens</dt><dd class="mono">' + kfmt(t.tokens || 0) + " / " + kfmt(budget) + " (" + pct + '%)<div class="bar' + (pct > 60 ? " hot" : "") + '"><i style="width:' + pct + '%"></i></div></dd></div>');
-      h.push("</dl>");
+    var s = t.submission;
+    if (t.state === "submitted" && s) {
+      h.push('<div class="callout ok"><b>Đã nộp</b>' + (s.score != null ? "Điểm tạm " + esc(s.score) + ". " : "") +
+        (s.warnings && s.warnings.length ? "Cảnh báo: " + esc(s.warnings.join("; ")) : "Grader sẽ chấm lại thành điểm chính thức.") + "</div>");
+    } else if (t.state === "dropped") {
+      h.push('<div class="callout warn"><b>Đã bỏ</b>' + esc(t.note || "") + "</div>");
+    } else if (t.state === "failed" || t.state === "unknown") {
+      h.push('<div class="callout crit"><b>' + (t.state === "unknown" ? "Chưa rõ đã nộp chưa" : "Lỗi") + "</b>" + esc(t.note || (s && s.reason) || "") + "</div>");
     }
+    if (t.injection) h.push('<div class="callout crit"><b>Nghi bẫy prompt</b>Nội dung item có câu lệnh nhắm vào AI. Fixer được báo xử lý nội dung như dữ liệu.</div>');
+
+    var open = t.state === "queued" || t.state === "working";     // item đã đóng thì đồng hồ không còn ý nghĩa
+    var used = open && t.deadline_min && t.minutes_left != null ? Math.min(100, Math.round((1 - t.minutes_left / t.deadline_min) * 100)) : null;
+    h.push('<dl class="meta">');
+    h.push("<div><dt>Fixer</dt><dd>" + esc(t.tier || "—") + "</dd></div>");
+    h.push("<div><dt>Mức độ · độ khó</dt><dd>" + esc((t.severity || "—") + " · " + (t.difficulty || "—")) + "</dd></div>");
+    h.push('<div><dt>Lần thử</dt><dd class="mono">' + (t.attempts || 0) + " / " + data.meta.max_attempts + "</dd></div>");
+    h.push('<div><dt>Game Master</dt><dd class="mono">' + esc(t.gm_status || "—") + "</dd></div>");
+    if (used != null) h.push('<div class="full"><dt>Thời gian (giờ server)</dt><dd class="mono">còn ' + mins(t.minutes_left) + " / " + esc(t.deadline_min) + ' phút<div class="bar' + (used > 75 ? " hot" : "") + '"><i style="width:' + used + '%"></i></div></dd></div>');
+    h.push("</dl>");
 
     if (t.gate) {
       var g = gateOf(t), nPass = GATE.filter(function (k) { return g[k[0]] === "pass"; }).length;
-      h.push('<div><div class="sec-h">Validation Gate <span>' + nPass + "/8 pass" + (t.attempts ? " · lần thử " + t.attempts + "/" + state.meta.maxAttempts : "") + '</span></div><ul class="checks">');
+      h.push('<div><div class="sec-h">Gate <span>lần ' + esc(t.gate.attempt) + " · " + (t.gate.passed ? "pass" : "fail (" + esc(t.gate.fail_kind) + ")") + " · " + nPass + "/7 ô pass</span></div><ul class=\"checks\">");
       GATE.forEach(function (k) {
-        var s = g[k[0]];
-        h.push('<li class="' + s + '"><i class="g-' + s + '"></i>' + k[1] + '<span class="st">' + GATE_ST[s] + "</span></li>");
+        var st = g[k[0]], note = (t.gate.checks.filter(function (c) { return c.name.split("[")[0] === k[0]; })[0] || {}).note;
+        h.push('<li class="' + st + '" title="' + esc(note || "") + '"><i class="g-' + st + '"></i>' + k[1] + '<span class="st">' + GATE_ST[st] + "</span></li>");
       });
-      h.push("</ul></div>");
+      h.push("</ul>");
+      if (t.gate.signature) h.push('<div class="footnote" style="margin-top:6px">Chữ ký lỗi: <code>' + esc(t.gate.signature) + "</code></div>");
+      if (t.gate.log) h.push('<pre class="box">' + esc(t.gate.log) + "</pre>");
+      h.push("</div>");
     }
 
-    if (t.trace && t.trace.length) {
-      h.push('<div><div class="sec-h">Trace <span>' + t.trace.length + ' bước</span></div><ol class="trace">');
+    if (t.review) {
+      h.push('<div><div class="sec-h">Reviewer <span>' + esc(t.review.verdict) + "</span></div>");
+      if (t.review.summary) h.push('<div style="font-size:13px">' + esc(t.review.summary) + "</div>");
+      if (t.review.issues.length) h.push('<ul class="issues">' + t.review.issues.map(function (i) {
+        return "<li><b>" + esc(i.severity) + "</b> " + esc(i.file || "") + (i.line ? ":" + esc(i.line) : "") + " — " + esc(i.problem || "") + "</li>";
+      }).join("") + "</ul>");
+      h.push("</div>");
+    }
+
+    if (t.fix) {
+      h.push('<div><div class="sec-h">Fixer <span>' + esc(t.fix.status) + (t.fix.confidence != null ? " · confidence " + esc(t.fix.confidence) : "") + '</span></div><dl class="pr">');
+      if (t.fix.summary) h.push("<div><dt>Tóm tắt</dt><dd>" + esc(t.fix.summary) + "</dd></div>");
+      if (t.fix.root_cause) h.push("<div><dt>Root cause</dt><dd>" + esc(t.fix.root_cause) + "</dd></div>");
+      if (t.fix.tests_added && t.fix.tests_added.length) h.push('<div><dt>Test agent khai</dt><dd class="mono" style="font-size:12px">' + esc(t.fix.tests_added.join(", ")) + "</dd></div>");
+      h.push("</dl>");
+      if (t.fix.changed_files && t.fix.changed_files.length) h.push('<ul class="files" style="margin-top:8px">' + t.fix.changed_files.map(function (f) { return "<li>" + esc(f) + "</li>"; }).join("") + "</ul>");
+      h.push("</div>");
+    }
+
+    if (t.trace.length) {
+      h.push('<div><div class="sec-h">Trace <span>' + t.trace.length + ' sự kiện</span></div><ol class="trace">');
       t.trace.forEach(function (x) {
-        h.push('<li><span class="tm">' + esc(x.t) + '</span><span class="dot ' + x.s + '"></span><span class="what"><b>' + esc(x.step) + "</b>" + (x.tool ? '<span class="tool">' + esc(x.tool) + "</span>" : "") + '<span class="msg">' + esc(x.msg) + "</span></span></li>");
+        h.push('<li><span class="tm">' + hhmmss(x.ts).slice(0, 5) + '</span><span class="dot ' + esc(x.s) + '"></span><span class="what"><b>' + esc(x.step) + "</b>" + (x.tool ? '<span class="tool">' + esc(x.tool) + "</span>" : "") + '<span class="msg">' + esc(x.msg) + "</span></span></li>");
       });
       h.push("</ol></div>");
     } else {
-      h.push('<div class="callout info"><b>Chưa bắt đầu</b>Ticket đang chờ trong backlog, orchestrator sẽ lấy theo độ ưu tiên.</div>');
-    }
-
-    if (t.impact && t.impact.length) {
-      h.push('<div><div class="sec-h">Vùng impact <span>từ CodeGraph</span></div><ul class="files">' +
-        t.impact.map(function (f) { return "<li>" + esc(f) + "</li>"; }).join("") + "</ul></div>");
-    }
-
-    if (t.pr) {
-      h.push('<div><div class="sec-h">Pull Request <span class="mono">#' + t.pr.number + '</span></div><dl class="pr">' +
-        "<div><dt>Root cause</dt><dd>" + esc(t.pr.rootCause) + "</dd></div>" +
-        "<div><dt>Cách fix</dt><dd>" + esc(t.pr.fix) + "</dd></div>" +
-        "<div><dt>Phương án đã loại</dt><dd>" + esc(t.pr.rejected) + "</dd></div>" +
-        "<div><dt>Bằng chứng test</dt><dd>" + esc(t.pr.tests) + "</dd></div></dl></div>");
+      h.push('<div class="callout info"><b>Chưa bắt đầu</b>Item đang trong hàng đợi: PI trước, rồi deadline gần nhất.</div>');
     }
     h.push("</div>");
     $("detail").innerHTML = h.join("");
   }
 
-  /* ---------- Chart ---------- */
-  function renderChart(activeIdx) {
-    var runs = state.evalRuns, W = 640, H = 230, L = 40, R = 56, T = 14, B = 30;
-    var pw = W - L - R, ph = H - T - B, target = state.meta.evalTarget;
-    var x = function (i) { return L + (runs.length === 1 ? pw / 2 : i * pw / (runs.length - 1)); };
-    var y = function (v) { return T + ph - v / 100 * ph; };
-    var pct = runs.map(function (r) { return Math.round(r.passed / r.total * 100); });
-    var s = [];
-    [0, 25, 50, 75, 100].forEach(function (v) {
-      s.push('<line class="grid-l" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>');
-      s.push('<text class="ax" x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>");
-    });
-    s.push('<line class="target-l" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(target) + '" y2="' + y(target) + '"/>');
-    s.push('<text class="target-t" x="' + (L + 6) + '" y="' + (y(target) - 6) + '">Mục tiêu MVP ' + target + "%</text>");
-    var pts = pct.map(function (v, i) { return x(i) + "," + y(v); });
-    s.push('<path class="area-p" d="M' + x(0) + "," + y(0) + " L" + pts.join(" L") + " L" + x(runs.length - 1) + "," + y(0) + ' Z"/>');
-    s.push('<path class="line-p" d="M' + pts.join(" L") + '"/>');
-    runs.forEach(function (r, i) {
-      s.push('<text class="ax" x="' + x(i) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(r.version) + "</text>");
-    });
-    runs.forEach(function (r, i) {
-      var end = i === runs.length - 1;
-      s.push('<circle class="pt' + (end ? " end" : "") + (activeIdx === i ? " on" : "") + '" data-i="' + i + '" cx="' + x(i) + '" cy="' + y(pct[i]) + '" r="' + (end ? 5 : 4) + '" tabindex="0"><title>' + esc(r.version + ": " + pct[i] + "% (" + r.passed + "/" + r.total + ") · " + r.note) + "</title></circle>");
-    });
-    var li = runs.length - 1;
-    s.push('<text class="end-t" x="' + (x(li) + 10) + '" y="' + (y(pct[li]) + 4) + '">' + pct[li] + "%</text>");
-    $("chart").innerHTML = s.join("");
-    chartNote(activeIdx == null ? li : activeIdx);
-    $("eval-hint").textContent = runs[0].total + " ticket có fix thật";
+  /* ---------- Jev, agent, log ---------- */
+  function renderStats() {
+    var jev = data.jev || [], ag = data.agents || [], h = [];
+    h.push("<h3>Quyết định</h3>");
+    h.push(jev.length ? '<table class="stats"><thead><tr><th>Điểm quyết định</th><th style="text-align:right">Số lần</th><th style="text-align:right">Jev</th><th style="text-align:right">TB ms</th></tr></thead><tbody>' +
+      jev.map(function (r) {
+        return "<tr><td>" + esc(r.name) + '</td><td class="num">' + r.n + '</td><td class="num">' + Math.round((r.by_jev || 0) / r.n * 100) + '%</td><td class="num">' + esc(r.avg_ms) + "</td></tr>";
+      }).join("") + "</tbody></table>" : '<div class="empty">Chưa có quyết định nào.</div>');
+    h.push("<h3>Agent</h3>");
+    h.push(ag.length ? '<table class="stats"><thead><tr><th>Vai trò</th><th>Chế độ</th><th style="text-align:right">Lần chạy</th><th style="text-align:right">OK</th><th style="text-align:right">TB giây</th></tr></thead><tbody>' +
+      ag.map(function (r) {
+        return "<tr><td>" + esc(r.role) + "</td><td>" + esc(r.mode) + '</td><td class="num">' + r.runs + '</td><td class="num">' + (r.ok || 0) + '</td><td class="num">' + esc(r.avg_sec == null ? "—" : r.avg_sec) + "</td></tr>";
+      }).join("") + "</tbody></table>" : '<div class="empty">Chưa có lần chạy agent nào.</div>');
+    $("stats").innerHTML = h.join("");
   }
-  function chartNote(i) {
-    var r = state.evalRuns[i], p = Math.round(r.passed / r.total * 100);
-    $("chart-note").innerHTML = "<b>" + esc(r.version) + "</b> · " + p + "% (" + r.passed + "/" + r.total + " ticket) · " + esc(r.note);
-    Array.prototype.forEach.call($("chart").querySelectorAll(".pt"), function (c) {
-      c.classList.toggle("on", +c.getAttribute("data-i") === i);
+  function renderLog(fresh) {
+    var ev = data.events || [];
+    $("log").innerHTML = ev.length ? ev.map(function (e, i) {
+      return '<li class="' + (i < fresh ? "new" : "") + '"><span class="tm">' + hhmmss(e.ts).slice(0, 5) + '</span><span class="dt ' + esc(e.s) + '"></span>' +
+        '<button type="button" class="tid" data-id="' + esc(e.item) + '">' + esc(e.item) + '</button><span class="m"><b>' + esc(e.step) + "</b> " + esc(e.msg) + "</span></li>";
+    }).join("") : '<li><span class="m">Chưa có sự kiện.</span></li>';
+  }
+
+  /* ---------- Vòng cập nhật ---------- */
+  function setData(d) {
+    var prevEvents = data ? (data.events[0] || {}).ts : null, flash = {};
+    d.items.forEach(function (t) {
+      var key = t.state + "|" + t.attempts + "|" + (t.phase || "");
+      if (seen[t.id] && seen[t.id] !== key) flash[t.id] = true;
+      seen[t.id] = key;
+    });
+    var fresh = prevEvents == null ? 0 : d.events.filter(function (e) { return e.ts > prevEvents; }).length;
+    data = d;
+    if (!ui.sel && d.items.length) ui.sel = (d.items.filter(function (t) { return t.state === "working"; })[0] || d.items[0]).id;
+    var m = d.meta;
+    $("match").textContent = m.match_id + (m.sample ? "" : " · " + m.db);
+    $("sample-badge").hidden = !m.sample;
+    $("mstatus").textContent = m.status || "—";
+    $("mleft").textContent = m.minutes_left == null ? "—" : mins(m.minutes_left);
+    $("footnote").innerHTML = LIVE ? "Đọc <code>/api/state</code> từ SQLite của trận mỗi " + POLL_MS / 1000 + " giây (chỉ đọc). Deadline theo giờ Game Master, không tính lúc PAUSED."
+      : "Dữ liệu mẫu trong <code>monitor/data.js</code>. Xem trận thật: <code>python -m orchestrator.cli monitor</code>.";
+    renderKpis(); renderFlow(); renderFilters(); renderTable(flash); renderDetail(); renderStats(); renderLog(fresh);
+  }
+  function setConn(ok, msg) {
+    $("conn").className = "conn" + (ok ? "" : " err");
+    $("conn").textContent = msg;
+  }
+  function poll() {
+    if (paused) return;
+    fetch("/api/state", { cache: "no-store" }).then(function (r) {
+      return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; });
+    }).then(function (d) {
+      setConn(true, "cập nhật " + hhmmss(d.meta.generated_at));
+      setData(d);
+    }).catch(function (e) {
+      setConn(false, "mất kết nối: " + e.message);
     });
   }
 
-  /* ---------- Log ---------- */
-  function renderLog() {
-    var all = [];
-    state.tickets.forEach(function (t) {
-      (t.trace || []).forEach(function (x, i) { all.push({ id: t.id, x: x, k: toMin(x.t) * 100 + i, seq: x.seq || 0 }); });
-    });
-    all.sort(function (a, b) { return (b.seq - a.seq) || (b.k - a.k); });
-    $("log").innerHTML = all.slice(0, 16).map(function (e, i) {
-      return '<li class="' + (i < ui.newLog ? "new" : "") + '"><span class="tm">' + esc(e.x.t) + '</span><span class="dt ' + e.x.s + '"></span>' +
-        '<button type="button" class="tid" data-id="' + e.id + '">' + e.id + '</button><span class="m"><b>' + esc(e.x.step) + "</b> " + esc(e.x.msg) + "</span></li>";
-    }).join("");
-  }
-
-  function render() {
-    $("repo").textContent = state.meta.project + " · " + state.meta.repo;
-    $("sample-badge").hidden = !state.meta.sample;
-    $("clock").textContent = fromMin(state.clockMin);
-    renderKpis(); renderFlow(); renderFilters(); renderTable(); renderDetail(); renderLog();
-  }
-
-  /* ---------- Mô phỏng ---------- */
-  var seq = 1;
-  function tr(id, step, msg, s, tool) {
-    var t = find(id);
-    t.trace.push({ t: fromMin(state.clockMin), step: step, msg: msg, s: s || "ok", tool: tool, seq: seq++ });
-  }
-  function settle(id) { // đánh dấu bước "run" trước đó là xong
-    find(id).trace.forEach(function (x) { if (x.s === "run") x.s = "ok"; });
-  }
-  var STEPS = [
-    function () { var t = find("BUG-103"); settle("BUG-103");
-      tr("BUG-103", "Reproduce", "PaginationTest#lastPage FAIL (đúng kỳ vọng)", "ok", "Sandbox");
-      t.phase = "Plan"; t.tokens += 14000; t.minutes += 2; return ["BUG-103", 1]; },
-    function () { var t = find("BUG-102"); settle("BUG-102");
-      t.gate.regression = "pass"; t.gate.coverage = "warn";
-      tr("BUG-102", "Gate", "Regression 41/41 pass", "ok");
-      tr("BUG-102", "Gate", "Coverage vùng impact 71% < 80%, agent sinh thêm test", "warn");
-      t.tokens += 18000; t.minutes += 3; return ["BUG-102", 2]; },
-    function () { var t = find("ISSUE-401"); settle("ISSUE-401");
-      t.stage = "escalated"; t.reason = "Confidence 0.48 dưới ngưỡng 0.70: chưa rõ là Bug hay Performance, cần người phân loại.";
-      tr("ISSUE-401", "Escalate", "Confidence thấp, chuyển người phân loại", "warn"); return ["ISSUE-401", 1]; },
-    function () { var t = find("SEC-301"); settle("SEC-301");
-      tr("SEC-301", "Fix", "Whitelist cột sortBy, dùng Sort.by()", "ok", "Sandbox");
-      t.stage = "gate"; t.phase = null;
-      GATE.forEach(function (k) { t.gate[k[0]] = "pending"; }); t.gate.build = "run";
-      tr("SEC-301", "Gate", "Chạy lại gate cho lần thử 2", "run");
-      t.tokens += 21000; t.minutes += 3; return ["SEC-301", 2]; },
-    function () { var t = find("BUG-102"); settle("BUG-102");
-      t.gate.coverage = "pass"; t.gate.lint = "pass"; t.gate.scan = "pass"; t.gate.reviewer = "pass";
-      tr("BUG-102", "Gate", "Coverage 83%, lint và scan sạch, reviewer agent đồng ý", "ok");
-      t.stage = "review";
-      t.pr = { number: 48,
-        rootCause: "ReportService trả null khi tháng không có đơn, ReportExporter gọi phương thức trên kết quả null.",
-        fix: "Trả Optional.empty(), exporter vẫn ghi header và một dòng 'Không có dữ liệu'.",
-        rejected: "Bắt NullPointerException ở controller: che lỗi, không sửa gốc.",
-        tests: "Thêm 4 test. 218/218 unit pass, 41 test regression vùng impact pass." };
-      tr("BUG-102", "PR", "Tạo PR #48, cập nhật ticket", "ok", "Git");
-      t.tokens += 9000; t.minutes += 2; return ["BUG-102", 2]; },
-    function () { var t = find("ISSUE-402"); settle("ISSUE-402");
-      t.stage = "done"; t.note = "Đóng do trùng root cause với BUG-102 (PR #48).";
-      t.linked = ["BUG-102"];
-      tr("ISSUE-402", "Triage", "Dedup: trùng root cause với BUG-102, đóng và liên kết", "ok"); return ["ISSUE-402", 1]; },
-    function () { var t = find("BUG-103"); settle("BUG-103");
-      tr("BUG-103", "Plan", "Thêm id làm khóa sort phụ để phân trang ổn định", "ok");
-      t.phase = "Fix"; tr("BUG-103", "Fix", "Sửa OrderRepository.findPage()", "run", "Sandbox");
-      t.tokens += 22000; t.minutes += 3; return ["BUG-103", 2]; },
-    function () { var t = find("SEC-301"); settle("SEC-301");
-      GATE.forEach(function (k) { t.gate[k[0]] = "pass"; });
-      tr("SEC-301", "Gate", "8/8 check pass, scan không còn finding", "ok");
-      t.stage = "review";
-      t.pr = { number: 49,
-        rootCause: "OrderSearchRepository nối chuỗi keyword và sortBy trực tiếp vào câu SQL.",
-        fix: "Keyword dùng tham số bind, sortBy kiểm tra theo whitelist và build bằng Sort.by().",
-        rejected: "Escape ký tự đặc biệt: dễ sót, không triệt để.",
-        tests: "Thêm 5 test (gồm payload injection). 219/219 unit pass, SAST sạch." };
-      tr("SEC-301", "PR", "Tạo PR #49, cập nhật ticket", "ok", "Git");
-      t.tokens += 16000; t.minutes += 4; return ["SEC-301", 2]; },
-    function () { var t = find("BUG-106");
-      t.stage = "triage"; t.confidence = 0.91;
-      tr("BUG-106", "Triage", "JEV phân loại Bug, confidence 0.91", "ok");
-      t.stage = "agent"; t.phase = "Analyze"; t.agent = "Bug Agent"; t.attempts = 1;
-      t.tokens = 12000; t.minutes = 1; t.branch = "agent/BUG-106";
-      tr("BUG-106", "Analyze", "symbol_search PhoneNormalizer", "run", "CodeGraph");
-      return ["BUG-106", 2]; },
-    function () { var t = find("BUG-101");
-      t.stage = "done"; t.note = "Đã merge PR #47";
-      tr("BUG-101", "Merge", "Reviewer duyệt, đã merge", "ok"); return ["BUG-101", 1]; },
-    function () { var t = find("BUG-103"); settle("BUG-103");
-      t.stage = "gate"; t.phase = null;
-      t.gate = { build: "pass", unit: "run", regression: "pending", coverage: "pending", lint: "pending", scan: "pending", diff: "pass", reviewer: "pending" };
-      tr("BUG-103", "Gate", "Build pass, đang chạy unit test", "run");
-      t.tokens += 8000; t.minutes += 2; return ["BUG-103", 1]; }
-  ];
-
-  function step() {
-    if (stepIdx >= STEPS.length) {
-      stopSim();
-      $("btn-sim").disabled = true;
-      $("sim-label").textContent = "Hết kịch bản";
-      return;
-    }
-    state.clockMin += 2;
-    var r = STEPS[stepIdx++]();
-    ui.flash = r[0]; ui.newLog = r[1];
-    render();
-    ui.flash = null; ui.newLog = 0;
-  }
-  function startSim() {
-    $("btn-sim").classList.add("running");
-    $("sim-label").textContent = "Tạm dừng";
-    step();
-    timer = setInterval(step, 2400);
-  }
-  function stopSim() {
-    if (timer) clearInterval(timer);
-    timer = null;
-    $("btn-sim").classList.remove("running");
-    if (stepIdx < STEPS.length) $("sim-label").textContent = stepIdx ? "Tiếp tục" : "Chạy mô phỏng";
-  }
-
-  /* ---------- Sự kiện ---------- */
+  /* ---------- Sự kiện giao diện ---------- */
   function select(id) {
     ui.sel = id;
-    renderTable(); renderDetail();
+    renderTable({}); renderDetail();
     if (window.matchMedia("(max-width: 1000px)").matches) $("detail").scrollIntoView({ block: "start" });
   }
   $("flow").addEventListener("click", function (e) {
-    var b = e.target.closest("[data-stage]"); if (!b) return;
-    ui.stage = ui.stage === b.dataset.stage ? null : b.dataset.stage;
-    renderFlow(); renderFilters(); renderTable();
+    var b = e.target.closest("[data-state]"); if (!b) return;
+    ui.state = ui.state === b.dataset.state ? null : b.dataset.state;
+    renderFlow(); renderFilters(); renderTable({});
   });
   $("type-filters").addEventListener("click", function (e) {
     var b = e.target.closest("[data-type]"); if (!b) return;
-    ui.type = b.dataset.type; renderFilters(); renderTable();
+    ui.type = b.dataset.type; renderFilters(); renderTable({});
   });
   $("rows").addEventListener("click", function (e) {
     var r = e.target.closest("tr[data-id]"); if (r) select(r.dataset.id);
@@ -784,20 +698,26 @@ td.num { text-align: right; font-family: var(--f-mono); font-size: 12px; color: 
   });
   $("log").addEventListener("click", function (e) {
     var b = e.target.closest("[data-id]"); if (!b) return;
-    ui.stage = null; ui.type = "ALL"; renderFlow(); renderFilters(); select(b.dataset.id);
+    ui.state = null; ui.type = "ALL"; renderFlow(); renderFilters(); select(b.dataset.id);
   });
-  $("chart").addEventListener("mouseover", function (e) {
-    var c = e.target.closest("[data-i]"); if (c) chartNote(+c.getAttribute("data-i"));
+  $("btn-pause").addEventListener("click", function () {
+    paused = !paused;
+    $("btn-pause").classList.toggle("paused", paused);
+    $("pause-label").textContent = paused ? "Tiếp tục cập nhật" : "Tạm dừng cập nhật";
+    if (!paused) poll();
   });
-  $("chart").addEventListener("focusin", function (e) {
-    var c = e.target.closest("[data-i]"); if (c) chartNote(+c.getAttribute("data-i"));
-  });
-  $("btn-sim").addEventListener("click", function () { timer ? stopSim() : startSim(); });
-  $("btn-reset").addEventListener("click", function () { seq = 1; reset(); });
 
   renderLegend();
-  reset();
-  renderChart(null);
+  if (LIVE) {
+    $("btn-pause").hidden = false;
+    setConn(true, "đang tải…");
+    poll();
+    setInterval(poll, POLL_MS);
+  } else if (window.MONITOR_DATA) {
+    setData(window.MONITOR_DATA);
+  } else {
+    setConn(false, "không có dữ liệu: chạy python -m orchestrator.cli monitor");
+  }
 })();
 </script>
 </body>

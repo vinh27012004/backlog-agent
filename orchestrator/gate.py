@@ -50,6 +50,9 @@ CI_PATHS = (".github/", ".gitlab-ci.yml", ".circleci/", "Jenkinsfile", "azure-pi
 NO_TESTS_RAN = re.compile(
     r"(Tests run: 0,|no tests ran|No tests found|collected 0 items|no tests to run|No test files|"
     r"\b0 passing\b|No tests were executed|No test matches)", re.IGNORECASE)
+TARGET_MISSING = re.compile(
+    r"(No module named|Failed to import test module|file or directory not found|not found:|"
+    r"Cannot find module|No test files found|No tests found|Unable to find|does not exist)", re.IGNORECASE)
 SAFE_TARGET = re.compile(r"^[\w.#:/\\\-\[\]@,]{1,200}$")
 SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
 # cách ghép nhiều test vào một lệnh test_one (stack không có ở đây thì chạy từng test)
@@ -223,6 +226,13 @@ def diff_text(workdir: Path, base: str = "HEAD", max_chars: int = 60_000) -> str
     return out if len(out) <= max_chars else out[:max_chars] + "\n...(diff bị cắt bớt)\n"
 
 
+def target_not_found(log: str, targets: list[str]) -> bool:
+    """Lệnh test_one fail vì không tìm thấy chính tên test agent khai (vd. `OrderTest#x` với unittest),
+    khác với test chạy được mà fail. Chỉ tính khi dòng báo "không tìm thấy" nhắc tới tên đó."""
+    keys = {re.split(r"[#:]", t)[0] for t in targets if t}
+    return any(TARGET_MISSING.search(line) and any(k in line for k in keys) for line in log.splitlines())
+
+
 def forbidden_changes(changes: list[FileChange], skip_markers: list[str],
                       needs_dependency: list[str]) -> tuple[list[str], list[str]]:
     """Trả về (vi phạm, cảnh báo). Vi phạm làm gate fail với fail_kind `forbidden_change`."""
@@ -386,6 +396,11 @@ class Gate:
             for st, cmd in self._target_commands(targets[: self.config.max_targets], stacks):
                 rc, log = exec_check(self._name("target_tests", st, stacks), cmd, workdir / st["root"],
                                      self.config.test_sec, rerun=True)
+                if rc != 0 and rc is not None and target_not_found(log, targets):
+                    # tên agent khai sai định dạng, không phải test fail: regression (test_all) vẫn chạy test mới
+                    checks[-1].status = "warn"
+                    checks[-1].note = "không tìm thấy test theo tên agent khai (sai định dạng {target}?)"
+                    continue
                 if rc != 0:
                     raise fail_from_log(rc, log, "original_still_failing")
                 if NO_TESTS_RAN.search(log):

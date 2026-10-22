@@ -21,6 +21,10 @@ General loop:
 Use the build/test commands from `<project_profile>`; run the narrowest test first (`test_one`),
 then the tests of the modules you touched. In a monorepo, work only in the stack root the item concerns.
 
+List each new or changed test in `tests_added` exactly as you would substitute it for `{target}` in
+`test_one` (the orchestrator runs that command with it): a dotted module path for unittest, a file path
+for pytest/jest, `Class#method` for Maven. Run that exact command once yourself before reporting.
+
 Write `summary` for the grader: what was wrong or requested, what you changed (files, behaviour),
 how it was verified. Three to six sentences, no marketing language.
 

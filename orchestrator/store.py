@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS items (
   note          TEXT,
   updated_at    REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS match_state (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),   -- một dòng, ghi đè mỗi lần poll
+  match_id      TEXT NOT NULL,
+  status        TEXT NOT NULL,                -- RUNNING | PAUSED | ENDED
+  minutes_left  REAL,
+  server_time   REAL,
+  items_json    TEXT,                         -- {item_id: {status, minutes_left, deadline_min}} theo giờ server
+  updated_at    REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_runs_item ON agent_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_gate_item ON gate_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON agent_events(run_id);
@@ -88,6 +97,11 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        for column in ("max_attempts INTEGER",):      # cột thêm sau: DB tạo trước đó vẫn mở được
+            try:
+                self.db.execute(f"ALTER TABLE match_state ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         self.db.close()
@@ -190,6 +204,19 @@ class Store:
             " note=COALESCE(excluded.note, items.note)",
             (item_id, item_type, title, state, attempts, tier,
              json.dumps(triage, ensure_ascii=False) if triage is not None else None, note, time.time(), attempts),
+        )
+
+    def set_match(self, match, *, max_attempts: int | None = None) -> None:
+        """Ảnh chụp trạng thái trận (MatchState) cho monitor: deadline theo giờ server, không tự tính."""
+        items = {i.id: {"status": i.status, "minutes_left": i.minutes_left, "deadline_min": i.deadline_min}
+                 for i in match.items}
+        self._write(
+            "INSERT INTO match_state(id,match_id,status,minutes_left,server_time,items_json,updated_at,max_attempts)"
+            " VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET match_id=excluded.match_id,"
+            " status=excluded.status, minutes_left=excluded.minutes_left, server_time=excluded.server_time,"
+            " items_json=excluded.items_json, updated_at=excluded.updated_at, max_attempts=excluded.max_attempts",
+            (match.id, match.status, match.minutes_left, match.server_time, json.dumps(items), time.time(),
+             max_attempts),
         )
 
     def get_item(self, item_id: str) -> sqlite3.Row | None:

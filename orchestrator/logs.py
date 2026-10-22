@@ -92,9 +92,17 @@ def _is_project_java(cls: str, project_prefixes: tuple[str, ...]) -> bool:
     return not cls.startswith(LIB_JAVA)
 
 
-def _is_project_path(path: str) -> bool:
+PY_STDLIB = re.compile(r"/python\d*[\d.]*/lib/|/lib/python\d|/lib/(unittest|importlib|asyncio|concurrent)/", re.IGNORECASE)
+ABSOLUTE = re.compile(r"^(/|[A-Za-z]:/)")
+
+
+def _is_project_path(path: str, relative_only: bool = False) -> bool:
+    """`relative_only`: đã bỏ đường dẫn worktree khỏi log, nên file dự án là đường dẫn tương đối;
+    đường dẫn còn tuyệt đối thuộc thư viện chuẩn / site-packages / máy chạy."""
     p = path.replace("\\", "/")
-    return not any(x.replace("\\", "/") in p for x in LIB_PATH)
+    if relative_only and ABSOLUTE.match(p):
+        return False
+    return not PY_STDLIB.search(p) and not any(x.replace("\\", "/") in p for x in LIB_PATH)
 
 
 def _short_path(path: str) -> str:
@@ -135,7 +143,7 @@ def _exception(lines: list[str]) -> str | None:
     return None
 
 
-def _project_frame(lines: list[str], project_prefixes: tuple[str, ...]) -> str | None:
+def _project_frame(lines: list[str], project_prefixes: tuple[str, ...], relative_only: bool = False) -> str | None:
     for line in lines:
         m = JAVA_FRAME.match(line)
         if m:
@@ -145,22 +153,22 @@ def _project_frame(lines: list[str], project_prefixes: tuple[str, ...]) -> str |
             continue
         m = DOTNET_FRAME.match(line)
         if m:
-            if _is_project_path(m.group(2)) and not m.group(1).startswith(("System.", "Microsoft.", "Xunit.", "NUnit.")):
+            if _is_project_path(m.group(2), relative_only) and not m.group(1).startswith(("System.", "Microsoft.", "Xunit.", "NUnit.")):
                 return m.group(1)
             continue
         m = PY_FRAME.match(line)
         if m:
-            if _is_project_path(m.group(1)):
+            if _is_project_path(m.group(1), relative_only):
                 return f"{_short_path(m.group(1))}:{m.group(2)}"
             continue
         m = NODE_FRAME.match(line)
         if m and ("/" in m.group(2) or "\\" in m.group(2)):
-            if _is_project_path(m.group(2)):
+            if _is_project_path(m.group(2), relative_only):
                 fn = (m.group(1) or "").split(" ")[-1]
                 return f"{_short_path(m.group(2))}" + (f":{fn}" if fn else "")
             continue
         m = GO_FRAME.match(line)
-        if m and _is_project_path(m.group(1)):
+        if m and _is_project_path(m.group(1), relative_only):
             return _short_path(m.group(1))
     return None
 
@@ -189,7 +197,7 @@ def signature(text: str, project_prefixes: tuple[str, ...] = (), root: str | Non
         file, msg = comp[0]
         return f"compile:{file}:{DIGITS.sub('N', msg)[:120]}"
     exc = _exception(lines)
-    frame = _project_frame(lines, project_prefixes)
+    frame = _project_frame(lines, project_prefixes, relative_only=bool(root))
     if frame:
         return f"{exc or 'Error'}@{frame}"
     tests = failing_tests(text, limit=1)

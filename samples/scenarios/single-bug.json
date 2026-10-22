@@ -1,0 +1,7 @@
+{
+  "match_id": "single-bug",
+  "duration_min": 40,
+  "items": [
+    {"at_min": 0, "deadline_min": 40, "file": "../items/BUG-07.json"}
+  ]
+}

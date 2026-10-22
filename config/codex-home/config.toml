@@ -1,6 +1,7 @@
 # Cấu hình Codex CLI dành riêng cho đội (đặt CODEX_HOME trỏ vào thư mục này).
-# Kiểm cú pháp:  CODEX_HOME=config/codex-home codex --strict-config features list
-# Đã kiểm với codex-cli 0.162.1. Đổi phiên bản thì kiểm lại.
+# Kiểm cú pháp: từ 0.163 chỉ `codex exec` nhận --strict-config (orchestrator luôn truyền cờ này,
+# khóa sai thì codex dừng ngay trước khi gọi model).
+# Đã kiểm với codex-cli 0.162.1 và 0.163.0. Đổi phiên bản thì kiểm lại.
 
 # Model: để trống thì Codex dùng mặc định. Orchestrator truyền -m theo vai trò
 # (xem config/agents.toml), nên ở đây không chốt.
@@ -10,6 +11,12 @@ sandbox_mode = "workspace-write"   # vai trò read-only được orchestrator gh
 
 [sandbox_workspace_write]
 network_access = false             # lệnh Codex tự chạy không ra mạng
+
+# Windows (máy dev): thiếu mục này thì `codex exec` từ chối MỌI lệnh shell ("blocked by policy"),
+# agent chỉ trả lời suông. "elevated" cần chạy cài đặt sandbox một lần với quyền admin.
+# Linux/macOS bỏ qua mục này. Kiểm với codex-cli 0.163.0.
+[windows]
+sandbox = "elevated"
 
 [shell_environment_policy]
 inherit = "core"                   # không truyền biến môi trường (API key...) vào lệnh shell

@@ -68,7 +68,7 @@
       "items": {
         "type": "string"
       },
-      "description": "test class#method"
+      "description": "each entry exactly as the {target} of test_one in the project profile, e.g. Java OrderServiceTest#percentCoupon, pytest tests/test_order.py::test_coupon, unittest tests.test_order.OrderTest.test_coupon, jest src/order.test.ts"
     },
     "verification": {
       "type": "array",

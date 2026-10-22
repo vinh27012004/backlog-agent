@@ -335,10 +335,13 @@ Một máy của đội (VPS):
 
 ## 10. Monitor
 
-`monitor/index.html`, đọc state từ SQLite (hiện chạy bằng dữ liệu mẫu trong `monitor/data.js`).
+`monitor/index.html` + `orchestrator/monitor.py`. Chạy `python -m orchestrator.cli monitor` (trận mới nhất trong `runs/`) rồi mở http://127.0.0.1:8765. Trang đọc `/api/state` mỗi 3 giây, lấy từ SQLite của trận ở chế độ chỉ đọc. Mở `index.html` trực tiếp thì dùng dữ liệu mẫu `monitor/data.js` (sinh từ một trận mock).
 
-- Chỉ số tổng, luồng xử lý, danh sách item, chi tiết item (trace, gate, vùng impact).
-- **Cần bổ sung**: deadline còn lại theo giờ server, 4 loại TASK / CR / BUG / PI, số lần thử mỗi item.
+- Chỉ số: đã nộp và điểm tạm, đang làm, bỏ / lỗi, PI, lần thử trung bình, tỉ lệ Jev tự quyết.
+- Luồng: Chờ → Đang làm → Đã nộp; Bỏ; Lỗi / chưa rõ nộp. Lọc theo trạng thái và loại TASK / CR / BUG / PI.
+- Bảng item: số phút còn lại theo giờ Game Master (vòng run ghi vào `match_state` mỗi lần poll), số lần thử, 7 ô gate (diff, luật cấm, build, test agent viết, regression, MVS, reviewer).
+- Chi tiết: kết quả nộp, lý do bỏ, cảnh báo bẫy prompt, check gate + chữ ký lỗi + log rút gọn, reviewer, tóm tắt và root cause của fixer, trace gộp (agent, gate, quyết định, nộp bài).
+- Không có token hay chi phí (plugin BTC theo dõi).
 
 ---
 
@@ -353,6 +356,8 @@ Một máy của đội (VPS):
 4. ✅ `GameMasterClient` + **`FakeGameMaster`** + `safe_submit` (`orchestrator/gamemaster.py`).
 4b. ✅ Vòng `run` (`orchestrator/match.py`): triage → route → fixer → gate → reviewer → `next_action` → nộp, hàng đợi ưu tiên PI, worktree mỗi item (`orchestrator/workspace.py`), chạy song song, chạy lại sau crash. Chạy cả trận giả không tốn $: `python -m orchestrator.cli match --mock --jev-mock` trên repo mẫu `samples/repo-template/`.
 4c. MCP `control` (wait_event, status, act) bọc vòng `run` cho Orchestrator Agent.
+4d. ✅ Monitor đọc SQLite (mục 10).
+4e. ✅ Chạy Codex thật lần đầu (22/10, 1 item BUG trên repo mẫu, tài khoản cá nhân): fixer `gpt-6-luna` sửa đúng, gate pass, reviewer approve, nộp được. Hai lỗi tìm ra và đã sửa: Windows cần `[windows] sandbox = "elevated"` (thiếu thì mọi lệnh shell bị chặn); fixer khai `tests_added` kiểu Java cho dự án unittest (schema + vai trò fixer giờ yêu cầu đúng `{target}` của `test_one`, gate coi tên không tìm thấy là cảnh báo).
 5. ✅ Gate + Log Condenser (`orchestrator/gate.py`, `orchestrator/logs.py`, mục 5 và 7).
 5b. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), web_search. Test gate trên repo Spring nhỏ.
 6. Hướng dẫn cho Orchestrator Agent (prompt + cách gọi `control`), chạy thử bằng Codex SDK giống cách plugin spawn.

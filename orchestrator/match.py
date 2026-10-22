@@ -126,6 +126,7 @@ class MatchRunner:
                     self.log(f"[match] không hỏi được Game Master: {e}")
                     self.sleep(self.config.poll_sec)
                     continue
+                self.store.set_match(self.match, max_attempts=self.config.max_attempts)
                 if self.match.status == "ENDED":
                     self.log("[match] trận đã kết thúc")
                     break

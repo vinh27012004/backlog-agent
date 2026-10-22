@@ -68,6 +68,16 @@ class LogsTest(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertEqual(a, "AssertionError@app/order.py:total")
 
+    def test_windows_stdlib_frames_are_not_project_code(self):
+        # gặp ở trận mẫu: frame trong ...\Python310\lib\unittest\loader.py bị lấy làm chữ ký
+        log = ('Traceback (most recent call last):\n'
+               '  File "C:\\Python310\\lib\\unittest\\loader.py", line 154, in loadTestsFromName\n'
+               '    module = __import__(module_name)\n'
+               '  File "D:\\w\\BUG-07\\tests\\test_export.py", line 3, in <module>\n'
+               "ImportError: cannot import name 'export_csv' from 'shop.customers'")
+        self.assertEqual(signature(log, root="D:\\w\\BUG-07"), "ImportError@tests/test_export.py:<module>")
+        self.assertEqual(signature(log), "ImportError@BUG-07/tests/test_export.py:<module>")
+
     def test_go_test_failure_uses_test_name(self):
         log = "--- FAIL: TestTotal (0.00s)\n    order_test.go:21: got 810 want 900\nFAIL"
         self.assertEqual(signature(log), "TestFailure@test:TestTotal")
@@ -273,6 +283,24 @@ class GateRunTest(unittest.TestCase):
         self.assertFalse((self.repo / "pwned.txt").exists())
         self.assertEqual(next(c for c in rep.checks if c.name == "tests_declared").status, "warn")
         self.assertNotIn("target_tests", [c.name for c in rep.checks])
+
+    def test_misformatted_target_is_warning_and_regression_still_runs(self):
+        # lần chạy thật đầu tiên: fixer khai kiểu Java `Class#method` cho dự án unittest
+        rep = self._gate().run(self.item, self.repo, self._fix(tests_added=["T#test_total"]))
+        self.assertTrue(rep.passed, rep.to_text())
+        target = next(c for c in rep.checks if c.name == "target_tests")
+        self.assertEqual(target.status, "warn")
+        self.assertEqual(rep.checks[-1].name, "regression")
+
+    def test_misformatted_target_does_not_hide_a_real_failure(self):
+        rep = self._gate().run(self.item, self.repo, self._fix(app_total="810", tests_added=["T#test_total"]))
+        self.assertEqual(rep.fail_kind, "regression")              # test mới vẫn chạy trong test_all
+
+    def test_import_error_inside_named_test_is_not_treated_as_missing_name(self):
+        fix = self._fix()
+        self._write({"tests/test_total.py": "import unittest\nimport shop_missing\n"})
+        rep = self._gate().run(self.item, self.repo, fix)
+        self.assertEqual(rep.fail_kind, "original_still_failing")
 
     def test_flaky_test_passes_on_rerun(self):
         flag = self.tools / "flag"
