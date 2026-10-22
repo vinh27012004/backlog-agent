@@ -96,10 +96,11 @@ class AgentRunner:
         *,
         workdir: Path,
         attempt: int = 1,
+        tier: str | None = None,
         **prompt_kwargs: Any,
     ) -> AgentResult:
         itype = item_type(item["id"])
-        cfg = self.config.role(role_name, itype)
+        cfg = self.config.role(role_name, itype, tier)
         prompt = build_prompt(cfg.role, item, **prompt_kwargs)
 
         run_dir = RUNS_DIR / item["id"]

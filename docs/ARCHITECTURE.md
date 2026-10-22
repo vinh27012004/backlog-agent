@@ -3,6 +3,7 @@
 > Phiên bản: **v0.4** · Runtime: **Codex CLI / Codex SDK** · Ngân sách: **$50** (dev + practice + thi)
 > v0.4: thêm Codex Plugin của BTC, Orchestrator Agent, kết nối Game Master, lịch Training Camp.
 > v0.5: **JEV = Jev của TypeSafe AI** (model ra quyết định có kiểu) cho các quyết định nhanh; không còn agent phân tích riêng: **fixer tự phân tích** ở bước đầu (tiết kiệm 1 lần gọi Codex mỗi item, quan trọng với PI).
+> v0.6: **Jev không dùng ngân sách làm đặc trưng quyết định.** Chọn model và quyết định tự quyết dựa trên `pending_items` (số item đang chờ) và `minutes_left` (thời gian còn lại), cả hai do code biết chắc. Ngân sách $50 chỉ còn là ràng buộc cố định ở mục 8.
 > Bản vẽ: `docs/diagrams.html` (01 Architecture, 02 Infrastructure)
 
 ---
@@ -163,7 +164,7 @@ Không có agent phân tích riêng. Khi item mới hiện ra, orchestrator tạ
 | Nhận item | mức nghiêm trọng (score), độ khó (choice), module (choice) | PI → critical; theo `severity` trong item; độ khó medium |
 | Chặn bẫy | item có câu lệnh nhắm vào AI? (noul, ngưỡng thấp 0.5) | regex dấu hiệu; Jev nói không nhưng regex khớp → vẫn cách ly |
 | Liên kết item | 2 item cùng root cause / phụ thuộc? (noul) | cùng chữ ký lỗi |
-| Chọn cách chạy | fixer dùng model nhỏ hay mạnh (choice); có cần reviewer (noul) | hard/PI/CR → mạnh; PI không review |
+| Chọn cách chạy | fixer dùng model nhỏ hay mạnh (choice); có cần reviewer (noul). `state` gồm loại item, triage, `pending_items`, `minutes_left` | hard/PI/CR → mạnh; PI không review; loại khác mặc định có review |
 | Kiểm lời Codex | báo cáo của agent có khớp gate report? (noul) | theo kết quả gate |
 | PI | root cause đã có bằng chứng? (noul) | có root_cause + confidence ≥ 0.7 + có kiểm pass |
 | Luật tự quyết | nộp / thử lại / bỏ (choice) | luật ở mục 4.6 |
@@ -171,6 +172,7 @@ Không có agent phân tích riêng. Khi item mới hiện ra, orchestrator tạ
 - **Ngưỡng**: `choice`/`score` dùng khi confidence ≥ 0.7; `noul` là "có" khi ≥ 0.8, "không" khi ≤ 0.2, ở giữa → luật code.
 - **Ràng buộc cứng do code giữ**: Jev chỉ chọn trong các lựa chọn hợp lệ (vd. gate fail thì "nộp" không có trong danh sách); PI không chạy reviewer.
 - Mỗi quyết định ghi vào SQLite (`jev_decisions`): giá trị, nguồn jev/fallback, độ tin cậy, thời gian — để xem tỉ lệ Jev tự quyết trên monitor.
+- **Không có ngân sách trong `state`**: orchestrator không theo dõi token hay chi phí (plugin BTC làm việc đó). Áp lực tài nguyên được biểu diễn bằng `pending_items` và `minutes_left`.
 - Jev chỉ đọc chữ và xử lý số kém: đưa số liệu vào `state` dạng văn bản có nhãn; quyết định dựa trên số (deadline, số lần thử) do code giới hạn trước.
 
 ### 4.4 Codex theo loại item
@@ -210,7 +212,7 @@ Giới hạn output của từng tool để không đổ log dài vào context.
 - Hết giờ hoặc hết số lần re-plan cho item → bỏ item (MVS đã pass thì nộp bản tốt nhất).
 - MVS đã pass nhưng còn check phụ fail → nộp bản tốt nhất.
 - Cùng chữ ký lỗi lặp 2 lần → bắt buộc đổi giả thuyết. Lặp tiếp → bỏ item.
-- Khi có nhiều lựa chọn hợp lệ (nộp / thử lại / bỏ), hỏi JEV; dưới ngưỡng tin cậy thì theo luật trên.
+- Khi có nhiều lựa chọn hợp lệ (nộp / thử lại / bỏ), hỏi JEV với `attempts`, `minutes_left`, `pending_items`, kết quả gate; dưới ngưỡng tin cậy thì theo luật trên.
 - Nhiều item cùng sắp hết hạn → ưu tiên PI, rồi item gần xong nhất.
 
 ### 4.7 Kết nối Game Master
@@ -349,7 +351,7 @@ Một máy của đội (VPS):
 
 | Rủi ro | Biện pháp |
 |---|---|
-| Hết $50 trước ngày thi | Chia ngân sách, dùng mock khi dựng, theo dõi chi phí trên plugin BTC |
+| Hết $50 trước ngày thi | Chia ngân sách theo giai đoạn (mục 8), dùng mock khi dựng, theo dõi chi phí trên plugin BTC; Jev không tham gia việc này |
 | Nộp bản fix sai (chỉ nộp 1 lần) | Orchestrator tự chạy lại gate, MVS bắt buộc với CR/BUG |
 | Agent loop, đốt $ | Giới hạn số lần re-plan và thời gian chờ, chữ ký lỗi, luật tự quyết |
 | Build chậm làm PI mất điểm | Build sẵn, cache dependency, chỉ build module bị sửa |

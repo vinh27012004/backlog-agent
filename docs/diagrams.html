@@ -179,7 +179,7 @@ h2 { margin: 0; font-size: 19px; font-weight: 700; text-wrap: balance; }
     <ul>
       <li><b>v0.4 · Codex Plugin của BTC</b> thay cho "Gameplayer": xác thực đội với Game Master (URL, API key, team id), spawn <b>Orchestrator Agent</b>, theo dõi output và token. Orchestrator Agent là Codex nhưng mỏng: chờ sự kiện, còn logic nằm trong MCP <code>control</code> (code đội).</li>
       <li><b>Codex CLI là agent</b>: mỗi item chạy một lệnh <code>codex exec</code> trong worktree riêng. Orchestrator, gate và các tool là code của đội.</li>
-      <li><b>Không có người trong trận</b>: bỏ hết nhánh chuyển người, thay bằng luật tự quyết khi hết giờ hoặc hết ngân sách.</li>
+      <li><b>Không có người trong trận</b>: bỏ hết nhánh chuyển người, thay bằng luật tự quyết khi hết giờ hoặc hết số lần thử.</li>
       <li><b>4 loại item TASK / CR / BUG / PI</b>, gate theo từng loại. CR và BUG bắt buộc pass MVS và nộp evidence.</li>
       <li><b>Nộp một lần</b> lên Game Master thay cho tạo PR. Grader của BTC chấm điểm chính thức.</li>
       <li><b>Ngân sách $50</b>: token và chi phí do plugin của BTC theo dõi; orchestrator chỉ giữ giới hạn cố định (số lần thử, thời gian chờ, model theo vai trò).</li>

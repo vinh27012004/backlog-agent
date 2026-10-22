@@ -15,6 +15,17 @@ effort = "medium"
 timeout_sec = 900
 add_dirs = []
 
+# Tier model + effort cho fixer. Jev chọn "small" hay "strong" cho từng item (Decider.route),
+# AgentRunner.run(..., tier=...) đổi nhãn thành cặp dưới đây. Tier thắng [roles.*] và by_type.
+# Danh sách model có trên máy: ~/.codex/models_cache.json. Kiểm lại model thi dùng được ở Training Camp.
+[tiers.small]
+model = "gpt-6-luna"
+effort = "low"
+
+[tiers.strong]
+model = "gpt-6-luna"
+effort = "high"
+
 [roles.fixer]
 role = "fixer"
 schema = "fix-result"

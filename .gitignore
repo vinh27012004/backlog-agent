@@ -9,5 +9,10 @@ __pycache__/
 *.pyc
 key.txt
 
-# bí mật
+# bí mật không thể bật mí
 .env
+
+# skill cài cho công cụ AI lúc dựng hệ thống (không thuộc sản phẩm)
+.agents/
+.autohand/
+skills-lock.json

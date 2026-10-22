@@ -164,13 +164,16 @@ class Decider:
         return self._record(a["id"], d, ms)
 
     # ------------------------------------------------------------------ 3. chọn cách chạy fixer
-    def route(self, item: dict, triage: dict) -> dict[str, Decision]:
+    def route(self, item: dict, triage: dict, *, pending_items: int | None = None,
+              minutes_left: float | None = None) -> dict[str, Decision]:
         itype = item_type(item["id"])
-        ans, err, ms = self._ask(item["id"], _state(item_type=itype, triage=triage, item=item), {
+        load = {"pending_items": pending_items,
+                "minutes_left": None if minutes_left is None else round(minutes_left, 1)}
+        ans, err, ms = self._ask(item["id"], _state(item_type=itype, triage=triage, workload=load, item=item), {
             "model": choice("Which model tier should implement this change?", {
                 "small": "routine, local change with clear instructions",
                 "strong": "needs investigation, design or changes across several files"}),
-            "reviewer": noul("Is an independent code review worth its cost for this change "
+            "reviewer": noul("Is an independent code review needed for this change "
                              "(risk of subtle regressions, unclear root cause, security impact)?"),
         })
         a = ans or {}
@@ -211,7 +214,8 @@ class Decider:
 
     # ------------------------------------------------------------------ 5. luật tự quyết
     def next_action(self, item: dict, *, gate_passed: bool, mvs_passed: bool | None, attempts: int,
-                    max_attempts: int, minutes_left: float, last_fail: str | None = None) -> Decision:
+                    max_attempts: int, minutes_left: float, pending_items: int | None = None,
+                    last_fail: str | None = None) -> Decision:
         """submit / retry / drop. Code xác định lựa chọn hợp lệ, Jev chỉ chọn trong đó."""
         itype = item_type(item["id"])
         allowed: dict[str, str] = {}
@@ -233,7 +237,8 @@ class Decider:
             d = Decision("next_action", next(iter(allowed)), "fallback", None, "only one valid action")
             return self._record(item["id"], d, 0)
         ctx = {"item_type": itype, "gate_passed": gate_passed, "mvs_passed": mvs_passed, "attempts": attempts,
-               "max_attempts": max_attempts, "minutes_left": round(minutes_left, 1), "last_failure": last_fail}
+               "max_attempts": max_attempts, "minutes_left": round(minutes_left, 1),
+               "pending_items": pending_items, "last_failure": last_fail}
         ans, err, ms = self._ask(item["id"], _state(situation=ctx, item=item), {
             "action": choice("What should the team do next with this item?", allowed)})
         d = self._pick_choice("next_action", (ans or {}).get("action"), err, fallback, set(allowed))

@@ -167,6 +167,18 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("-s") + 1], "read-only")
             self.assertNotIn("--add-dir", cmd)
 
+    def test_tier_overrides_model_and_effort(self):
+        cfg = AgentsConfig()
+        small, strong = cfg.role("fixer", "BUG", "small"), cfg.role("fixer", "BUG", "strong")
+        self.assertEqual((small.effort, strong.effort), ("low", "high"))
+        self.assertTrue(small.model and strong.model)
+        self.assertEqual(cfg.role("fixer", "BUG", "strong").timeout_sec, cfg.role("fixer", "BUG").timeout_sec)
+        with self.assertRaises(KeyError):
+            cfg.role("fixer", "BUG", "huge")
+        cmd = build_command(strong, workdir=Path("."), last_msg_path=Path("o.json"))
+        self.assertIn("gpt-6-luna", cmd)
+        self.assertIn('model_reasoning_effort="high"', cmd)
+
     def test_by_type_override(self):
         self.assertEqual(AgentsConfig().role("fixer", "TASK").effort, "low")
         self.assertEqual(AgentsConfig().role("fixer", "PI").timeout_sec, 900)

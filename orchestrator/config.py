@@ -50,8 +50,9 @@ class AgentsConfig:
             self.raw = tomllib.load(f)
         self.defaults = self.raw.get("defaults", {})
         self.roles = self.raw.get("roles", {})
+        self.tiers = self.raw.get("tiers", {})
 
-    def role(self, name: str, itype: str | None = None) -> RoleConfig:
+    def role(self, name: str, itype: str | None = None, tier: str | None = None) -> RoleConfig:
         if name not in self.roles:
             raise KeyError(f"Không có vai trò {name!r} trong {self.path}")
         merged = {**self.defaults}
@@ -59,6 +60,10 @@ class AgentsConfig:
         merged.update(base)
         if itype:
             merged.update(self.roles[name].get("by_type", {}).get(itype, {}))
+        if tier:
+            if tier not in self.tiers:
+                raise KeyError(f"Không có tier {tier!r} trong {self.path} (có: {sorted(self.tiers)})")
+            merged.update(self.tiers[tier])
         return RoleConfig(
             name=name,
             role=merged.get("role", name),
