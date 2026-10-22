@@ -42,7 +42,19 @@ CREATE TABLE IF NOT EXISTS jev_decisions (
   latency_ms  REAL,
   reason      TEXT                          -- vì sao dùng fallback
 );
+CREATE TABLE IF NOT EXISTS gate_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts            REAL NOT NULL,
+  item_id       TEXT NOT NULL,
+  attempt       INTEGER NOT NULL,
+  passed        INTEGER NOT NULL,
+  fail_kind     TEXT,
+  signature     TEXT,                         -- chữ ký lỗi, để phát hiện vòng lặp
+  seconds       REAL,
+  report_json   TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_runs_item ON agent_runs(item_id);
+CREATE INDEX IF NOT EXISTS idx_gate_item ON gate_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON agent_events(run_id);
 """
 
@@ -98,6 +110,22 @@ class Store:
              confidence, round(latency_ms, 1), reason or None),
         )
         self.db.commit()
+
+    def add_gate_run(self, report) -> None:
+        self.db.execute(
+            "INSERT INTO gate_runs(ts,item_id,attempt,passed,fail_kind,signature,seconds,report_json)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (time.time(), report.item_id, report.attempt, int(report.passed), report.fail_kind,
+             report.signature, report.seconds, json.dumps(report.to_dict(), ensure_ascii=False)),
+        )
+        self.db.commit()
+
+    def gate_history(self, item_id: str) -> list[sqlite3.Row]:
+        """Các lần chạy gate của một item theo thứ tự (attempt, passed, fail_kind, signature)."""
+        return self.db.execute(
+            "SELECT attempt, passed, fail_kind, signature, seconds FROM gate_runs WHERE item_id=? ORDER BY id",
+            (item_id,),
+        ).fetchall()
 
     def decision_summary(self) -> list[sqlite3.Row]:
         """Tỉ lệ quyết định do Jev đưa ra (so với luật code dự phòng) theo từng loại."""

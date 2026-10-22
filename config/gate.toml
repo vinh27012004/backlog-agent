@@ -1,0 +1,15 @@
+# Giới hạn và thời gian chờ của gate (orchestrator/gate.py).
+# Gate chạy NGOÀI sandbox Codex, trên máy của đội, sau mỗi lần fixer sửa xong.
+
+[limits]
+max_files = 15        # số file đổi tối đa, kể cả file test mới
+max_lines = 600       # tổng số dòng thêm + xóa
+max_targets = 8       # số test agent khai (tests_added) được chạy riêng
+
+[timeouts]
+build_sec = 600
+test_sec = 900
+mvs_sec = 600
+
+[tests]
+flaky_rerun = true    # test fail thì chạy lại 1 lần để loại trừ test flaky

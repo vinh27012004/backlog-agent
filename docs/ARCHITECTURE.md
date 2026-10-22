@@ -252,6 +252,19 @@ BTC cấp **URL endpoint, API key, team id**. Plugin dùng chúng để xác th�
 
 Khi sắp hết deadline, profile tự rút gọn: bỏ reviewer trước, rồi lint và scan. **Không bao giờ bỏ build, MVS và test quan trọng.**
 
+**Cài đặt** (`orchestrator/gate.py`, giới hạn trong `config/gate.toml`). Chạy theo thứ tự rẻ trước, dừng ở bước fail đầu tiên:
+
+1. **Diff** so với commit gốc (gồm file mới chưa track): phải có thay đổi; không quá `max_files` / `max_lines`.
+2. **Luật cấm**: thêm marker skip (`forbidden_skip` của profile) vào file test, xóa file test, bớt assertion, sửa file build khi agent không khai `needs_dependency`, sửa CI/wrapper. Đổi assertion có sẵn mà không bớt → chỉ cảnh báo cho reviewer.
+3. **Build** cho từng stack có file bị sửa.
+4. **Test agent khai** (`tests_added`) ghép vào `test_one`; fail thì chạy lại 1 lần để loại trừ test flaky.
+5. **Regression** (`test_all`); bỏ được khi sắp hết giờ (`full_regression=False`).
+6. **MVS** nếu có lệnh; CR/BUG chưa có MVS runner thì ghi `skipped`.
+
+Kết quả: `passed`, `fail_kind`, chữ ký lỗi, log rút gọn, `to_text()` cho reviewer và `Decider.claims_supported`, `previous_attempt()` cho fixer thử lại. Mỗi lần chạy ghi vào bảng `gate_runs` để phát hiện chữ ký lặp lại. Gate chạy **ngoài sandbox**: tên test do agent khai bị lọc ký tự trước khi ghép vào lệnh shell, biến môi trường chứa KEY/TOKEN/SECRET/PASSWORD và `GM_*` bị bỏ khỏi lệnh.
+
+Chưa làm: lint/scan; kiểm test tái hiện fail trên code gốc rồi mới pass (BUG/PI).
+
 ---
 
 ## 6. Luồng PI
@@ -281,6 +294,7 @@ Dừng điều tra **khi có bằng chứng**, không dừng vì đã hết nử
 - **Log Condenser** rút log Maven hàng nghìn dòng còn vài dòng: test fail, assertion, frame đầu tiên, lỗi compile.
 - **Phân loại kiểu fail** để re-plan đúng hướng: compile error, test gốc vẫn fail, regression, MVS fail, diff quá lớn.
 - Mỗi lần thử bắt đầu lại từ branch sạch. Test fail thì chạy lại 1 lần để loại trừ test flaky.
+- Cài đặt: `orchestrator/logs.py` (`condense`, `signature`, `compile_errors`, `failing_tests`) cho Java/Kotlin, Node/TS, Python, .NET, Go, PHP. Chữ ký bỏ số dòng và đường dẫn worktree nên giữ nguyên giữa các lần thử.
 
 ---
 
@@ -336,7 +350,8 @@ Một máy của đội (VPS):
 3. ✅ Runner gọi `codex exec`, chế độ mock, SQLite (`orchestrator/`).
 3b. ✅ Client JEV (TypeSafe) + 6 điểm quyết định có luật dự phòng (`orchestrator/jev.py`, `decisions.py`). Cần key `TYPESAFE_API_KEY` để chạy thật.
 4. `GameMasterClient` + **`FakeGameMaster`**; MCP `control` (wait_event, status, act), hàng đợi, worktree.
-5. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), Log Condenser, web_search. Gate. Test trên repo Spring nhỏ.
+5. ✅ Gate + Log Condenser (`orchestrator/gate.py`, `orchestrator/logs.py`, mục 5 và 7).
+5b. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), web_search. Test gate trên repo Spring nhỏ.
 6. Hướng dẫn cho Orchestrator Agent (prompt + cách gọi `control`), chạy thử bằng Codex SDK giống cách plugin spawn.
 7. Dựng bộ repo mẫu nhiều stack (vd. Spring, NestJS, FastAPI) với ~10 lỗi cài sẵn đủ 4 loại item; chạy Codex thật, sửa skill theo chỗ agent sai.
 

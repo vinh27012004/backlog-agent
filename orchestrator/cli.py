@@ -7,6 +7,7 @@
   python -m orchestrator.cli runs                           # thống kê số lần chạy agent
   python -m orchestrator.cli profile D:/path/to/repo        # nhận diện stack
   python -m orchestrator.cli decide triage --item samples/items/PI-03.json [--mock]   # hỏi Jev
+  python -m orchestrator.cli gate --item samples/items/BUG-07.json --workdir D:/work/BUG-07 --fix-result f.json
 """
 from __future__ import annotations
 
@@ -83,6 +84,15 @@ def main(argv=None) -> int:
     pd.add_argument("--triage", help="triage JSON có difficulty (cho route)")
     pd.add_argument("--modules", help="danh sách module, cách nhau bởi dấu phẩy (cho triage)")
     pd.add_argument("--mock", action="store_true", help="trả lời giả, không gọi API")
+    pg = sub.add_parser("gate", help="chạy gate trên worktree (build/test thật trên máy, không tốn $)")
+    pg.add_argument("--item", required=True)
+    pg.add_argument("--workdir", required=True)
+    pg.add_argument("--fix-result", dest="fix_result", help="JSON kết quả fixer (tests_added, needs_dependency)")
+    pg.add_argument("--attempt", type=int, default=1)
+    pg.add_argument("--base", default="HEAD", help="commit gốc để so diff")
+    pg.add_argument("--mvs", help="lệnh chạy MVS (BUG/CR)")
+    pg.add_argument("--quick", action="store_true", help="bỏ regression (test_all)")
+    pg.add_argument("--json", action="store_true", help="in cả báo cáo dạng JSON")
     a = ap.parse_args(argv)
 
     if a.cmd == "decide":
@@ -99,6 +109,15 @@ def main(argv=None) -> int:
             res = decider.route(item, _load(a.triage) if a.triage else {"difficulty": "medium"})
         print(json.dumps({k: vars(v) for k, v in res.items()}, ensure_ascii=False, indent=2))
         return 0
+
+    if a.cmd == "gate":
+        from .gate import Gate
+        with Store(DB_PATH) as store:
+            rep = Gate(detect(Path(a.workdir)), store=store).run(
+                _load(a.item), Path(a.workdir), _load(a.fix_result), attempt=a.attempt, base=a.base,
+                full_regression=not a.quick, mvs_command=a.mvs)
+        print(json.dumps(rep.to_dict(), ensure_ascii=False, indent=2) if a.json else rep.to_text())
+        return 0 if rep.passed else 1
 
     if a.cmd == "profile":
         print(json.dumps(detect(Path(a.repo)), ensure_ascii=False, indent=2))
