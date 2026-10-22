@@ -1,0 +1,48 @@
+diff --git a/shop/customers.py b/shop/customers.py
+index bb617ea..1d523f8 100644
+--- a/shop/customers.py
++++ b/shop/customers.py
+@@ -1,4 +1,6 @@
+ """Khách hàng."""
++import csv
++import io
+ from datetime import date
+ 
+ CUSTOMERS = [
+@@ -10,3 +12,15 @@ CUSTOMERS = [
+ 
+ def list_customers() -> list[dict]:
+     return list(CUSTOMERS)
++
++
++def export_csv(start: date | None = None, end: date | None = None) -> str:
++    """GET /api/customers/export: CSV gồm id, họ tên, email, ngày tạo; lọc theo khoảng ngày tạo (gồm 2 đầu)."""
++    out = io.StringIO()
++    writer = csv.writer(out, lineterminator="\n")
++    writer.writerow(["id", "name", "email", "created"])
++    for c in CUSTOMERS:
++        if (start and c["created"] < start) or (end and c["created"] > end):
++            continue
++        writer.writerow([c["id"], c["name"], c["email"], c["created"].isoformat()])
++    return out.getvalue()
+diff --git a/tests/test_export.py b/tests/test_export.py
+new file mode 100644
+index 0000000..a61bb61
+--- /dev/null
++++ b/tests/test_export.py
+@@ -0,0 +1,15 @@
++import unittest
++from datetime import date
++
++from shop.customers import export_csv
++
++
++class ExportCsvTest(unittest.TestCase):
++    def test_header_and_all_rows(self):
++        lines = export_csv().splitlines()
++        self.assertEqual(lines[0], "id,name,email,created")
++        self.assertEqual(len(lines), 4)
++
++    def test_filter_by_created_range(self):
++        lines = export_csv(date(2026, 10, 1), date(2026, 10, 10)).splitlines()
++        self.assertEqual(lines[1:], ["2,Trần Bình,binh@example.com,2026-10-05"])

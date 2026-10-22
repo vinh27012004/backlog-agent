@@ -351,7 +351,8 @@ Một máy của đội (VPS):
 3. ✅ Runner gọi `codex exec`, chế độ mock, SQLite (`orchestrator/`).
 3b. ✅ Client JEV (TypeSafe) + 6 điểm quyết định có luật dự phòng (`orchestrator/jev.py`, `decisions.py`). Cần key `TYPESAFE_API_KEY` để chạy thật.
 4. ✅ `GameMasterClient` + **`FakeGameMaster`** + `safe_submit` (`orchestrator/gamemaster.py`).
-4b. Vòng `run` (triage → route → fixer → gate → reviewer → `next_action` → nộp), hàng đợi, worktree; MCP `control` (wait_event, status, act).
+4b. ✅ Vòng `run` (`orchestrator/match.py`): triage → route → fixer → gate → reviewer → `next_action` → nộp, hàng đợi ưu tiên PI, worktree mỗi item (`orchestrator/workspace.py`), chạy song song, chạy lại sau crash. Chạy cả trận giả không tốn $: `python -m orchestrator.cli match --mock --jev-mock` trên repo mẫu `samples/repo-template/`.
+4c. MCP `control` (wait_event, status, act) bọc vòng `run` cho Orchestrator Agent.
 5. ✅ Gate + Log Condenser (`orchestrator/gate.py`, `orchestrator/logs.py`, mục 5 và 7).
 5b. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), web_search. Test gate trên repo Spring nhỏ.
 6. Hướng dẫn cho Orchestrator Agent (prompt + cách gọi `control`), chạy thử bằng Codex SDK giống cách plugin spawn.

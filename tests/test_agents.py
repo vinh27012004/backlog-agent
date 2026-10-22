@@ -100,6 +100,15 @@ class ProfileTest(unittest.TestCase):
                 self.assertIn("{target}", st["test_one"], sid)
                 self.assertTrue(st["forbidden_skip"], sid)
 
+    def test_python_test_runner_follows_declared_dependencies(self):
+        for files, runner in (({"pyproject.toml": "[project]\nname='x'"}, "unittest"),
+                              ({"requirements.txt": "flask\npytest"}, "pytest"),
+                              ({"requirements.txt": "flask", "conftest.py": ""}, "pytest")):
+            with tempfile.TemporaryDirectory() as d:
+                st = detect(make_repo(Path(d), files))["stacks"][0]
+                self.assertEqual(st["test_framework"], runner, files)
+                self.assertIn(runner, st["test_all"])
+
     def test_monorepo_and_submodules(self):
         with tempfile.TemporaryDirectory() as d:
             files = {"backend/pom.xml": "spring-boot", "backend/core/pom.xml": "", "frontend/package.json":

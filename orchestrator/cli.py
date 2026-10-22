@@ -1,4 +1,6 @@
-"""Chạy thử từng agent bằng tay.
+"""Chạy thử từng agent bằng tay, hoặc cả trận với Game Master giả.
+
+  python -m orchestrator.cli match --mock --jev-mock        # cả trận giả trên repo mẫu, không tốn $
 
   python -m orchestrator.cli prompt fixer --item samples/items/BUG-07.json
   python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from .agents import AgentRunner
@@ -50,6 +53,39 @@ def _prompt_kwargs(a) -> dict:
     if a.deadline is not None:
         kw["deadline_min"] = a.deadline
     return kw
+
+
+def _match(a) -> int:
+    from .decisions import Decider, mock_transport
+    from .gamemaster import FakeGameMaster
+    from .gate import Gate
+    from .jev import JevClient
+    from .match import MatchRunner, RunConfig
+    from .workspace import Workspaces, init_sample_repo
+
+    gm = FakeGameMaster.from_file(a.scenario, speed=a.speed)
+    match_id = f"{gm.match_id}-{time.strftime('%Y%m%d-%H%M%S')}"       # mỗi trận một thư mục, một DB
+    run_dir = ROOT / "runs" / match_id
+    repo = Path(a.repo) if a.repo else init_sample_repo(ROOT / "samples" / "repo-template", run_dir / "repo")
+    if not a.mock:
+        print("Cảnh báo: chạy Codex thật, tốn $ từ ngân sách đội.")
+    override = {k: v for k, v in (("workers", a.workers), ("max_attempts", a.max_attempts)) if v is not None}
+    cfg = RunConfig.load(poll_sec=a.poll, stop_when_idle=a.until_idle, **override)
+    print(f"Trận {match_id}: repo {repo}, tốc độ x{a.speed}, {cfg.workers} worker")
+    with Store(Path(a.db) if a.db else run_dir / "state.db") as store:
+        jev = JevClient.from_config(transport=mock_transport if a.jev_mock else None)
+        if not jev.available:
+            print("Jev chưa sẵn sàng → mọi quyết định dùng luật code.")
+        profile = detect(repo)
+        agents = AgentRunner(store, mode="mock" if a.mock else "live", runs_dir=run_dir)
+        runner = MatchRunner(gm, agents, Decider(jev, store), store, Workspaces(repo, run_dir / "worktrees"),
+                             profile, gate=Gate(profile, store=store, runs_dir=run_dir), config=cfg)
+        outcomes = runner.run()
+    print(f"\n{'item':<10}{'kết quả':<12}{'lần thử':>8}  ghi chú")
+    for o in sorted(outcomes.values(), key=lambda o: o.item_id):
+        print(f"{o.item_id:<10}{o.state:<12}{o.attempts:>8}  {o.reason}")
+    print(f"Log và DB: {run_dir}")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -93,6 +129,18 @@ def main(argv=None) -> int:
     pg.add_argument("--mvs", help="lệnh chạy MVS (BUG/CR)")
     pg.add_argument("--quick", action="store_true", help="bỏ regression (test_all)")
     pg.add_argument("--json", action="store_true", help="in cả báo cáo dạng JSON")
+    pm = sub.add_parser("match", help="chạy cả trận với Game Master giả (FakeGameMaster)")
+    pm.add_argument("--scenario", default=str(ROOT / "samples" / "scenarios" / "practice.json"))
+    pm.add_argument("--repo", help="repo để sửa (mặc định: tạo repo mới từ samples/repo-template)")
+    pm.add_argument("--mock", action="store_true", help="agent phát lại mock, không gọi Codex (không tốn $)")
+    pm.add_argument("--jev-mock", dest="jev_mock", action="store_true", help="Jev trả lời giả, không gọi API")
+    pm.add_argument("--speed", type=float, default=60, help="tua nhanh đồng hồ trận (60 = 1 phút trận/giây)")
+    pm.add_argument("--poll", type=float, default=1.0, help="số giây thật giữa 2 lần hỏi Game Master")
+    pm.add_argument("--workers", type=int)
+    pm.add_argument("--max-attempts", dest="max_attempts", type=int)
+    pm.add_argument("--until-idle", dest="until_idle", action="store_true",
+                    help="dừng khi mọi item đã thấy đều xong, không chờ hết trận")
+    pm.add_argument("--db", help="file SQLite (mặc định runs/<match>/state.db)")
     a = ap.parse_args(argv)
 
     if a.cmd == "decide":
@@ -109,6 +157,9 @@ def main(argv=None) -> int:
             res = decider.route(item, _load(a.triage) if a.triage else {"difficulty": "medium"})
         print(json.dumps({k: vars(v) for k, v in res.items()}, ensure_ascii=False, indent=2))
         return 0
+
+    if a.cmd == "match":
+        return _match(a)
 
     if a.cmd == "gate":
         from .gate import Gate

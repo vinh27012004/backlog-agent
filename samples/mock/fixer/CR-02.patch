@@ -1,0 +1,49 @@
+diff --git a/shop/account.py b/shop/account.py
+index 6bee0a7..55c0b22 100644
+--- a/shop/account.py
++++ b/shop/account.py
+@@ -1,5 +1,8 @@
+ """Tài khoản người dùng."""
+ 
++MAX_CHANGES_PER_DAY = 5
++DAY_SECONDS = 24 * 3600
++
+ 
+ class ApiError(Exception):
+     def __init__(self, status: int, code: str):
+@@ -11,6 +14,9 @@ class ApiError(Exception):
+ def change_password(user: dict, new_password: str, now: float) -> dict:
+     if len(new_password) < 8:
+         raise ApiError(400, "PASSWORD_TOO_SHORT")
++    recent = [t for t in user.get("password_changes", []) if now - t < DAY_SECONDS]
++    if len(recent) >= MAX_CHANGES_PER_DAY:
++        raise ApiError(429, "PASSWORD_CHANGE_LIMIT")
+     user["password"] = new_password
+-    user.setdefault("password_changes", []).append(now)
++    user["password_changes"] = recent + [now]
+     return {"status": 200}
+diff --git a/tests/test_password_limit.py b/tests/test_password_limit.py
+new file mode 100644
+index 0000000..af27e3e
+--- /dev/null
++++ b/tests/test_password_limit.py
+@@ -0,0 +1,19 @@
++import unittest
++
++from shop.account import ApiError, change_password
++
++
++class PasswordLimitTest(unittest.TestCase):
++    def test_sixth_change_in_24h_is_rejected(self):
++        user = {}
++        for i in range(5):
++            change_password(user, f"password{i}", now=1000 + i)
++        with self.assertRaises(ApiError) as e:
++            change_password(user, "password6", now=2000)
++        self.assertEqual((e.exception.status, e.exception.code), (429, "PASSWORD_CHANGE_LIMIT"))
++
++    def test_window_slides_after_24h(self):
++        user = {}
++        for i in range(5):
++            change_password(user, f"password{i}", now=1000 + i)
++        self.assertEqual(change_password(user, "password6", now=1000 + 24 * 3600)["status"], 200)

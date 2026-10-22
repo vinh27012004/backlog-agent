@@ -1,0 +1,3 @@
+# patch mock và repo mẫu phải giữ LF, nếu không git apply sẽ fail trên Windows (core.autocrlf=true)
+*.patch -text
+samples/repo-template/** text eol=lf

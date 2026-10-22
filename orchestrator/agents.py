@@ -81,12 +81,15 @@ def validate_output(output: Any, schema_path: Path) -> list[str]:
 
 
 class AgentRunner:
-    def __init__(self, store: Store, *, mode: str = "live", config: AgentsConfig | None = None):
+    def __init__(self, store: Store, *, mode: str = "live", config: AgentsConfig | None = None,
+                 mock_dir: Path = MOCK_DIR, runs_dir: Path = RUNS_DIR):
         if mode not in ("live", "mock"):
             raise ValueError("mode phải là live hoặc mock")
         self.store = store
         self.mode = mode
         self.config = config or AgentsConfig()
+        self.mock_dir = Path(mock_dir)
+        self.runs_dir = Path(runs_dir)
 
     # ------------------------------------------------------------------ public
     def run(
@@ -97,15 +100,16 @@ class AgentRunner:
         workdir: Path,
         attempt: int = 1,
         tier: str | None = None,
+        label: str | None = None,
         **prompt_kwargs: Any,
     ) -> AgentResult:
         itype = item_type(item["id"])
         cfg = self.config.role(role_name, itype, tier)
         prompt = build_prompt(cfg.role, item, **prompt_kwargs)
 
-        run_dir = RUNS_DIR / item["id"]
+        run_dir = self.runs_dir / item["id"]
         run_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{role_name}-{attempt}"
+        stem = f"{role_name}-{attempt}" + (f"-{label}" if label else "")   # label: chạy song song cùng attempt
         jsonl_path = run_dir / f"{stem}.jsonl"
         last_msg_path = run_dir / f"{stem}.last.json"
         (run_dir / f"{stem}.prompt.md").write_text(prompt, encoding="utf-8")
@@ -118,7 +122,7 @@ class AgentRunner:
         state = EventState()
 
         if self.mode == "mock":
-            status = self._replay_mock(role_name, item["id"], state, run_id, jsonl_path)
+            status = self._replay_mock(role_name, item["id"], attempt, Path(workdir), state, run_id, jsonl_path)
             raw_last = state.last_message
         else:
             status = self._run_live(cfg, prompt, Path(workdir), state, run_id, jsonl_path, last_msg_path)
@@ -191,13 +195,13 @@ class AgentRunner:
             return "failed"
         return "ok"
 
-    def _replay_mock(self, role_name, item_id, state, run_id, jsonl_path) -> str:
-        """Phát lại output đã lưu: samples/mock/<role>/<item>.jsonl hoặc default.jsonl."""
-        folder = MOCK_DIR / role_name
-        src = folder / f"{item_id}.jsonl"
-        if not src.exists():
-            src = folder / "default.jsonl"
-        if not src.exists():
+    def _replay_mock(self, role_name, item_id, attempt, workdir, state, run_id, jsonl_path) -> str:
+        """Phát lại output đã lưu trong <mock_dir>/<role>/: <item>-<attempt>.jsonl, <item>.jsonl rồi default.jsonl.
+        Có <item>-<attempt>.patch hoặc <item>.patch thì `git apply` vào workdir, giả việc agent sửa file."""
+        folder = self.mock_dir / role_name
+        names = (f"{item_id}-{attempt}", item_id)
+        src = next((folder / f"{n}.jsonl" for n in (*names, "default") if (folder / f"{n}.jsonl").exists()), None)
+        if src is None:
             state.errors.append(f"không có dữ liệu mock cho {role_name}/{item_id}")
             return "failed"
         with open(src, encoding="utf-8") as f, open(jsonl_path, "w", encoding="utf-8") as raw:
@@ -206,4 +210,11 @@ class AgentRunner:
                 te = feed(state, line)
                 if te:
                     self.store.add_event(run_id, te.kind, te.summary, te.status)
+        patch = next((folder / f"{n}.patch" for n in names if (folder / f"{n}.patch").exists()), None)
+        if patch is not None:
+            res = subprocess.run(["git", "-C", str(workdir), "apply", "--whitespace=nowarn", str(patch.resolve())],
+                                 capture_output=True, text=True)
+            if res.returncode != 0:
+                state.errors.append(f"không áp được {patch.name}: {res.stderr.strip()}")
+                return "failed"
         return "failed" if state.turn_failed else "ok"

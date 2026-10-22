@@ -5,6 +5,8 @@ FastAPI/Flask `app/{routers|api, services, models, schemas, db}`, tests under `t
 
 **Tests**
 - pytest: narrow run with `test_one` using `path/to/test_file.py::TestClass::test_name` (or `-k "<expr>"`).
+- unittest (profile `test_framework: unittest`, when the project does not declare pytest): `test_one` with a
+  dotted name `tests.test_module` or `tests.test_module.TestClass.test_name`; do not add pytest.
 - Django: `python manage.py test app.tests.TestClass.test_name`, or pytest-django if configured.
 - FastAPI: `TestClient(app)` + dependency overrides; Flask: `app.test_client()`.
 - Fixtures in `conftest.py`; reuse existing factories (factory_boy, model_bakery) instead of new ones.

@@ -185,6 +185,11 @@ class FakeGameMaster(GameMasterClient):
             self._paused_total += self.clock() - self._paused_since
             self._paused_since = self._pause_until = None
 
+    def unreleased(self) -> int:
+        """Số item chưa hiện ra (chỉ bản giả biết, để `stop_when_idle` không dừng sớm)."""
+        elapsed = self._tick()
+        return sum(1 for it in self.items.values() if elapsed < it["at"]) if elapsed < self.duration else 0
+
     def fail_next(self, method: str, *, applied: bool = False, times: int = 1) -> None:
         """Lần gọi `method` kế tiếp ném GameMasterUnavailable; applied=True thì server vẫn xử lý xong trước đó."""
         self._failures.setdefault(method, []).extend([applied] * times)

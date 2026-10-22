@@ -1,0 +1,39 @@
+diff --git a/shop/order.py b/shop/order.py
+index 43bac0c..1870f30 100644
+--- a/shop/order.py
++++ b/shop/order.py
+@@ -1,16 +1,13 @@
+ """Tính tiền đơn hàng."""
+ 
+ 
+-def line_total(price: int, qty: int, coupon: dict | None = None) -> float:
+-    total = price * qty
+-    if coupon and coupon.get("type") == "percent":
+-        total = total * (100 - coupon["value"]) / 100
+-    return total
++def line_total(price: int, qty: int) -> int:
++    return price * qty
+ 
+ 
+ def order_total(lines: list[dict], coupon: dict | None = None) -> int:
+     """Tổng trước thuế. Mã "percent" giảm theo % trên tổng, mã "fixed" trừ thẳng số tiền."""
+-    subtotal = sum(line_total(line["price"], line["qty"], coupon) for line in lines)
++    subtotal = sum(line_total(line["price"], line["qty"]) for line in lines)
+     if coupon and coupon.get("type") == "percent":
+         subtotal = subtotal * (100 - coupon["value"]) / 100
+     elif coupon and coupon.get("type") == "fixed":
+diff --git a/tests/test_coupon.py b/tests/test_coupon.py
+new file mode 100644
+index 0000000..df661b0
+--- /dev/null
++++ b/tests/test_coupon.py
+@@ -0,0 +1,9 @@
++import unittest
++
++from shop.order import order_total
++
++
++class PercentCouponTest(unittest.TestCase):
++    def test_percent_coupon_applied_once(self):
++        lines = [{"price": 300_000, "qty": 2}, {"price": 400_000, "qty": 1}]
++        self.assertEqual(order_total(lines, {"type": "percent", "value": 10}), 900_000)

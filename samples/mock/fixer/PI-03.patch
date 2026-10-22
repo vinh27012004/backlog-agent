@@ -1,0 +1,27 @@
+diff --git a/shop/report.py b/shop/report.py
+index a1e6ced..8014673 100644
+--- a/shop/report.py
++++ b/shop/report.py
+@@ -9,5 +9,5 @@ def daily_report(orders: list[dict], day: str) -> dict:
+ 
+ def monthly_report(orders: list[dict], month: str) -> dict:
+     """month dạng YYYY-MM."""
+-    rows = [o for o in orders if o["date"][:10] == month]
++    rows = [o for o in orders if o["date"][:7] == month]
+     return {"month": month, "orders": len(rows), "revenue": sum(o["total"] for o in rows)}
+diff --git a/tests/test_monthly_report.py b/tests/test_monthly_report.py
+new file mode 100644
+index 0000000..07806e0
+--- /dev/null
++++ b/tests/test_monthly_report.py
+@@ -0,0 +1,10 @@
++import unittest
++
++from shop.report import monthly_report
++
++
++class MonthlyReportTest(unittest.TestCase):
++    def test_month_includes_all_days(self):
++        orders = [{"date": "2026-10-01T09:00:00", "total": 100}, {"date": "2026-10-21T15:30:00", "total": 250},
++                  {"date": "2026-09-30T23:00:00", "total": 70}]
++        self.assertEqual(monthly_report(orders, "2026-10"), {"month": "2026-10", "orders": 2, "revenue": 350})

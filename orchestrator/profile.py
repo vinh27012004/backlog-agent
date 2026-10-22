@@ -136,12 +136,23 @@ def _python(repo: Path, d: Path, files: list[str]) -> Stack | None:
             run_app="python manage.py runserver",
             forbidden_skip=["@skip", "@unittest.skip", "skipTest("],
         )
+    run_app = "uvicorn main:app" if "fastapi" in fw else ("flask run" if "flask" in fw else "")
+    if "pytest" not in text and not {"pytest.ini", "conftest.py"} & set(files):
+        # không khai pytest: dùng unittest có sẵn (máy chạy có thể không cài pytest)
+        return Stack(
+            "python", _rel(repo, d), tool, fw, "unittest",
+            build="python -m compileall -q .",
+            test_all="python -m unittest discover -t .",
+            test_one="python -m unittest {target}",
+            run_app=run_app,
+            forbidden_skip=["@unittest.skip", "skipTest(", "@unittest.expectedFailure"],
+        )
     return Stack(
         "python", _rel(repo, d), tool, fw, "pytest",
         build="python -m compileall -q .",
         test_all="python -m pytest -q",
         test_one="python -m pytest -q {target}",
-        run_app="uvicorn main:app" if "fastapi" in fw else ("flask run" if "flask" in fw else ""),
+        run_app=run_app,
         forbidden_skip=["@pytest.mark.skip", "@pytest.mark.xfail", "pytest.skip(", "@unittest.skip"],
     )
 

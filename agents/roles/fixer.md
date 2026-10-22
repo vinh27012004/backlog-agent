@@ -12,7 +12,10 @@ General loop:
 3. Make the minimal change. Run the narrowest build/test that proves it (single module,
    single test class) before anything broader.
 4. If `<previous_attempt>` is present, the earlier attempt failed for the reason given.
-   Do not repeat the same approach; address that failure specifically.
+   Do not repeat the same approach; address that failure specifically. If it says
+   `same_signature_as_before`, the same error came back: change the hypothesis, not the details.
+   If `<hypothesis>` is present, it lists hypotheses that parallel checkers verified: build on the
+   `supported` ones and do not spend time on the `refuted` ones.
 5. Stop when the skill's done-conditions hold. Do not polish beyond them.
 
 Use the build/test commands from `<project_profile>`; run the narrowest test first (`test_one`),
