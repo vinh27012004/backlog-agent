@@ -53,6 +53,14 @@ CREATE TABLE IF NOT EXISTS gate_runs (
   seconds       REAL,
   report_json   TEXT
 );
+CREATE TABLE IF NOT EXISTS submissions (
+  item_id       TEXT PRIMARY KEY,             -- mỗi item chỉ nộp 1 lần
+  status        TEXT NOT NULL,                -- submitting | accepted | rejected | pending | unknown
+  created_at    REAL NOT NULL,
+  updated_at    REAL NOT NULL,
+  reason        TEXT,
+  response_json TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_runs_item ON agent_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_gate_item ON gate_runs(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON agent_events(run_id);
@@ -126,6 +134,22 @@ class Store:
             "SELECT attempt, passed, fail_kind, signature, seconds FROM gate_runs WHERE item_id=? ORDER BY id",
             (item_id,),
         ).fetchall()
+
+    def get_submission(self, item_id: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM submissions WHERE item_id=?", (item_id,)).fetchone()
+
+    def set_submission(self, item_id: str, status: str, *, reason: str | None = None,
+                       response: dict | None = None) -> None:
+        """Ghi và commit ngay: "submitting" phải nằm trên đĩa trước khi gọi API nộp bài."""
+        now = time.time()
+        self.db.execute(
+            "INSERT INTO submissions(item_id,status,created_at,updated_at,reason,response_json) VALUES(?,?,?,?,?,?)"
+            " ON CONFLICT(item_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at,"
+            " reason=excluded.reason, response_json=COALESCE(excluded.response_json, submissions.response_json)",
+            (item_id, status, now, now, reason,
+             json.dumps(response, ensure_ascii=False) if response is not None else None),
+        )
+        self.db.commit()
 
     def decision_summary(self) -> list[sqlite3.Row]:
         """Tỉ lệ quyết định do Jev đưa ra (so với luật code dự phòng) theo từng loại."""

@@ -231,8 +231,9 @@ BTC cấp **URL endpoint, API key, team id**. Plugin dùng chúng để xác th�
   | `submit(id, payload, evidence)` | Nộp 1 lần |
 
   Bản cài đặt: `HttpGameMaster` (API thật, viết khi có tài liệu ở Training Camp) · `PluginGameMaster` (nếu plugin cấp tool) · **`FakeGameMaster`** (dựng ngay: ra item theo kịch bản, đồng hồ riêng, có PAUSED, từ chối nộp lần 2 hoặc nộp khi chưa start).
+  Cài đặt: `orchestrator/gamemaster.py`. `FakeGameMaster` đọc kịch bản JSON (`samples/scenarios/practice.json`: phút item hiện ra, deadline, các lần PAUSED), chạy bằng `FastClock(speed)` để tua nhanh hoặc `ManualClock` trong test, và giả được lỗi mạng trước hoặc sau khi server xử lý (`fail_next`). Giả định trạng thái: VISIBLE = chưa start, OPEN = đã start, CLOSED = đã nộp / hết hạn / hết trận; mã từ chối `NOT_STARTED`, `ALREADY_SUBMITTED`, `CLOSED`, `MATCH_NOT_RUNNING`. Kiểm lại tất cả khi có API thật.
 - **Nộp an toàn**: ghi "đang nộp" vào SQLite **trước** khi gọi API. Lỗi mạng thì hỏi lại trạng thái item rồi mới quyết, không gọi `submit` lần 2 một cách mù quáng.
-- **Gọi lại khi lỗi**: thử lại có giãn cách cho các lệnh đọc; không tự thử lại `submit`.
+- **Gọi lại khi lỗi**: thử lại có giãn cách cho các lệnh đọc; không tự thử lại `submit`. Cài đặt: `safe_submit()` + bảng `submissions` (mỗi item một dòng), `with_retry()` cho lệnh đọc.
 - **GitHub**: repo của đội trên GitHub, Game Master đẩy source vào. Cần token hoặc deploy key để pull (và push nếu nộp bài qua git). Token chỉ dùng ở bước chuẩn bị và trong `control`.
 
 ---
@@ -349,7 +350,8 @@ Một máy của đội (VPS):
 2. ✅ Agent: fixer (tự phân tích + sửa); luật chung, vai trò, 4 skill v2 TASK / CR / BUG / PI; reviewer, PI hypothesis; tài liệu tham khảo; gói 6 stack; nhận diện stack (`agents/`, `orchestrator/profile.py`).
 3. ✅ Runner gọi `codex exec`, chế độ mock, SQLite (`orchestrator/`).
 3b. ✅ Client JEV (TypeSafe) + 6 điểm quyết định có luật dự phòng (`orchestrator/jev.py`, `decisions.py`). Cần key `TYPESAFE_API_KEY` để chạy thật.
-4. `GameMasterClient` + **`FakeGameMaster`**; MCP `control` (wait_event, status, act), hàng đợi, worktree.
+4. ✅ `GameMasterClient` + **`FakeGameMaster`** + `safe_submit` (`orchestrator/gamemaster.py`).
+4b. Vòng `run` (triage → route → fixer → gate → reviewer → `next_action` → nộp), hàng đợi, worktree; MCP `control` (wait_event, status, act).
 5. ✅ Gate + Log Condenser (`orchestrator/gate.py`, `orchestrator/logs.py`, mục 5 và 7).
 5b. MCP tool: CodeGraph, bản đồ hệ thống, runner (build, test, MVS, gọi app), web_search. Test gate trên repo Spring nhỏ.
 6. Hướng dẫn cho Orchestrator Agent (prompt + cách gọi `control`), chạy thử bằng Codex SDK giống cách plugin spawn.
