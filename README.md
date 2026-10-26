@@ -1,45 +1,47 @@
 # Backlog Agent — Master the Machine 2026
 
-Digital Development Team tự động xử lý backlog TASK / CR / BUG / PI trong trận đấu.
-Hệ thống được dựng bằng Claude, lúc thi chạy bằng **Codex CLI** (`codex exec`).
+Digital Project Team tự động xử lý backlog TASK / CR / BUG / PI trong trận đấu. Lúc thi, hệ thống là một
+**team pack** (`team-sdlc-pack`) chạy trong **MTM Player** của BTC: Player khởi chạy một phiên Codex
+làm `team_orchestrator`, pack của đội cung cấp MCP helper, skill và agent profile.
+
+**Đọc trước:** [`docs/team-pack/README.md`](docs/team-pack/README.md) (thiết kế hiện hành, lộ trình, rủi ro).
 
 ## Cấu trúc
 
 ```
 backlog-agent/
 ├── docs/
-│   ├── ARCHITECTURE.md    kiến trúc, gate, PI, log, ngân sách $50, hạ tầng, rủi ro
-│   └── diagrams.html      2 bản vẽ: Architecture và Infrastructure
-├── agents/                prompt các agent: luật chung, vai trò, skill, schema (xem agents/README.md)
-├── config/                cấu hình agent, JEV và Codex (CODEX_HOME)
-├── orchestrator/          code Python: chạy agent, nhận diện stack, SQLite, CLI
-├── samples/               item mẫu và output mock
-├── tests/                 test không tốn $
-└── monitor/               trang monitor (đang dùng dữ liệu mẫu v0.2)
+│   ├── team-pack/       thiết kế hiện hành (13 file)
+│   ├── btc/             tài liệu của BTC: guide, luật chơi, Q&A, API (NDA)
+│   └── legacy/          kiến trúc cũ, đã thay thế
+├── vendor/              phần mềm của BTC, chỉ đọc: mtm-player-0.9.33/ (gitignore), team-orchestrator-pack-0.5.1/
+├── agents/              prompt tiếng Anh (luật, vai trò, skill theo loại item, stack): nguồn để port sang skill của pack
+├── samples/             repo mẫu, item mẫu, kịch bản, mock: fixture cho test
+│
+│   — legacy: Python orchestrator gọi `codex exec`; giữ để port gate / nhận diện stack / log condenser / Jev —
+├── orchestrator/        code Python
+├── fake_gamemaster/     Game Master giả (Python)
+├── monitor/             trang monitor cũ (thay bằng dashboard của Player)
+├── config/              cấu hình agent, gate, Jev, Codex của bản cũ
+└── tests/               test Python (không tốn $)
 ```
 
-## Bắt đầu
+Sắp thêm theo lộ trình: `pack/` (nguồn team pack), `tools/` (mock Game Master, fake root, build ZIP),
+`tests/pack/` (test Node).
+
+## Lệnh
 
 ```bash
-python -m unittest discover -s tests -v                                   # Python 3.11+
-python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
-python -m orchestrator.cli decide triage --item samples/items/PI-03.json --mock   # JEV (TypeSafe)
-python -m orchestrator.cli runs
+py -3.13 -m unittest discover -s tests -v      # test của bản Python cũ (Python 3.11+)
 ```
-
-`config/codex-home/config.toml` là cấu hình Codex được quản lý trong repo; session và thông tin đăng nhập Codex phát sinh tại đây sẽ không được commit.
-
-Monitor: mở `monitor/index.html` bằng trình duyệt.
 
 ## Trạng thái
 
 | Phần | Trạng thái |
 |---|---|
-| Agent Codex: fixer (tự phân tích + 4 skill), reviewer, PI hypothesis | Đã dựng, test bằng mock và codex giả |
-| JEV (TypeSafe): client + 6 điểm quyết định có luật dự phòng | Đã dựng, test bằng server giả; cần `TYPESAFE_API_KEY` để chạy thật |
-| Cấu hình Codex | Đã kiểm với codex-cli 0.162.1 |
-| Gate | Chưa dựng |
-| MCP tool: codegraph, runner, web | Chưa dựng (đã khai báo, đang tắt) |
-| Orchestrator: theo dõi /match, hàng đợi, worktree, nộp bài | Chưa dựng |
-| Game Master giả | Chưa dựng |
-| Monitor đọc SQLite | Chưa nối |
+| Bộ tài liệu thiết kế `docs/team-pack/` | Xong v1.0 (25/10) |
+| Spike với server thật (đăng nhập trang trận, Practice #1) | Chưa làm (server mở 26/10) |
+| Team pack (`pack/`): khung, installer, checker | Chưa dựng |
+| MCP helper (Node) | Chưa dựng |
+| Skill và agent profile | Chưa dựng (port từ `agents/`) |
+| Python orchestrator | Legacy; gate, profile, logs, Jev sẽ được port |
