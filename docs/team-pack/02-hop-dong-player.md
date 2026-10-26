@@ -20,7 +20,7 @@ Với provider `codex`, Player 0.9.33 dùng **`codex app-server`** (JSON-RPC qua
 
 | Mục | Giá trị |
 |---|---|
-| Executable | `CODEX_CLI_PATH` → `codex.exe` trên PATH → bản Codex Desktop mới nhất; operator sửa được ở trang Init |
+| Executable | `CODEX_CLI_PATH` → file tên đúng **`codex.exe`** trên PATH → `codex.exe` có thời gian sửa mới nhất trong `%LOCALAPPDATA%\OpenAI\Codex\bin\` (bản đi kèm Codex Desktop); operator sửa được ở trang Init (`src/codex-cli.mjs`). Shim npm (`codex.cmd`, `codex.ps1`) **không** được nhận, nên máy cài CLI qua npm sẽ chạy bản Desktop (26/10: `0.164.0-alpha.11.1`, không phải CLI `0.164.0` trên PATH). Desktop tự cập nhật thì Player tự đổi sang thư mục bản mới |
 | Bọc tiến trình | Windows: `pwsh` + Job Object `KILL_ON_JOB_CLOSE`, không cho breakaway (`scripts/windows-cli-job.ps1`) |
 | `thread/start` | `cwd = TeamWorkspace`, `model = orchestratorModel`, `config.model_reasoning_effort = low/medium/high`, `sandbox = "danger-full-access"`, `approvalPolicy = "on-request"`, `approvalsReviewer = "auto_review"` (mặc định) hoặc `"user"` |
 | Số thread | **Một thread cho mỗi round.** PREPARE tạo thread; GAME, RESUME, CHAT là các `turn/start` mới trên cùng thread (`thread/resume` nếu Player khởi động lại) |

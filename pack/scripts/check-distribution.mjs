@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Checker chỉ đọc (09 §5): kiểm pack đã cài trong TeamWorkspace, thử khởi động helper qua MCP.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 
 const argv = process.argv.slice(2);
 const tw = resolve(argv[argv.indexOf('--team-workspace') + 1] ?? '.');
@@ -52,6 +52,51 @@ const trusted = [...trustedText.matchAll(/\[projects\.(?:'([^']+)'|"((?:[^"\\]|\
   .some(m => (m[1] ?? m[2].replaceAll('\\\\', '\\')).toLowerCase().replaceAll('/', '\\') === want);
 check('codex trust', trusted, trusted ? '' : `add [projects.'${tw}'] trust_level = "trusted"`);
 check('machine config', existsSync(join(tw, 'team-sdlc-pack', 'local', 'machine.json')), 'team-sdlc-pack/local/machine.json');
+
+// Codex mà Player sẽ chạy (codex-cli.mjs của Player 0.9.33): CODEX_CLI_PATH → "codex.exe" trên PATH (Windows chỉ
+// nhận đúng tên này, shim npm codex.cmd/.ps1 bị bỏ qua) → codex.exe mới nhất trong %LOCALAPPDATA%\OpenAI\Codex\bin.
+// Bản Desktop tự cập nhật, nên kiểm [features] của TeamWorkspace bằng đúng exe đó (hoặc --codex <exe> như trang Init).
+function playerCodex() {
+  const env = process.env;
+  if (env.CODEX_CLI_PATH?.trim() && existsSync(env.CODEX_CLI_PATH.trim())) return { path: env.CODEX_CLI_PATH.trim(), via: 'CODEX_CLI_PATH' };
+  const name = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  for (const dir of String(env.PATH ?? '').split(delimiter).map(d => d.trim().replace(/^"|"$/g, '')).filter(Boolean)) {
+    if (existsSync(join(dir, name))) return { path: join(dir, name), via: 'PATH' };
+  }
+  const root = env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin') : null;
+  if (root && existsSync(root)) {
+    const found = [join(root, 'codex.exe'), ...readdirSync(root, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => join(root, e.name, 'codex.exe'))]
+      .filter(p => existsSync(p)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    if (found.length) return { path: found[0], via: 'Codex Desktop' };
+  }
+  return null;
+}
+const override = argv.includes('--codex') ? argv[argv.indexOf('--codex') + 1] : null;
+const codex = override ? { path: resolve(override), via: '--codex' } : playerCodex();
+if (!codex) check('codex features', false, 'no codex executable found the way Player looks for it');
+else if (!existsSync(codex.path)) check('codex features', false, `${codex.via}: ${codex.path} does not exist`);
+else {
+  const version = spawnSync(codex.path, ['--version'], { encoding: 'utf8', timeout: 20_000 }).stdout?.trim() ?? '?';
+  const res = spawnSync(codex.path, ['features', 'list'], { cwd: tw, encoding: 'utf8', timeout: 30_000 });
+  const state = name => (res.stdout ?? '').match(new RegExp(`^${name}\\s+\\S+(?:\\s\\S+)*?\\s+(true|false)\\s*$`, 'm'))?.[1] ?? '?';
+  const mustBeOff = ['computer_use', 'browser_use', 'in_app_browser', 'plugins', 'apps'].filter(n => state(n) !== 'false');
+  const multiAgent = state('multi_agent');
+  check('codex features', res.status === 0 && !mustBeOff.length && multiAgent === 'true',
+    `${codex.via}: ${codex.path} (${version}); ${mustBeOff.length ? `still on: ${mustBeOff.join(', ')}` : 'computer/browser/plugins off'}; multi_agent=${multiAgent}`);
+}
+
+// Jev (D9): chỉ báo thông tin, không chặn READY (không có key thì helper chạy bằng luật code). Lưu ý: biến môi trường
+// phải có trong môi trường của Player (Codex chuyển cho helper qua env_vars), không phải chỉ trong shell này.
+try {
+  const jevCfg = JSON.parse(read(join(runtime, 'config', 'jev.json')));
+  const localJev = existsSync(join(tw, 'team-sdlc-pack', 'local', 'jev.json')) ? JSON.parse(read(join(tw, 'team-sdlc-pack', 'local', 'jev.json'))) : {};
+  const enabled = localJev.enabled ?? jevCfg.enabled;
+  const keyFile = localJev.apiKeyFile ?? jevCfg.apiKeyFile;
+  const fromEnv = Boolean(process.env[jevCfg.apiKeyEnv]);
+  const fromFile = Boolean(keyFile && existsSync(keyFile) && read(keyFile).trim());
+  check('jev', true, !enabled ? 'disabled (code rules only)' : fromEnv || fromFile
+    ? `key from ${fromEnv ? `env ${jevCfg.apiKeyEnv}` : `file ${keyFile}`}` : 'no key: decide falls back to code rules');
+} catch (error) { check('jev', true, `config unreadable: ${error.message}`); }
 
 // Helper khởi động được: initialize + tools/list rồi tắt.
 const helper = await new Promise(resolveHelper => {

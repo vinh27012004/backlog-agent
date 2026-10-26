@@ -143,6 +143,7 @@ node .\scripts\check-distribution.mjs --team-workspace "D:\mtm\<TEAM_ID>"
 | 3 skill bắt buộc có trong `.agents/skills/` | `SKILL_MISSING` |
 | `install-manifest.json` khớp file trên đĩa | `PACK_FILES_CHANGED` |
 | TeamWorkspace đã trust trong Codex | `CODEX_WORKSPACE_NOT_TRUSTED` |
+| `codex features`: chọn exe như Player (`CODEX_CLI_PATH` → `codex.exe` trên PATH → Codex Desktop mới nhất) hoặc `--codex <exe>`, chạy `features list` trong TeamWorkspace: `computer_use`, `browser_use`, `in_app_browser`, `plugins`, `apps` tắt, `multi_agent` bật | `codex features` (ghi rõ exe, version và feature còn bật) |
 | Helper khởi động được: chạy `runtime-server.mjs`, gửi `initialize` + `tools/list`, nhận đủ 19 tool, rồi tắt | `MCP_HELPER_BROKEN` |
 
 Kết quả: `{"status":"READY"|"NOT_READY","checks":[{"id","ok","detail"}]}`; exit 0 chỉ khi `READY`.
@@ -170,7 +171,7 @@ Trên máy dev, chạy thêm kiểm tra bằng chính code của Player: test
 | Thứ | Kiểm | Ghi chú |
 |---|---|---|
 | Windows + PowerShell 7 | `pwsh --version` | Player cần pwsh 7 để bọc Job Object |
-| Codex CLI đã đăng nhập tài khoản thi | `codex --version`, `codex login status` | Bản Player tìm được hiện ở trang Init |
+| Codex đã đăng nhập tài khoản thi | `<exe> --version`, `<exe> login status` với **đúng exe trang Init hiển thị** | Player không dùng shim npm trên PATH; trên máy cài CLI qua npm, Player chạy `codex.exe` của Codex Desktop trong `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\` ([02 §2](02-hop-dong-player.md#2-player-chạy-codex-thế-nào)). Muốn ghim một bản: nhập đường dẫn tuyệt đối ở trang Init hoặc đặt `CODEX_CLI_PATH` |
 | Node.js ≥ 20 (khuyên 24.12) trên PATH | `node --version` | Cho installer và helper. Player có `node.exe` riêng trong thư mục của nó |
 | Git + Git Credential Manager, đã đăng nhập tài khoản GitHub có quyền vào repo của đội | `git ls-remote <repo>` không hỏi mật khẩu | Lúc thi helper chặn mọi prompt tương tác |
 | Toolchain phổ biến (stack chưa biết trước): JDK 17/21, Maven, Gradle, Python 3.11+, .NET SDK 8, Go, PHP + Composer | `java -version`… | Cài sẵn để khỏi tải lúc thi |
@@ -231,6 +232,11 @@ Không cài lại pack vào workspace đang có trận chạy.
 - [ ] `git ls-remote` tới repo đội chạy được, không hỏi mật khẩu.
 - [ ] Codex đăng nhập đúng tài khoản, còn hạn mức; có sẵn tài khoản dự phòng (đổi không bị phạt, Q&A #13).
 - [ ] TeamWorkspace đã trust; checker `READY`.
+- [ ] **Trước mỗi trận**, kiểm `[features]` bằng đúng file exe mà trang Init của Player hiển thị (Codex Desktop có thể
+      đã tự cập nhật): `node team-sdlc-pack\runtime\scripts\check-distribution.mjs --team-workspace <TW> --codex "<exe ở trang Init>"`.
+      Mục `codex features` phải `ok`: `computer_use`, `browser_use`, `in_app_browser`, `plugins`, `apps` = false và
+      `multi_agent` = true. Không truyền `--codex` thì checker tự chọn exe theo đúng thứ tự của Player. Tay:
+      chạy `<exe> features list` với thư mục hiện tại là TeamWorkspace.
 - [ ] `matches/<matchId>` trống (Init sẽ hỏi xoá).
 - [ ] Nguồn điện, mạng, chế độ ngủ của máy đã tắt.
 - [ ] Từ lúc Start Match: **không ai chạm máy**. Mỗi lần vào máy −50 điểm.

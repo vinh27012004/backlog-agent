@@ -9,7 +9,9 @@ tool_timeout_sec = 120
 # Codex chỉ chuyển một số biến môi trường cho MCP stdio; git (GCM), pnpm và npm cần thêm các biến này.
 env_vars = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "PROGRAMFILES", "PROGRAMDATA",
   "ProgramFiles(x86)", "SystemRoot", "SYSTEMROOT", "ComSpec", "PATHEXT", "TEMP", "TMP", "PNPM_HOME",
-  "NODE_USE_ENV_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "JAVA_HOME", "MAVEN_HOME", "GOPATH"]
+  "NODE_USE_ENV_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "JAVA_HOME", "MAVEN_HOME", "GOPATH",
+  # Jev (D9): chỉ helper cầm key; shell của model không thấy vì shell_environment_policy loại *KEY*.
+  "TYPESAFE_API_KEY"]
 
 [shell_environment_policy]
 exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]

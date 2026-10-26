@@ -114,7 +114,7 @@ Gửi qua kênh Q&A. Ghi câu trả lời và ngày bên dưới từng câu, r�
 | Q4 · Tần suất đọc trang | Vừa | Nhịp poll và ngân sách log (R7) |
 | Q6 · Git: branch riêng hay branch được giao | **Cao** | Đổi D6, `commit_and_push`, khoá publish |
 | Q12 · Kết quả chấm trong trận | Thấp | Có thể bỏ qua; Practice sẽ thấy (spectator có cột `Graded`) |
-| Q13 · Gọi Jev | Vừa | Tắt `jev.enabled` nếu không được (R21) |
+| Q13 · Gọi Jev | ~~Vừa~~ Đã chốt | Đội xác nhận hợp lệ (26/10); Jev bật mặc định, vẫn tắt được bằng `team-sdlc-pack/local/jev.json` → `"enabled": false` (R21) |
 | Q14 · Dependency giữa trận | Vừa | Cách worker xử lý item kiểu "Resolve production dependency vulnerabilities" |
 | Q15 · Company Tools qua bearer | **Cao** | Không được gọi từ helper thì phải tìm cách khác để dùng tool, mà việc dùng tool có tính vào chất lượng quy trình |
 

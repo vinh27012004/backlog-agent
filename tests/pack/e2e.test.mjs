@@ -2,9 +2,11 @@
 // repo git cục bộ. Chạy PREPARE → GAME một item → SUBMITTED, rồi đọc log bằng reducer của Player.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { mockTransport } from '../../pack/src/jev.mjs';
 import { fakeGameMaster, hasPlayer, install, makeRemote, McpClient, player, sh, tempDir } from './support.mjs';
 
 const MATCH = 'TEST1234';
@@ -18,7 +20,18 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
   const remote = makeRemote(root, MATCH);
   const repository = { url: remote.url, branch: 'main', folder: MATCH };
   const gm = await fakeGameMaster({ matchId: MATCH, matchUuid: MATCH_UUID, repository, apiKey: API_KEY });
-  const env = { ...process.env, MTM_TEAM_TEST_MODE: '1', GIT_CONFIG_GLOBAL: remote.gitconfig, GIT_CONFIG_NOSYSTEM: '1' };
+  // Jev giả: helper nhận key qua biến môi trường như Codex chuyển bằng env_vars.
+  const JEV_KEY = 'tsk_e2e_secret_0123456789';
+  const jevCalls = [];
+  const jev = createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    jevCalls.push({ auth: req.headers.authorization, body: JSON.parse(body) });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(mockTransport(JSON.parse(body))));
+  });
+  await new Promise(r => jev.listen(0, '127.0.0.1', r));
+  const env = { ...process.env, MTM_TEAM_TEST_MODE: '1', GIT_CONFIG_GLOBAL: remote.gitconfig, GIT_CONFIG_NOSYSTEM: '1', TYPESAFE_API_KEY: JEV_KEY };
 
   const { verifyTeamRuntime } = await player('team-install.mjs');
   const { prepareNativePreparation, prepareNativeGameStart, discoverTeamRuntime } = await player('team-runtime.mjs');
@@ -52,6 +65,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const checkout = await client.call('prepare_checkout');
     assert.match(checkout.revision, /^[a-f0-9]{40}$/);
     writeFileSync(join(packWs, 'local', 'machine.json'), JSON.stringify({ databasePassword: 'db pass' }));
+    writeFileSync(join(packWs, 'local', 'jev.json'), JSON.stringify({ baseUrl: `http://127.0.0.1:${jev.address().port}` }));
     let job = await client.call('setup_environment', { waitSeconds: 45 });
     while (job.state === 'running') job = await client.call('job_status', { jobId: job.jobId, waitSeconds: 45 });
     assert.equal(job.state, 'done', JSON.stringify(job));
@@ -93,6 +107,21 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.deepEqual(work.files, ['challenge/TASK-01-submit.json', 'challenge/TASK-01-submit.schema.json']);
     await client.call('start_work', { backlogItemKey: 'TASK-02', requiredScenarios: 1 });
 
+    // Jev chạy trong helper lúc start_work (triage + route), không tốn lời gọi nào của root; key không lọt ra.
+    assert.equal(work.triage.difficulty, 'easy');           // Jev giả chọn phương án đầu với độ tin 0.9
+    assert.equal(work.triage.modelTier, 'small');
+    assert.match(work.triage.by, /difficulty:jev/);
+    assert.equal(jevCalls[0].auth, `Bearer ${JEV_KEY}`);
+    assert.match(jevCalls[0].body.state, /Greeting says hello world/);
+    assert.ok(work.networkActivity.some(a => a.url.endsWith('/v1/systemone')));
+    assert.doesNotMatch(JSON.stringify(work), new RegExp(JEV_KEY));
+    const callsAfterStart = jevCalls.length;
+    const replayed = await client.call('start_work', { backlogItemKey: 'TASK-01', requiredScenarios: 1 });
+    assert.deepEqual(replayed.triage, work.triage);
+    assert.equal(jevCalls.length, callsAfterStart, 'triage is cached in the journal, Jev is not asked again');
+    const early = await client.call('decide', { point: 'next_action', backlogItemKey: 'TASK-01' });
+    assert.ok(!early.decisions.next_action.allowed.includes('submit'), 'no submit before a passing gate');
+
     // Mỗi item một worktree; chờ job chuẩn bị (.env + install) xong.
     const settle = async j => { while (j.state === 'running') j = await client.call('job_status', { jobId: j.jobId, waitSeconds: 45 }); return j; };
     const wt1 = await client.call('worktree', { action: 'create', backlogItemKey: 'TASK-01' });
@@ -122,6 +151,15 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const verification = await client.call('record_verification', { backlogItemKey: 'TASK-01', gateJobId: gate.jobId,
       scenariosPassed: 1, scenariosFailed: 0, scenariosSkipped: 0 });
     assert.equal(verification.status, 'PASSED');
+    const after = await client.call('decide', { point: 'next_action', backlogItemKey: 'TASK-01' });
+    assert.equal(after.decisions.next_action.value, 'submit');
+    // claims_supported đọc file kết quả của fixer trong .team-work/results/ thay cho root.
+    const resultFile = join(tw, 'matches', MATCH, '.team-work', 'results', 'TASK-01-fixer-1.json');
+    mkdirSync(dirname(resultFile), { recursive: true });
+    writeFileSync(resultFile, JSON.stringify({ status: 'fixed', summary: 'greet returns hello world', tests_added: [], verification: [] }));
+    const claims = await client.call('decide', { point: 'claims_supported', backlogItemKey: 'TASK-01', context: { fixResultFile: resultFile } });
+    assert.equal(typeof claims.decisions.claims_supported.value, 'boolean');
+    await assert.rejects(client.call('decide', { point: 'claims_supported', backlogItemKey: 'TASK-01', context: { fixResultFile: join(tw, 'AGENTS.md') } }), /PATH_NOT_ALLOWED/);
     const integrated = await client.call('worktree', { action: 'integrate', backlogItemKey: 'TASK-01', message: 'return hello world' });
     assert.equal(integrated.baseChanged, false);
     const pushed = await client.call('commit_and_push', { backlogItemKey: 'TASK-01', message: 'return hello world' });
@@ -159,5 +197,6 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
   } finally {
     client.close();
     gm.close();
+    jev.close();
   }
 });

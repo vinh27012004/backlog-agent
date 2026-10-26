@@ -116,6 +116,25 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 
 ## 8. Jev (TypeSafe)
 
+> **Đã dựng (26/10, pack 0.1.0):** `pack/src/jev.mjs`, `pack/src/decisions.mjs`, tool `decide`
+> (`triage`, `route`, `next_action`, `claims_supported`, `root_cause_confirmed`); cấu hình `pack/config/jev.json`
+> (bật mặc định), ghi đè trên máy ở `team-sdlc-pack/local/jev.json`. Key: biến môi trường `TYPESAFE_API_KEY` trong
+> **môi trường của Player** (đặt biến User của Windows rồi khởi động lại Player; Codex chuyển cho helper qua `env_vars`),
+> hoặc file ngoài TeamWorkspace (`apiKeyFile`, trên máy dev là `D:mtmsecrets	ypesafe.key`). Không có key thì
+> `decide` trả `source: "rule"`. Đội xác nhận việc gọi Jev hợp lệ (Q13, 26/10).
+>
+> **Cách dùng (26/10, sau lần gọi thật đầu tiên):** root là LLM nên gọi `decide` thường xuyên chỉ cộng thêm token
+> Codex. Vì vậy `triage` + `route` chạy **trong helper** lúc `start_work` (kết quả gọn trong field `triage`, lưu journal,
+> không hỏi lại khi replay); root chỉ gọi `decide` cho `claims_supported` (thay việc tự đọc fix-result và báo cáo gate)
+> và `root_cause_confirmed` của PI. Lần gọi thật đầu tiên (5 request, `jev-1.14.0`, ~0,6 s, ~1.000 token vào): injection
+> đúng trên 2 đề; `difficulty` thường dưới ngưỡng 0.7 nên rơi về luật; `score` là số thực và được làm tròn. Cần đo thêm
+> (credit Codex bật/tắt Jev, `decisions.ndjson` so với kết quả chấm) trước khi tin hơn.
+>
+> Quan sát của Player 0.9.33: request Jev được khai trong `networkActivity` nên **hiện** ở bảng Network & API của
+> dashboard với origin `https://api.typesafe.ai`. Bước gắn cờ `UNEXPECTED_NETWORK_ORIGIN` chỉ xét event trong progress
+> log (`progress.mjs:670`), còn telemetry của MCP gộp vào sau (`progress.mjs:1104`), nên hiện chưa bị gắn cờ tự động.
+> Khi Player ra bản mới, kiểm lại thứ tự này ([02 §12](02-hop-dong-player.md#12-khi-player-ra-bản-mới)).
+
 Jev là model ra quyết định có kiểu, không sinh văn bản. Đội đã có API key. Các luật sau giữ cho việc dùng
 Jev không tạo ra vi phạm hay làm lộ dữ liệu:
 

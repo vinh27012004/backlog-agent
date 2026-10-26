@@ -64,5 +64,7 @@ test('installed helper answers initialize and tools/list', async () => {
   const checker = spawnSync(process.execPath, [join(tw, 'team-sdlc-pack', 'runtime', 'scripts', 'check-distribution.mjs'), '--team-workspace', tw], { encoding: 'utf8' });
   const report = JSON.parse(checker.stdout);
   const failed = report.checks.filter(c => !c.ok).map(c => c.id);
-  assert.deepEqual(failed.filter(id => !['codex trust', 'machine config'].includes(id)), []);
+  // Workspace tạm chưa trust nên Codex bỏ qua [features] của nó: hai mục codex phụ thuộc máy, không kiểm ở đây.
+  assert.deepEqual(failed.filter(id => !['codex trust', 'codex features', 'machine config'].includes(id)), []);
+  assert.ok(report.checks.some(c => c.id === 'codex features'));
 });
