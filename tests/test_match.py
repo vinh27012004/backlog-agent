@@ -19,9 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from orchestrator.agents import AgentRunner  # noqa: E402
+from orchestrator.agents import AgentResult, AgentRunner  # noqa: E402
 from orchestrator.decisions import Decider  # noqa: E402
-from orchestrator.gamemaster import FakeGameMaster, ManualClock  # noqa: E402
+from fake_gamemaster import FakeGameMaster, ManualClock  # noqa: E402
 from orchestrator.gate import Gate  # noqa: E402
 from orchestrator.jev import JevClient, JevConfig  # noqa: E402
 from orchestrator.match import MatchRunner, RunConfig  # noqa: E402
@@ -48,6 +48,10 @@ def item(name: str) -> dict:
     return json.loads((ITEMS / f"{name}.json").read_text(encoding="utf-8"))
 
 
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
 def jsonl(final: dict, thread: str = "t") -> str:
     events = [{"type": "thread.started", "thread_id": thread},
               {"type": "item.completed", "item": {"id": "f", "type": "agent_message",
@@ -60,7 +64,8 @@ class Harness:
     def __init__(self, tmp: Path, items: list[tuple[str, float, float]], *, mocks: dict[str, str] | None = None,
                  patches: dict[str, dict[str, str]] | None = None, workers: int = 0, poll: float = 30, **cfg):
         self.tmp = tmp
-        self.repo = init_sample_repo(TEMPLATE, tmp / "repo")
+        self.remote = tmp / "remote.git"
+        self.repo = init_sample_repo(TEMPLATE, tmp / "repo", bare_remote=self.remote)
         self.mock_dir = tmp / "mock"
         shutil.copytree(MOCK, self.mock_dir)
         for rel, body in (mocks or {}).items():
@@ -198,6 +203,65 @@ class MatchRunnerTest(unittest.TestCase):
         out = self.h.runner.run()
         self.assertEqual(out["BUG-07"].state, "dropped")
         self.assertEqual(self.h.calls("submit"), [])
+
+    def test_submission_carries_pushed_git_revision(self):
+        self.run_match([("BUG-07", 0, 40)])
+        payload = self.h.gm.items["BUG-07"]["submission"]["payload"]
+        sha = payload["gitRevision"]
+        self.assertEqual(git(self.h.remote, "rev-parse", "mtm/BUG-07"), sha)
+        self.assertEqual(git(self.h.remote, "rev-parse", f"{sha}^"), self.h.runner.workspaces.base)
+        changed = git(self.h.remote, "diff", "--name-only", f"{sha}^", sha).splitlines()
+        self.assertEqual(sorted(changed), sorted(payload["changed_files"]))
+
+    def test_rerun_never_overwrites_a_pushed_branch(self):
+        self.h = Harness(self.tmp, [("BUG-07", 0, 40)])
+        wss = self.h.runner.workspaces
+        path = wss.create("BUG-07")
+        (path / "a.txt").write_text("1", encoding="utf-8")
+        first = wss.commit(path, "BUG-07: 1")
+        self.assertEqual(wss.push(first, "origin", "mtm/BUG-07"), "mtm/BUG-07")
+        self.assertEqual(wss.push(first, "origin", "mtm/BUG-07"), "mtm/BUG-07")     # push lại cùng sha
+        wss.reset(path)
+        (path / "a.txt").write_text("2", encoding="utf-8")
+        second = wss.commit(path, "BUG-07: 2")
+        self.assertEqual(wss.push(second, "origin", "mtm/BUG-07"), f"mtm/BUG-07-{second[:8]}")
+        self.assertEqual(git(self.h.remote, "rev-parse", "mtm/BUG-07"), first)
+
+    def test_push_failure_means_no_submission(self):
+        out = self.run_match([("BUG-07", 0, 40)], push_remote="nowhere")
+        self.assertEqual(out["BUG-07"].state, "failed")
+        self.assertIn("không push được", out["BUG-07"].reason)
+        self.assertEqual(self.h.calls("submit"), [])
+
+    def test_push_branch_must_be_per_item(self):
+        with self.assertRaises(ValueError):
+            RunConfig(push_branch="main")
+
+    def test_item_without_deadline_is_worked_and_submitted(self):
+        out = self.run_match([("TASK-01", 0, None), ("BUG-07", 0, 40)])
+        self.assertEqual({k: o.state for k, o in out.items()}, {"TASK-01": "submitted", "BUG-07": "submitted"})
+        row = self.h.store._read("SELECT items_json FROM match_state WHERE id=1")[0]
+        self.assertIsNone(json.loads(row["items_json"])["TASK-01"]["deadline_min"])
+
+    def test_codex_quota_waits_without_spending_an_attempt(self):
+        self.h = Harness(self.tmp, [("BUG-07", 0, 40), ("TASK-01", 0, 40)])
+        real_run = self.h.agents.run
+        seen = []
+
+        def quota_once(role, it, *a, **kw):
+            seen.append((role, it["id"], self.h.runner.codex_limit))
+            if len(seen) == 1:
+                return AgentResult(0, role, "limited", None, 0.0, ["You've hit your usage limit."], "quota")
+            return real_run(role, it, *a, **kw)
+        self.h.agents.run = quota_once
+        out = self.h.runner.run()
+        first = seen[0][1]
+        self.assertEqual(seen[1], ("fixer", first, "quota"))           # cùng item chạy lại, vẫn đang chờ
+        self.assertEqual({o.state for o in out.values()}, {"submitted"})
+        self.assertEqual(out[first].attempts, 1)
+        self.assertIsNone(self.h.runner.codex_limit)
+        self.assertIsNone(self.h.store._read("SELECT codex_limit FROM match_state WHERE id=1")[0]["codex_limit"])
+        self.assertTrue(any("hết quota" in line for line in self.h.logs))
 
     def test_one_item_crashing_does_not_stop_the_match(self):
         self.h = Harness(self.tmp, [("TASK-01", 0, 40), ("BUG-07", 0, 40)])

@@ -30,7 +30,7 @@ class RoleConfig:
     effort: str
     timeout_sec: int
     codex_bin: str
-    codex_home: Path
+    codex_home: Path | None    # None: không đặt CODEX_HOME, dùng môi trường Codex của máy thi
     add_dirs: list[Path] = field(default_factory=list)
 
     @property
@@ -73,6 +73,6 @@ class AgentsConfig:
             effort=merged.get("effort", "medium"),
             timeout_sec=int(merged.get("timeout_sec", 900)),
             codex_bin=merged.get("codex_bin", "codex"),
-            codex_home=_resolve(merged.get("codex_home", "config/codex-home")),
+            codex_home=_resolve(merged["codex_home"]) if merged.get("codex_home") else None,
             add_dirs=[_resolve(d) for d in merged.get("add_dirs", [])],
         )

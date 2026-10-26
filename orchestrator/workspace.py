@@ -3,6 +3,8 @@
     ws = Workspaces(repo, ROOT / "runs" / "worktrees")
     path = ws.create("BUG-07")        # worktree ở commit gốc (detached), tạo lại nếu đã có
     ws.reset(path)                    # mỗi lần thử bắt đầu từ trạng thái sạch
+    sha = ws.commit(path, "BUG-07: sửa coupon")     # lúc nộp: commit thay đổi của item
+    ws.push(sha, "origin", "mtm/BUG-07")            # gitRevision = sha
     ws.remove(path)
 
 Orchestrator giữ git: agent không commit, không đổi branch (agents/rules/common.md).
@@ -24,13 +26,19 @@ def _git(cwd: Path, *args: str) -> str:
     return res.stdout.strip()
 
 
-def init_sample_repo(template: Path, dest: Path) -> Path:
-    """Chép repo mẫu (samples/repo-template) ra `dest` và tạo git repo có 1 commit, để chạy trận giả."""
+def init_sample_repo(template: Path, dest: Path, *, bare_remote: Path | None = None) -> Path:
+    """Chép repo mẫu (samples/repo-template) ra `dest` và tạo git repo có 1 commit, để chạy trận giả.
+    `bare_remote`: tạo thêm một bare repo làm `origin`, để trận giả push thật như repo GitHub của đội."""
     dest = Path(dest)
     shutil.copytree(template, dest, ignore=shutil.ignore_patterns("__pycache__"))
     for args in (["init", "-q"], ["config", "user.email", "bot@example.com"], ["config", "user.name", "bot"],
                  ["config", "core.autocrlf", "false"], ["add", "-A"], ["commit", "-q", "-m", "base"]):
         _git(dest, *args)
+    if bare_remote is not None:
+        bare_remote = Path(bare_remote).resolve()
+        bare_remote.parent.mkdir(parents=True, exist_ok=True)
+        _git(dest, "init", "-q", "--bare", str(bare_remote))
+        _git(dest, "remote", "add", "origin", str(bare_remote))
     return dest
 
 
@@ -63,6 +71,30 @@ class Workspaces:
     def reset(self, path: Path) -> None:
         _git(path, "reset", "-q", "--hard", self.base)
         _git(path, "clean", "-fdq")
+
+    def commit(self, path: Path, message: str, *, author: tuple[str, str] = ("mtm-bot", "mtm-bot@example.com")) -> str:
+        """Commit mọi thay đổi trong worktree (gồm file mới, trừ file bị ignore), trả về sha.
+        Không có gì để commit thì trả về sha hiện tại."""
+        _git(path, "add", "-A")
+        if _git(path, "status", "--porcelain"):
+            name, email = author
+            _git(path, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--no-verify",
+                 "-m", message)
+        return _git(path, "rev-parse", "HEAD")
+
+    def push(self, sha: str, remote: str, branch: str) -> str:
+        """Push `sha` lên nhánh riêng của item, trả về nhánh đã dùng. Không bao giờ ghi đè: nhánh đã trỏ
+        commit khác (chạy lại sau crash, có thể commit cũ đã được nộp) thì push sang `<branch>-<sha8>`.
+        Push lại cùng sha vẫn an toàn."""
+        try:
+            _git(self.repo, "push", "-q", "--no-verify", remote, f"{sha}:refs/heads/{branch}")
+            return branch
+        except RuntimeError as e:
+            if "rejected" not in str(e):                 # lỗi mạng / quyền: để bên gọi thử lại
+                raise
+        alt = f"{branch}-{sha[:8]}"
+        _git(self.repo, "push", "-q", "--no-verify", remote, f"{sha}:refs/heads/{alt}")
+        return alt
 
     def remove(self, path: Path) -> None:
         with self._lock:

@@ -6,10 +6,12 @@
 # sandbox             → "read-only" | "workspace-write"
 # timeout_sec         → quá giờ thì orchestrator dừng tiến trình codex
 # add_dirs            → thư mục ngoài worktree Codex được ghi (vd. cache Maven ~/.m2)
+# codex_home = ""     → không đặt CODEX_HOME: Codex dùng môi trường chuẩn của BTC (login, MCP tool
+#                       đi kèm source). Muốn dùng cấu hình riêng thì đặt "config/codex-home".
 
 [defaults]
 codex_bin = "codex"
-codex_home = "config/codex-home"
+codex_home = ""
 model = ""
 effort = "medium"
 timeout_sec = 900

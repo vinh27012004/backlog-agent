@@ -183,6 +183,7 @@ def _snapshot(conn: sqlite3.Connection, db: Path, max_attempts: int | None, samp
             "match_id": match.get("match_id") or db.parent.name, "status": match.get("status"),
             "minutes_left": match.get("minutes_left"), "match_updated_at": match.get("updated_at"),
             "generated_at": time.time(), "db": db.as_posix(), "sample": sample, "max_attempts": max_attempts,
+            "codex_limit": match.get("codex_limit"),
         },
         "items": out_items,
         "events": [{"item": iid, **x} for iid, x in recent],

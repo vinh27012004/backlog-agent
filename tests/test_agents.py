@@ -168,6 +168,11 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-s") + 1], "workspace-write")
         self.assertIn("--add-dir", cmd)
         self.assertEqual(cmd[-1], "-")
+        self.assertIn('shell_environment_policy.exclude=["*KEY*", "*TOKEN*", "*SECRET*"]', cmd)
+        self.assertEqual('windows.sandbox="elevated"' in cmd, sys.platform == "win32")
+
+    def test_codex_home_unset_by_default(self):
+        self.assertIsNone(AgentsConfig().role("fixer", "BUG").codex_home)
 
     def test_readonly_roles(self):
         for role in ("reviewer", "pi_hypothesis"):
@@ -247,6 +252,16 @@ class EventsTest(unittest.TestCase):
         feed(st, '{"type":"error","message":"Reconnecting... 2/5"}')
         self.assertEqual(st.trace, [])
 
+    def test_codex_account_limits(self):
+        cases = {"You've hit your usage limit. Upgrade to Pro": "quota",
+                 "Quota exceeded. Check your plan and billing details.": "quota",
+                 "exceeded retry limit, last status: 429 Too Many Requests": "rate_limit",
+                 "stream disconnected before completion": None}
+        for msg, kind in cases.items():
+            st = EventState()
+            feed(st, json.dumps({"type": "turn.failed", "error": {"message": msg}}))
+            self.assertEqual(st.limit, kind, msg)
+
 
 class MockRunTest(unittest.TestCase):
     def test_full_chain_in_mock(self):
@@ -265,6 +280,17 @@ class MockRunTest(unittest.TestCase):
             self.assertEqual({r["role"] for r in rows}, {"fixer", "reviewer"})
             events = store.db.execute("SELECT COUNT(*) FROM agent_events").fetchone()[0]
             self.assertGreater(events, 3)
+
+    def test_quota_error_is_limited_not_failed(self):
+        with tempfile.TemporaryDirectory() as d, Store(Path(d) / "state.db") as store:
+            mock = Path(d) / "mock"
+            (mock / "fixer").mkdir(parents=True)
+            (mock / "fixer" / "BUG-07.jsonl").write_text(
+                '{"type":"thread.started","thread_id":"t"}\n'
+                '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit."}}\n', encoding="utf-8")
+            runner = AgentRunner(store, mode="mock", mock_dir=mock, runs_dir=Path(d) / "runs")
+            res = runner.run("fixer", load_item("BUG-07"), workdir=Path(d))
+            self.assertEqual((res.status, res.limit, res.ok), ("limited", "quota", False))
 
 
 @unittest.skipIf(os.name == "nt", "codex giả viết bằng shell script, chỉ chạy trên Linux/macOS")

@@ -1,7 +1,7 @@
 # Các agent
 
 > **JEV** trong hệ thống này là **Jev của TypeSafe AI** — model ra quyết định có kiểu, không phải agent Codex.
-> Nó nằm ở `orchestrator/jev.py` + `orchestrator/decisions.py` (xem `docs/ARCHITECTURE.md` mục 4.3).
+> Nó nằm ở `orchestrator/jev.py` + `orchestrator/decisions.py` (xem `docs/legacy/ARCHITECTURE.md` mục 4.3).
 > Các agent dưới đây đều chạy bằng Codex.
 
 Mỗi agent là **một lần gọi `codex exec`** với prompt ghép từ các file trong thư mục này.
@@ -74,9 +74,9 @@ python -m orchestrator.cli prompt fixer --item samples/items/BUG-07.json --repo 
 # chạy chế độ mock (phát lại output mẫu, không tốn $)
 python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --mock
 
-# chạy thật (tốn $): cần codex trong PATH và đã login trong CODEX_HOME
-set CODEX_HOME=D:\CODE\backlog-agent\config\codex-home     # Windows
-codex login --with-api-key < key.txt                  # key BTC cấp
+# chạy thật (tốn $): cần codex trong PATH và đã login.
+# Mặc định orchestrator không đặt CODEX_HOME, dùng môi trường Codex chuẩn của máy (login, MCP tool của BTC).
+# Muốn dùng config/codex-home thì đặt codex_home = "config/codex-home" trong config/agents.toml.
 python -m orchestrator.cli agent fixer --item samples/items/BUG-07.json --workdir D:\path\to\repo
 
 # số lần chạy, số lần thành công theo vai trò (token và $ xem trên plugin BTC)
@@ -92,7 +92,8 @@ và một dòng trong `runs/state.db`.
 ## Đã kiểm với codex-cli 0.162.1
 
 - Các cờ dùng: `exec --json --strict-config --ephemeral --skip-git-repo-check -s -C --output-schema -o -c -m --add-dir -`.
-- `config/codex-home/config.toml` qua `--strict-config` (khóa sai sẽ bị báo lỗi).
+- `config/codex-home/config.toml` qua `--strict-config` (khóa sai sẽ bị báo lỗi). Chỉ dùng khi đặt `codex_home`;
+  mặc định orchestrator chỉ thêm `-c shell_environment_policy.exclude=[...]` và (Windows) `-c windows.sandbox="elevated"`.
 - Tắt các tính năng có thể ra mạng hoặc vượt phạm vi: browser_use, computer_use, apps, plugins, image_generation, multi_agent...
 - Chưa chạy được với API thật (môi trường dựng không có key). **Lần chạy thật đầu tiên** cần kiểm:
   1. Schema có được API chấp nhận ở chế độ strict không.

@@ -2,7 +2,7 @@
   "match_id": "practice-1",
   "duration_min": 40,
   "items": [
-    {"at_min": 0, "deadline_min": 40, "file": "../items/TASK-01.json"},
+    {"at_min": 0, "file": "../items/TASK-01.json"},
     {"at_min": 0, "deadline_min": 40, "file": "../items/BUG-07.json"},
     {"at_min": 4, "deadline_min": 30, "file": "../items/CR-02.json"},
     {"at_min": 8, "deadline_min": 18, "file": "../items/PI-03.json"}

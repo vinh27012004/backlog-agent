@@ -57,8 +57,9 @@ def _prompt_kwargs(a) -> dict:
 
 
 def _match(a) -> int:
+    from fake_gamemaster import FakeGameMaster
+
     from .decisions import Decider, mock_transport
-    from .gamemaster import FakeGameMaster
     from .gate import Gate
     from .jev import JevClient
     from .match import MatchRunner, RunConfig
@@ -67,7 +68,8 @@ def _match(a) -> int:
     gm = FakeGameMaster.from_file(a.scenario, speed=a.speed)
     match_id = f"{gm.match_id}-{time.strftime('%Y%m%d-%H%M%S')}"       # mỗi trận một thư mục, một DB
     run_dir = ROOT / "runs" / match_id
-    repo = Path(a.repo) if a.repo else init_sample_repo(ROOT / "samples" / "repo-template", run_dir / "repo")
+    repo = Path(a.repo) if a.repo else init_sample_repo(ROOT / "samples" / "repo-template", run_dir / "repo",
+                                                        bare_remote=run_dir / "remote.git")
     if not a.mock:
         print("Cảnh báo: chạy Codex thật, tốn $ từ ngân sách đội.")
     override = {k: v for k, v in (("workers", a.workers), ("max_attempts", a.max_attempts)) if v is not None}

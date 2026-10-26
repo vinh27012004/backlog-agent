@@ -14,8 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from fake_gamemaster import FakeGameMaster, ManualClock  # noqa: E402
 from orchestrator.gamemaster import (  # noqa: E402
-    FakeGameMaster, GameMasterUnavailable, ItemNotFound, ManualClock, Rejected, safe_submit, with_retry,
+    GameMasterUnavailable, ItemNotFound, Rejected, safe_submit, with_retry,
 )
 from orchestrator.store import Store  # noqa: E402
 
@@ -105,6 +106,22 @@ class FakeGameMasterTest(unittest.TestCase):
         m = gm.get_match()
         self.assertEqual(m.status, "RUNNING")
         self.assertEqual(m.item("BUG-07").minutes_left, 16)
+
+    def test_missing_git_revision_is_flagged(self):
+        self.gm.start_item("BUG-07")
+        res = self.gm.submit("BUG-07", {"gitRevision": ""}, {"mvs": {}})
+        self.assertEqual(res["warnings"], ["thiếu gitRevision (SHA commit đã push)"])
+
+    def test_item_without_deadline_lasts_until_match_end(self):
+        gm = FakeGameMaster({"match_id": "t", "duration_min": 40, "items": [
+            {"at_min": 0, "item": {"id": "TASK-01"}},
+            {"at_min": 30, "deadline_min": 20, "item": {"id": "BUG-07"}}]}, clock=self.clock)
+        self.minutes(32)
+        m = gm.get_match()
+        self.assertEqual((m.item("TASK-01").deadline_min, m.item("TASK-01").minutes_left), (None, 8))
+        self.assertEqual(m.item("BUG-07").minutes_left, 8)          # deadline rơi sau giờ hết trận
+        self.minutes(8)
+        self.assertEqual(gm.get_match().item("TASK-01").status, "CLOSED")
 
     def test_match_ends(self):
         self.minutes(41)

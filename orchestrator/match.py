@@ -6,8 +6,11 @@
 
 Một item: start → route (tier, có reviewer) → [fixer → gate → reviewer → next_action]* → nộp hoặc bỏ.
 - Hàng đợi: PI trước, rồi deadline gần nhất, rồi mức nghiêm trọng, rồi việc dễ.
+- Item không có deadline: minutes_left server trả về là thời gian còn lại của trận.
 - Cùng chữ ký lỗi lần 2 → báo fixer đổi giả thuyết; lần 3 → bỏ item (ARCHITECTURE mục 4.6).
 - PI fail gate → kiểm 2–3 giả thuyết song song bằng pi_hypothesis trước lần thử sau (mục 6).
+- Codex hết quota / rate limit → lần thử không tính, không giao item mới, chờ rồi chạy lại (mục 4.6).
+- Nộp: commit + push bản fix, SHA đưa vào payload làm `gitRevision`; không push được thì không nộp (mục 4.7).
 - Ràng buộc cứng nằm ở đây và trong Decider: không nộp khi gate fail (trừ MVS pass lúc sắp hết giờ),
   PI không review, nộp qua safe_submit.
 """
@@ -43,7 +46,18 @@ class RunConfig:
     regression_min_left: float = 4.0
     pi_hypotheses: int = 2
     submit_retries: int = 5
+    limit_wait_sec: float = 60.0    # Codex hết quota / rate limit: chờ bấy nhiêu giây rồi thử lại
+    push_remote: str = "origin"     # "" = chỉ commit, không push (debug)
+    push_branch: str = "mtm/{item}"
+    push_retries: int = 3
+    git_author_name: str = "mtm-bot"
+    git_author_email: str = "mtm-bot@example.com"
     stop_when_idle: bool = False    # dừng khi mọi item đã thấy đều xong (kịch bản giả, test)
+
+    def __post_init__(self):
+        # mỗi item một nhánh: push lên nhánh chung (vd. main) sẽ lẫn bài các item với nhau
+        if "{item}" not in self.push_branch:
+            raise ValueError(f"push_branch phải chứa {{item}}: {self.push_branch!r}")
 
     @classmethod
     def load(cls, path: Path = RUN_TOML, **override) -> "RunConfig":
@@ -113,6 +127,8 @@ class MatchRunner:
         self.active: dict[str, Future] = {}
         self.outcomes: dict[str, ItemOutcome] = {}
         self.match: MatchState | None = None
+        self.codex_limit: str | None = None          # quota | rate_limit: đang chờ tài khoản Codex
+        self._limited: set[str] = set()              # item đang chờ; còn item chờ thì không giao item mới
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ vòng chính
@@ -126,7 +142,7 @@ class MatchRunner:
                     self.log(f"[match] không hỏi được Game Master: {e}")
                     self.sleep(self.config.poll_sec)
                     continue
-                self.store.set_match(self.match, max_attempts=self.config.max_attempts)
+                self.store.set_match(self.match, max_attempts=self.config.max_attempts, codex_limit=self.codex_limit)
                 if self.match.status == "ENDED":
                     self.log("[match] trận đã kết thúc")
                     break
@@ -187,7 +203,7 @@ class MatchRunner:
     def _dispatch(self, pool: ThreadPoolExecutor | None) -> None:
         while True:
             with self._lock:
-                if not self.queue or len(self.active) >= max(self.config.workers, 1):
+                if not self.queue or len(self.active) >= max(self.config.workers, 1) or self.codex_limit:
                     return
                 item_id = min(self.queue, key=self._priority)
                 self.queue.remove(item_id)
@@ -245,7 +261,9 @@ class MatchRunner:
         prev: dict | None = None
         hypothesis: str | None = None
 
-        for attempt in range(1, self.config.max_attempts + 1):
+        attempt = 0
+        while attempt < self.config.max_attempts:
+            attempt += 1
             left = self._minutes_left(item_id)
             if left <= 0:
                 return self._finish(item_id, "dropped", attempt - 1, "hết hạn")
@@ -253,6 +271,12 @@ class MatchRunner:
             fix = self.agents.run("fixer", item, workdir=ws, attempt=attempt, tier=tier, profile=self.profile,
                                   deadline_min=left, triage=triage, other_items=others or None,
                                   previous_attempt=prev, hypothesis=hypothesis)
+            if fix.status == "limited":                  # lỗi tài khoản Codex, không phải lỗi bản fix
+                self._wait_codex(item_id, itype, fix.limit)
+                self.workspaces.reset(ws)
+                attempt -= 1
+                continue
+            self._release_limit(item_id, recovered=True)
             rep: GateReport | None = None
             review_issues: list[dict] = []
             if fix.ok:
@@ -281,6 +305,9 @@ class MatchRunner:
                 if rev.ok and rev.output.get("verdict") == "request_changes":
                     review_issues = [i for i in rev.output.get("issues", []) if i.get("severity") == "high"]
                     self.log(f"[{item_id}] reviewer yêu cầu sửa: {len(review_issues)} lỗi high")
+                elif rev.status == "limited":
+                    # gate đã pass: nộp không cần review; item sau sẽ gặp lại lỗi ở fixer và chờ ở đó
+                    self.log(f"[{item_id}] reviewer gặp lỗi tài khoản Codex ({rev.limit}), bỏ qua review")
 
             can_retry = attempt < self.config.max_attempts and left >= MIN_RETRY_LEFT
             ready = passed and not (review_issues and can_retry)
@@ -315,6 +342,33 @@ class MatchRunner:
                 hypothesis = self._check_hypotheses(item, ws, fix.output, triage, attempt)
         return self._finish(item_id, "dropped", self.config.max_attempts, "hết số lần thử")
 
+    def _wait_codex(self, item_id: str, itype: str, kind: str | None) -> None:
+        kind = kind or "rate_limit"
+        with self._lock:
+            self._limited.add(item_id)
+            if self.codex_limit != "quota":
+                self.codex_limit = kind
+        self.store.set_codex_limit(self.codex_limit)
+        what = ("Codex hết quota: cần đổi tài khoản Codex (không bị phạt)" if kind == "quota"
+                else "Codex bị rate limit")
+        self.store.set_item(item_id, item_type=itype, state="working", note=what)
+        self.log(f"[{item_id}] {what}; chờ {self.config.limit_wait_sec:g}s rồi chạy lại, không tính lần thử")
+        self.sleep(self.config.limit_wait_sec)
+
+    def _release_limit(self, item_id: str, *, recovered: bool) -> None:
+        """Item thôi chờ Codex (chạy lại được, hoặc bị bỏ trong lúc chờ). Hết item chờ thì giao việc tiếp."""
+        with self._lock:
+            if item_id not in self._limited:
+                return
+            self._limited.discard(item_id)
+            cleared = not self._limited
+            if cleared:
+                self.codex_limit = None
+        if cleared:
+            self.store.set_codex_limit(None)
+        if recovered:
+            self.log(f"[{item_id}] Codex chạy lại được")
+
     def _check_hypotheses(self, item: dict, ws: Path, fix: dict, triage: dict, attempt: int) -> str | None:
         """PI kẹt: lấy giả thuyết từ root_cause + suspects của fixer, kiểm song song (read-only, code gốc)."""
         ideas: list[str] = []
@@ -341,6 +395,10 @@ class MatchRunner:
     def _submit(self, item: dict, fix: dict, rep: GateReport, ws: Path, attempt: int) -> ItemOutcome:
         item_id = item["id"]
         payload, evidence = build_submission(item, fix, rep, ws, self.workspaces.base)
+        try:
+            payload["gitRevision"] = self._publish(item_id, ws, fix)
+        except RuntimeError as e:
+            return self._finish(item_id, "failed", attempt, f"không push được bản fix: {e}")
         out = None
         for _ in range(self.config.submit_retries):
             out = safe_submit(self.gm, self.store, item_id, payload, evidence)
@@ -354,10 +412,32 @@ class MatchRunner:
         state = {"accepted": "submitted", "rejected": "failed"}.get(out.status, "unknown")
         return self._finish(item_id, state, attempt, out.reason or "", out.response)
 
+    def _publish(self, item_id: str, ws: Path, fix: dict) -> str:
+        """Commit bản fix trong worktree rồi push lên nhánh riêng của item; trả về sha làm gitRevision.
+        Push lỗi thì thử lại (cùng sha, an toàn); vẫn lỗi thì ném RuntimeError để không nộp."""
+        summary = " ".join((fix.get("summary") or "").split())[:72]
+        sha = self.workspaces.commit(ws, f"{item_id}: {summary}" if summary else item_id,
+                                     author=(self.config.git_author_name, self.config.git_author_email))
+        if not self.config.push_remote:
+            return sha
+        branch = self.config.push_branch.format(item=item_id)
+        for i in range(self.config.push_retries):
+            try:
+                branch = self.workspaces.push(sha, self.config.push_remote, branch)
+                break
+            except RuntimeError as e:
+                self.log(f"[{item_id}] push lần {i + 1} lỗi: {e}")
+                if i == self.config.push_retries - 1:
+                    raise
+                self.sleep(2 ** i)
+        self.log(f"[{item_id}] đã push {sha[:10]} lên {self.config.push_remote}/{branch}")
+        return sha
+
     def _finish(self, item_id: str, state: str, attempts: int, reason: str,
                 response: dict | None = None) -> ItemOutcome:
         out = ItemOutcome(item_id, state, attempts, reason, response)
         self.outcomes[item_id] = out
+        self._release_limit(item_id, recovered=False)
         itype = item_type(item_id)
         self.store.set_item(item_id, item_type=itype, state=state, attempts=attempts, note=reason or None)
         score = f", điểm tạm {response['provisional_score']}" if response and "provisional_score" in response else ""

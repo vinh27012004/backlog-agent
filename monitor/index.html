@@ -330,6 +330,8 @@ pre.box { margin: 6px 0 0; font-family: var(--f-mono); font-size: 11.5px; line-h
     </div>
   </header>
 
+  <div class="callout crit" id="codex-limit" role="alert" hidden></div>
+
   <section class="kpis" id="kpis" aria-label="Chỉ số tổng"></section>
 
   <section class="panel" aria-label="Luồng xử lý">
@@ -500,7 +502,7 @@ pre.box { margin: 6px 0 0; font-family: var(--f-mono); font-size: 11.5px; line-h
   function leftCell(t) {
     if (t.state === "submitted" || t.state === "dropped" || t.minutes_left == null) return '<span class="left" style="color:var(--ink-3)">—</span>';
     var cls = t.minutes_left < 5 ? " hot" : (t.minutes_left < 10 ? " warm" : "");
-    return '<span class="left' + cls + '" title="Deadline ' + esc(t.deadline_min) + ' phút, theo giờ Game Master">' + mins(t.minutes_left) + "</span>";
+    return '<span class="left' + cls + '" title="' + (t.deadline_min == null ? "Không có deadline: tính tới hết trận" : "Deadline " + esc(t.deadline_min) + " phút") + ', theo giờ Game Master">' + mins(t.minutes_left) + "</span>";
   }
   function renderFilters() {
     $("type-filters").innerHTML = TYPES.map(function (x) {
@@ -654,6 +656,12 @@ pre.box { margin: 6px 0 0; font-family: var(--f-mono); font-size: 11.5px; line-h
     $("sample-badge").hidden = !m.sample;
     $("mstatus").textContent = m.status || "—";
     $("mleft").textContent = m.minutes_left == null ? "—" : mins(m.minutes_left);
+    var lim = $("codex-limit");
+    lim.hidden = !m.codex_limit;
+    lim.className = "callout " + (m.codex_limit === "quota" ? "crit" : "warn");
+    lim.innerHTML = m.codex_limit === "quota"
+      ? "<b>Codex hết quota</b>Vòng run đang tạm dừng, không tính lần thử. Xin vào máy để đổi tài khoản Codex (chỉ đổi tài khoản thì không bị trừ điểm). Đổi xong, vòng run tự chạy tiếp."
+      : "<b>Codex bị rate limit</b>Vòng run đang chờ rồi tự thử lại, không tính lần thử.";
     $("footnote").innerHTML = LIVE ? "Đọc <code>/api/state</code> từ SQLite của trận mỗi " + POLL_MS / 1000 + " giây (chỉ đọc). Deadline theo giờ Game Master, không tính lúc PAUSED."
       : "Dữ liệu mẫu trong <code>monitor/data.js</code>. Xem trận thật: <code>python -m orchestrator.cli monitor</code>.";
     renderKpis(); renderFlow(); renderFilters(); renderTable(flash); renderDetail(); renderStats(); renderLog(fresh);

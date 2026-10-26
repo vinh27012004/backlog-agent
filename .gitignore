@@ -16,3 +16,6 @@ key.txt
 .agents/
 .autohand/
 skills-lock.json
+
+# phần mềm của BTC (88 MB, có .exe, NDA): chỉ giữ cục bộ
+vendor/mtm-player-*/

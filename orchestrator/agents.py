@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -34,10 +35,11 @@ MOCK_DIR = ROOT / "samples" / "mock"
 class AgentResult:
     run_id: int
     role: str
-    status: str                    # ok | failed | timeout | invalid_output
+    status: str                    # ok | failed | timeout | invalid_output | limited
     output: dict | None
     seconds: float
     errors: list[str] = field(default_factory=list)
+    limit: str | None = None       # status "limited": quota (đổi tài khoản) | rate_limit (chờ)
 
     @property
     def ok(self) -> bool:
@@ -58,7 +60,12 @@ def build_command(cfg: RoleConfig, *, workdir: Path, last_msg_path: Path) -> lis
         "--output-schema", str(cfg.schema_path),
         "-o", str(last_msg_path),
         "-c", f'model_reasoning_effort="{cfg.effort}"',
+        # chồng lên config của máy thi, không phụ thuộc CODEX_HOME
+        "-c", 'shell_environment_policy.exclude=["*KEY*", "*TOKEN*", "*SECRET*"]',
     ]
+    if sys.platform == "win32":
+        # thiếu mục này thì codex exec trên Windows chặn mọi lệnh shell
+        cmd += ["-c", 'windows.sandbox="elevated"']
     if cfg.model:
         cmd += ["-m", cfg.model]
     if cfg.sandbox == "workspace-write":
@@ -148,11 +155,14 @@ class AgentRunner:
             run_id, status=status, thread_id=state.thread_id,
             output=output, error="; ".join(state.errors) or None,
         )
-        return AgentResult(run_id, role_name, status, output, round(time.time() - t0, 1), state.errors)
+        return AgentResult(run_id, role_name, status, output, round(time.time() - t0, 1), state.errors,
+                           state.limit if status == "limited" else None)
 
     # ---------------------------------------------------------------- internal
     def _run_live(self, cfg, prompt, workdir, state, run_id, jsonl_path, last_msg_path) -> str:
-        env = {**os.environ, "CODEX_HOME": str(cfg.codex_home)}
+        env = dict(os.environ)
+        if cfg.codex_home:
+            env["CODEX_HOME"] = str(cfg.codex_home)
         cmd = build_command(cfg, workdir=workdir, last_msg_path=last_msg_path)
         with subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -191,8 +201,8 @@ class AgentRunner:
             return "timeout"
         if proc.returncode != 0 or state.turn_failed:
             tail = "".join(stderr_lines[-5:]).strip()
-            state.errors.append(f"codex thoát mã {proc.returncode}" + (f": {tail}" if tail else ""))
-            return "failed"
+            state.note_error(f"codex thoát mã {proc.returncode}" + (f": {tail}" if tail else ""))
+            return "limited" if state.limit else "failed"
         return "ok"
 
     def _replay_mock(self, role_name, item_id, attempt, workdir, state, run_id, jsonl_path) -> str:
@@ -217,4 +227,6 @@ class AgentRunner:
             if res.returncode != 0:
                 state.errors.append(f"không áp được {patch.name}: {res.stderr.strip()}")
                 return "failed"
-        return "failed" if state.turn_failed else "ok"
+        if state.turn_failed:
+            return "limited" if state.limit else "failed"
+        return "ok"
