@@ -83,6 +83,13 @@ không tự `git push`.
 
 ## 5. Danh mục tool
 
+> **Bản đã dựng (pack 0.1.0, 26/10):** `configure_session`, `prepare_checkout`, `setup_environment`, `login_match`,
+> `report_ready`, `refresh_match`, `match_state`, `read_item` (mới), `start_work`, `worktree`, `run_gate` (thêm
+> `tests-guard`, kiểm `submit.json` theo `submit.schema.json`, `baselineFailures`, `allowTestChange`), `record_verification`,
+> `commit_and_push`, `submit_work`, `report_progress`, `wait_for_update`, `job_status`, `detect_profile` (A),
+> `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9).
+> **Chưa dựng:** `condense_log`, `decide` (Jev). Code: `pack/src/tools.mjs`.
+
 Ký hiệu: **R** = chỉ root (cần đã configure); **A** = mọi agent. "Job" = trả `jobId` ngay nếu chưa xong
 trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) hoặc `job_status`.
 
@@ -226,9 +233,10 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
 
 ### 5.11 `record_verification`
 
-- **Input**: `{backlogItemKey, checkerResultFile?, gateJobId}`. Helper đọc file kết quả của
-  `team_quality_checker` (đã validate theo `contracts/checker-result.schema.json`), lấy số kịch bản
-  đã chạy/đạt/trượt/bỏ qua, cộng bộ regression từ gate → ghi `BACKLOG_TESTS` `RUNNING`/`PASSED`/`FAILED`.
+- **Input** (bản đã dựng): `{backlogItemKey, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped}`.
+  Root báo số kịch bản đã thật sự chạy (từ evidence của fixer và tự kiểm). `required` = số kịch bản bắt buộc
+  khai ở `start_work` + 1 (gate). `PASSED` chỉ khi mọi kịch bản bắt buộc pass **và** gate pass; kịch bản chưa chạy
+  không bao giờ được tính là đạt (Practice #1, L4).
 - Root **không** tự ghi `BACKLOG_TESTS` bằng `report_progress`; đây là chỗ duy nhất, để số luôn là số thật.
 
 ### 5.12 `commit_and_push`

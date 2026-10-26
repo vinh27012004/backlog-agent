@@ -114,7 +114,13 @@ Ghi kết quả ngay dưới mỗi spike (ngày, version, kết luận, bằng c
 
 ### Kết quả spike
 
-> *(điền theo thứ tự S1…S11)*
+- **S2 (26/10, một phần):** có phần text của trang `/match/E1OOHQ5U` lúc chuẩn bị, xem
+  [03 §2.4](03-game-master.md#24-kết-quả-spike-s2). Match UUID đọc được từ lúc chuẩn bị. Trang có thêm khối
+  *Company Tools* (MCP server của trận, [03 §9](03-game-master.md#9-company-tools-mcp-server-của-trận)).
+  Còn thiếu: HAR đăng nhập, nguồn dữ liệu của trang, field item và deadline khi backlog đã hiện.
+- **S9 (26/10, một phần, máy dev):** `git ls-remote https://github.com/lqdung863/mtm-bun` chạy được, không
+  hỏi gì (repo public). Chưa thử: push bằng tài khoản của đội, `fetch` tới Game Master từ Node. Máy dev
+  **chưa có PostgreSQL** mà repo của trận đòi (16, cổng 5433); có Node 24.11.1, pnpm 11.5.2, Git 2.52, winget.
 
 ## 8. Quy trình Practice Match
 

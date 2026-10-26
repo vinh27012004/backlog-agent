@@ -1,0 +1,25 @@
+{
+  "name": "team-sdlc-pack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MTM 2026 team runtime pack: MCP helper team_runtime, skills and installer.",
+  "files": [
+    "agents/",
+    "bin/",
+    "config/",
+    "contracts/",
+    "docs/",
+    "install.ps1",
+    "scripts/check-distribution.mjs",
+    "scripts/install.mjs",
+    "skills/",
+    "src/",
+    "README.md",
+    "team-pack-info.json",
+    "team-runtime.json"
+  ],
+  "scripts": {
+    "test": "node --test \"../tests/pack/*.test.mjs\""
+  }
+}

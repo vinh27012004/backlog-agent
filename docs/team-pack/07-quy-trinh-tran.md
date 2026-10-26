@@ -25,7 +25,6 @@ tới **8 phút** thì dừng mọi phần không bắt buộc (test baseline, r
 | 2 | `prepare_checkout` | `ls-remote`; clone `--branch <branch>` vào `checkoutRoot`; kiểm `<matchId>/`; exclude `.team-work/` | `GIT_AUTH`, `REPOSITORY` |
 | 3 | `setup_environment` (job) | Nhận diện stack; cài dependency; build; test baseline (≤ 4 phút) | `ENVIRONMENT`, `BUILD` |
 | 4 | `login_match` (trong lúc job chạy) | Đăng nhập; mở `/match/<matchId>`; kiểm team, repo, branch, folder; tìm Match UUID | `LOGIN`, `REFRESH`, `MATCH_LOGIN` |
-| 4b | (song song, tuỳ chọn, chỉ khi còn ≥ 4 phút) spawn `team_repo_scout` | Scout ghi `.team-work/repo-map.md` | — |
 | 5 | `wait_for_update` tới `JOB_DONE` (hoặc mốc 8 phút) | — | — |
 | 6 | `report_ready` | Kiểm điều kiện; ghi `ENVIRONMENT_READY` | `ENVIRONMENT_READY` |
 | 7 | Kết thúc lượt (một dòng tóm tắt) | — | — |
@@ -69,27 +68,28 @@ Không để lane rảnh khi còn item làm được. Khi không còn item nào:
 
 ## 5. Pipeline một item (BUG / CR / TASK)
 
+Cập nhật 26/10 sau Practice #1 (D10 mới, [06 §2](06-agents-va-skills.md#2-agent-profiles)). Bản chi tiết cho root
+nằm trong skill `team-orchestrator`.
+
 ```
-start_work ─► spawn team_repo_scout (item-analysis, ≤ 2') ∥ worktree create
-     │                                   │ RESULT_FILE (scout-result: criteria, evidencePlan)
-     │                                   ▼
-     │                        spawn team_feature_worker (brief + evidence plan)
-     ▲                                   │ RESULT_FILE (worker-result)
-     │                                   ▼
+start_work ─► company_call (test data, chuẩn công ty…) ─► worktree create (.env + test DB riêng, cài dependency)
+     ▲                                   │
+     │                        spawn team_fixer (brief có thẻ: <item> <triage> <project_profile> <company_facts>
+     │                                   │                  <worktree> <materials> <previous_attempt>)
+     │                                   ▼ fix-result (results/<ID>-fixer-<n>.json)
      │                  status cannot_fix? ── có ─► retry (brief mới) hoặc bỏ
      │                                   │ không
      │                                   ▼
-     │                        run_gate(where=worktree)
-     │                         fail │            │ pass
-     │◄──── retry (failKind) ───────┘            ▼
-     │                         CR/BUG: spawn team_quality_checker (MVS + kịch bản ngoài MVS)
-     │                         TASK: checker nếu còn thời gian, không thì dùng tiêu chí của worker
-     │                                   │ RESULT_FILE (checker-result)
-     │                                   ▼
-     │                        record_verification → BACKLOG_TESTS PASSED/FAILED
-     │◄──── retry (mvs_fail / review_high / thiếu evidence) ──┘   │ PASSED + đủ evidencePlan
+     │                        run_gate(where=worktree): diff, file cấm, tests-guard, build, test đã khai,
+     │                         fail │       regression so baseline, submit.json theo schema của item
+     │◄──── retry (failKind) ───────┘            │ pass
      │                                           ▼
-     │                        publish (khoá chung): worktree integrate → [base đổi? run_gate main]
+     │                        BUG/CR/TASK, còn ≥ 6': spawn team_reviewer (<item> <fix_result> <diff>)
+     │◄──── retry (issue high, còn thời gian) ───┘            │ approve
+     │                                                        ▼
+     │                        record_verification → BACKLOG_TESTS (PASSED chỉ khi mọi kịch bản bắt buộc pass)
+     │                                                        ▼
+     │                        publish (một item mỗi lúc): worktree integrate → [base đổi? run_gate main]
      │                        → commit_and_push → submit_work → SUBMITTED → worktree remove
 ```
 
@@ -108,13 +108,11 @@ PI ít thông tin, không có MVS, Grader có tiêu chí riêng, và xếp hạn
 **PASSED**. Sai = 0, nên đúng quan trọng hơn nhanh, nhưng mỗi phút đều tính.
 
 1. Có PI mới → `start_work` ngay (vật liệu có thể có gợi ý) → worktree.
-2. Song song, spawn trong cùng lúc:
-   - 1 `team_feature_worker` (model mạnh): tái hiện, tìm nguyên nhân, sửa nhỏ nhất, thêm test tái hiện.
-   - 1–2 `team_repo_scout` (chỉ đọc, giới hạn 4 phút): mỗi scout kiểm một giả thuyết (log, cấu hình, dữ
-     liệu, đường đi code) và ghi `hypotheses` vào file kết quả.
-3. Kết quả scout tới trước thì root chuyển tóm tắt giả thuyết `supported` cho worker (gửi tin vào
-   subagent đang chạy nếu Codex hỗ trợ, nếu không thì dùng cho lượt thử sau).
-4. Gate: build + test tái hiện + regression. Checker chỉ chạy khi còn dư thời gian và PI phức tạp.
+2. Spawn 1 `team_fixer` (model mạnh, skill `backlog-pi`): tái hiện, tìm nguyên nhân, sửa nhỏ nhất, thêm test tái hiện.
+3. Gate đầu tiên fail hoặc fixer kẹt: lấy 2–3 giả thuyết từ `root_cause`/`suspects` của fixer, spawn một
+   `team_pi_hypothesis` cho mỗi giả thuyết (chỉ đọc, song song). Verdict `supported`/`refuted` đi vào brief của
+   lượt fixer kế tiếp dưới thẻ `<hypothesis>` (hoặc `send_message` cho fixer đang chạy).
+4. Gate: build + test tái hiện + regression. PI không qua reviewer.
 5. Publish ngay khi gate pass. PI chiếm khoá publish trước các item khác.
 6. Cần chạy app (`run_app` của profile) để tái hiện: chạy trên cổng riêng, ghi PID, **luôn tắt** sau khi xong.
 

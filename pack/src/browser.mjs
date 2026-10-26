@@ -1,0 +1,296 @@
+// capture_evidence: điều khiển Edge/Chrome headless đã cài sẵn qua Chrome DevTools Protocol (CDP),
+// không cần Playwright hay dependency nào. Chỉ mở URL loopback (app do đội tự chạy); ảnh chỉ lưu vào
+// answers/<ID>/evidence/ trong thư mục trận. Click/gõ phím dùng sự kiện input thật nên React nhận.
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fail, sleep } from './util.mjs';
+
+const MAX_TOTAL_MS = 50_000;
+
+export function findBrowser() {
+  const env = process.env;
+  const candidates = [
+    env.MTM_BROWSER_PATH,
+    env['ProgramFiles(x86)'] && join(env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    env.ProgramFiles && join(env.ProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    env.ProgramFiles && join(env.ProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    '/usr/bin/microsoft-edge', '/usr/bin/google-chrome', '/usr/bin/chromium',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+  ].filter(Boolean);
+  return candidates.find(p => existsSync(p)) ?? null;
+}
+
+const loopback = url => {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  return ['http:', 'https:'].includes(u.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+};
+
+// Ảnh chỉ được ghi vào <TeamWorkspace>/matches/<matchId>/.../answers/<ID>/evidence/<file>.png
+export function evidencePath(teamWorkspace, path) {
+  if (typeof path !== 'string' || !isAbsolute(path)) fail('INVALID_ARGUMENT', 'screenshot path must be absolute');
+  const abs = resolve(path);
+  const rel = relative(join(teamWorkspace, 'matches'), abs);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) fail('PATH_NOT_ALLOWED', 'screenshot must be inside TeamWorkspace/matches');
+  const parts = rel.split(sep);
+  const i = parts.lastIndexOf('evidence');
+  if (i < 2 || parts[i - 2] !== 'answers' || i !== parts.length - 2 || !/\.png$/i.test(abs)) {
+    fail('PATH_NOT_ALLOWED', 'screenshot must be answers/<ID>/evidence/<name>.png');
+  }
+  return abs;
+}
+
+class Cdp {
+  constructor(ws) {
+    this.ws = ws;
+    this.id = 0;
+    this.pending = new Map();
+    this.listeners = [];
+    ws.addEventListener('message', ev => {
+      const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8'));
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve: ok, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message)); else ok(msg.result);
+      } else if (msg.method) {
+        for (const l of this.listeners) l(msg);
+      }
+    });
+  }
+
+  send(method, params = {}, sessionId) {
+    const id = ++this.id;
+    return new Promise((ok, reject) => {
+      this.pending.set(id, { resolve: ok, reject });
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+}
+
+async function launch(browser, userDataDir, viewport) {
+  mkdirSync(userDataDir, { recursive: true });
+  const portFile = join(userDataDir, 'DevToolsActivePort');
+  rmSync(portFile, { force: true });
+  const child = spawn(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${userDataDir}`,
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', '--disable-sync',
+    '--disable-features=msEdgeSidebarV2,EdgeCollections', `--window-size=${viewport.width},${viewport.height}`, 'about:blank'],
+  { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
+  const t0 = Date.now();
+  while (Date.now() - t0 < 15_000) {
+    if (existsSync(portFile)) {
+      const [port, path] = readFileSync(portFile, 'utf8').split(/\r?\n/);
+      if (port && path) return { child, endpoint: `ws://127.0.0.1:${port.trim()}${path.trim()}` };
+    }
+    await sleep(100);
+  }
+  kill(child);
+  fail('BROWSER_START_FAILED', 'browser did not open a DevTools port');
+}
+
+function kill(child) {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  else try { process.kill(-child.pid, 'SIGKILL'); } catch { /* đã chết */ }
+}
+
+// JS chạy trong trang: tìm phần tử theo selector CSS hoặc theo text hiển thị.
+const FIND = `(q) => {
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  if (q.selector) { const all = [...document.querySelectorAll(q.selector)].filter(visible); return all[q.index || 0] || null; }
+  const want = String(q.text).trim().toLowerCase();
+  const pool = [...document.querySelectorAll('button,a,[role=button],[role=option],[role=menuitem],[role=tab],[role=link],label,summary,li,td,th,span,div,p,h1,h2,h3,h4,h5,h6,strong,dt,dd')].filter(visible);
+  const exact = pool.filter(el => (el.innerText || el.textContent || '').trim().toLowerCase() === want);
+  const loose = pool.filter(el => (el.innerText || el.textContent || '').trim().toLowerCase().includes(want));
+  const pick = list => list.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
+  return pick(exact) || pick(loose) || null;
+}`;
+
+export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
+  timeoutMs = 45_000 }) {
+  if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
+  const browser = findBrowser();
+  if (!browser) fail('BROWSER_NOT_FOUND', 'no Edge or Chrome installation found');
+  const vp = { width: Math.min(3840, Math.max(320, viewport.width | 0 || 1366)), height: Math.min(4000, Math.max(240, viewport.height | 0 || 900)) };
+  // Kiểm toàn bộ bước trước khi mở trình duyệt.
+  for (const s of steps) {
+    if (s.action === 'goto' && !loopback(s.url)) fail('URL_NOT_ALLOWED', 'goto only accepts http(s)://localhost or 127.0.0.1');
+    if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
+  }
+  const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
+    ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', browserProfile)
+    : join(tmpdir(), `mtm-browser-${process.pid}-${Date.now()}`);
+  const deadline = Date.now() + Math.min(MAX_TOTAL_MS, timeoutMs);
+  const { child, endpoint } = await launch(browser, profileDir, vp);
+  const log = [];
+  const consoleErrors = [];
+  const shots = [];
+  let ws;
+  try {
+    ws = new WebSocket(endpoint);
+    await new Promise((ok, reject) => { ws.addEventListener('open', ok, { once: true }); ws.addEventListener('error', () => reject(new Error('cdp connect failed')), { once: true }); });
+    const cdp = new Cdp(ws);
+    const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+    const send = (m, p) => cdp.send(m, p, sessionId);
+    cdp.listeners.push(msg => {
+      if (msg.sessionId !== sessionId) return;
+      if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
+        consoleErrors.push(msg.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 300));
+      }
+      if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(String(msg.params.exceptionDetails?.exception?.description ?? msg.params.exceptionDetails?.text ?? '').slice(0, 300));
+    });
+    await send('Page.enable');
+    await send('Runtime.enable');
+    await send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false });
+
+    const evaluate = async (expression, arg) => {
+      const res = await send('Runtime.evaluate', { expression: arg === undefined ? expression : `(${expression})(${JSON.stringify(arg)})`,
+        returnByValue: true, awaitPromise: true });
+      if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description ?? 'evaluate failed');
+      return res.result.value;
+    };
+    const waitReady = async () => {
+      const until = Math.min(deadline, Date.now() + 15_000);
+      while (Date.now() < until) {
+        if (await evaluate('document.readyState').catch(() => null) === 'complete') return;
+        await sleep(100);
+      }
+    };
+    const locate = async (q, waitMs = 5000) => {
+      const until = Math.min(deadline, Date.now() + waitMs);
+      for (;;) {
+        const box = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; el.scrollIntoView({block:'center', inline:'center'});
+          const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName }; }`, q).catch(() => null);
+        if (box) return box;
+        if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', q.selector ?? `text "${q.text}"`);
+        await sleep(150);
+      }
+    };
+    // Click như người dùng: chỉ bấm khi điểm giữa phần tử ổn định và không bị phần tử khác che.
+    // Bị che (vd sidebar đè nội dung) → ELEMENT_OBSCURED, trừ khi force thì click bằng JS.
+    const click = async (q, { timeoutMs = 5000, force = false } = {}) => {
+      const until = Math.min(deadline, Date.now() + timeoutMs);
+      let last = null;
+      for (;;) {
+        const box = await locate(q, Math.max(500, until - Date.now()));
+        await sleep(120);
+        const probe = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; const r = el.getBoundingClientRect();
+          const x = r.left + r.width / 2, y = r.top + r.height / 2; const hit = document.elementFromPoint(x, y);
+          const label = n => n ? (n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + ' "' + (n.innerText || n.getAttribute('aria-label') || '').trim().slice(0, 40) + '"') : 'nothing';
+          return { x, y, covered: !hit || !(el === hit || el.contains(hit)), by: label(hit) }; }`, q).catch(() => null);
+        if (probe && !probe.covered && Math.abs(probe.x - box.x) < 2 && Math.abs(probe.y - box.y) < 2) {
+          for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+            await send('Input.dispatchMouseEvent', { type, x: probe.x, y: probe.y, button: 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
+          }
+          return { obscured: false };
+        }
+        last = probe;
+        if (Date.now() >= until) break;
+      }
+      if (force && last) {
+        // Đủ chuỗi sự kiện con trỏ: Radix và nhiều UI kit kích hoạt ở pointerdown/mousedown, không ở click.
+        await evaluate(`(q) => { const el = (${FIND})(q); const r = el.getBoundingClientRect();
+          const o = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, pointerType: 'mouse', isPrimary: true };
+          el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new MouseEvent('mousedown', o)); el.focus?.();
+          el.dispatchEvent(new PointerEvent('pointerup', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); el.dispatchEvent(new MouseEvent('click', o)); }`, q);
+        return { obscured: true, by: last.by, forced: true };
+      }
+      fail('ELEMENT_OBSCURED', `${q.selector ?? `text "${q.text}"`} is covered by ${last?.by ?? 'another element'} at its centre`);
+    };
+
+    for (const [i, s] of steps.entries()) {
+      if (Date.now() > deadline) fail('CAPTURE_TIMEOUT', `stopped before step ${i + 1}`);
+      const q = { selector: s.selector, text: s.text, index: s.index };
+      switch (s.action) {
+        case 'goto':
+          await send('Page.navigate', { url: s.url });
+          await waitReady();
+          break;
+        case 'click': {
+          const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+          if (r.obscured) log.push({ step: i + 1, action: 'click', obscuredBy: r.by, forced: true });
+          break;
+        }
+        case 'fill': {
+          const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+          if (r.obscured) log.push({ step: i + 1, action: 'fill', obscuredBy: r.by, forced: true });
+          await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
+          await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+          await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+          await send('Input.insertText', { text: String(s.value ?? '') });
+          break;
+        }
+        case 'press': {
+          const key = String(s.key ?? 'Enter');
+          const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, Backspace: 8 };
+          for (const type of ['keyDown', 'keyUp']) {
+            await send('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: codes[key] ?? 0, ...(key === 'Enter' && type === 'keyDown' ? { text: '\r' } : {}) });
+          }
+          break;
+        }
+        case 'select':
+          await locate(q, s.timeoutMs);
+          await evaluate(`(q) => { const el = (${FIND})(q); el.value = q.value; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }`, { ...q, value: s.value });
+          break;
+        case 'waitFor':
+          if (s.selector) { await locate(q, s.timeoutMs ?? 10_000); break; }
+          {
+            const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
+            const want = String(s.text ?? '').toLowerCase();
+            while (!(await evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false))) {
+              if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', `text "${s.text}"`);
+              await sleep(150);
+            }
+          }
+          break;
+        case 'wait':
+          await sleep(Math.min(10_000, Math.max(0, s.ms | 0)));
+          break;
+        case 'assertText': {
+          const found = await evaluate(`(t) => document.body && document.body.innerText.includes(t)`, String(s.text));
+          log.push({ step: i + 1, action: 'assertText', text: s.text, found });
+          if (!found && s.required !== false) fail('ASSERT_FAILED', `text not on page: ${s.text}`);
+          break;
+        }
+        case 'screenshot': {
+          await sleep(Math.min(3000, s.settleMs ?? 400));
+          let params = { format: 'png' };
+          if (s.fullPage) {
+            const m = await send('Page.getLayoutMetrics');
+            const size = m.cssContentSize ?? m.contentSize;
+            params = { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(15000, Math.ceil(size.height)), scale: 1 } };
+          }
+          const { data } = await send('Page.captureScreenshot', params);
+          mkdirSync(dirname(s.path), { recursive: true });
+          writeFileSync(s.path, Buffer.from(data, 'base64'));
+          const bytes = statSync(s.path).size;
+          if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
+          shots.push({ path: s.path, bytes });
+          break;
+        }
+        default:
+          fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
+      }
+      if (s.action !== 'assertText') log.push({ step: i + 1, action: s.action });
+    }
+    const finalUrl = await evaluate('location.href').catch(() => null);
+    const title = await evaluate('document.title').catch(() => null);
+    const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
+    return { screenshots: shots, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log };
+  } finally {
+    try { ws?.close(); } catch { /* bỏ qua */ }
+    kill(child);
+    if (!browserProfile) await removeLater(profileDir);
+  }
+}
+
+// Tiến trình con của Edge còn giữ file vài trăm ms sau khi bị kill: dọn best-effort, không làm hỏng kết quả.
+async function removeLater(dir) {
+  for (let i = 0; i < 10; i++) {
+    try { rmSync(dir, { recursive: true, force: true }); return; } catch { await sleep(300); }
+  }
+}

@@ -69,7 +69,82 @@ một UUID.
 
 ### 2.4 Kết quả Spike S2
 
-> *(điền sau ngày 26/10: request đăng nhập, cookie, nguồn dữ liệu, field, ví dụ đã che secret)*
+**26/10** (trận tự luyện `E1OOHQ5U`, lúc chuẩn bị, backlog còn trống). Nguồn: text trang do đội chép, cộng
+HTML và JS public của `masterthemachine.tech` (đọc không đăng nhập). Chưa thấy response thật khi đã đăng
+nhập, nên tên field bên dưới lấy từ code UI. Khi có dữ liệu thật thì đối chiếu lại.
+
+**Đăng nhập và nguồn dữ liệu** (Next.js trên Vercel; trang `/match/<id>` render phía client, HTML chỉ có
+"Loading match…"):
+
+| Việc | Request | Ghi chú |
+|---|---|---|
+| Đăng nhập | `POST /api/v1/auth/login`, `Content-Type: application/json`, body `{"username","password"}` | Không thấy CSRF token. Phiên giữ bằng cookie (`credentials: "include"`). Response JSON có `user.role` (`ADMIN`/`CUDER`); lỗi có `error.message` |
+| Đọc trận | `GET /api/v1/match/<matchId>` (theo matchId 8 ký tự) | **401** = phiên hết hạn → đăng nhập lại. Lỗi có `error.message` |
+| Delta | `GET <api.feedEndpoint>?afterSequence=<match.currentSequence>` | `items` khác rỗng → đọc lại trận; **409** → đọc lại trận |
+| Đăng xuất | `POST /api/v1/auth/logout` | Helper không gọi |
+| Rematch | `POST /api/v1/match/<matchId>/rematch` | Nút trên trang. Helper **không bao giờ** gọi |
+
+**Field đã thấy trong code UI** (response của `GET /api/v1/match/<id>`):
+- `match`: `status` ∈ `DRAFT`, `READY`, `PREPARING`, `IN_PROGRESS`, `PAUSED`, `FINISHED`, `CANCELLED` (không
+  có `TIME_OVER`), `elapsedSec`, `remainingSec`, `currentSequence`.
+- `api`: `startEndpoint`, `submissionEndpoint`, `feedEndpoint`, `pollActiveMs` (mặc định UI 2000),
+  `pollIdleMs` (10000), `staleAfterMs`.
+- `backlog[]`: `key`, `type`, `title`, `status` (`OPEN`, `CLOSED`…), `points`, `deadlineMinutes` (tính từ lúc
+  hiện), `revealedElapsedSec`, `revisionNo`.
+- Còn có `team`, `repository` (`url`, `branch`, `folder`), `events` (`publishedAt`…).
+
+Hệ quả:
+- Helper không cần parse HTML. Dùng `GET /api/v1/match/<id>` và feed delta. Hai endpoint đều cùng origin với
+  trang, nên vẫn nằm trong phạm vi "tài nguyên cùng origin mà chính trang dùng" (§8).
+- Lấy `startEndpoint`/`submissionEndpoint` từ JSON thay vì tách từ text. Vẫn kiểm path theo regex ở §2.3.
+- Deadline: `deadlineMinutes` + `revealedElapsedSec` so với `match.elapsedSec`, theo đồng hồ trận (không tính
+  lúc `PAUSED`).
+- **`revisionNo`**: UI đánh dấu item khi số này tăng. Như vậy server có khái niệm đề đổi revision, trái với Q10
+  ("đề không bao giờ bị sửa"). Helper ghi lại `revisionNo` và báo root nếu số này tăng, chưa cần quy trình
+  làm lại.
+- Nhịp poll: tôn trọng `pollActiveMs`/`pollIdleMs` nhưng không nhanh hơn nhịp theo ngân sách log (04 §7);
+  dùng feed delta để phần lớn lần poll rẻ.
+
+Đã thấy trên trang, theo thứ tự:
+
+| Khối | Nội dung |
+|---|---|
+| **Application** | Tên app + mô tả + danh sách tính năng (văn bản tự do; ở trận này là webapp Solova) |
+| **Repo** | `URL` (`https://github.com/<owner>/<repo>`), `Branch` (`main`), `Folder` (`E1OOHQ5U/`, có `/` cuối) kèm câu dặn: làm thẳng trong folder đó, không chép source sang chỗ khác |
+| **Backlog** | Trống tới khi item được mở (*"Backlog items appear here after they are revealed"*) |
+| **Event timeline** | Trống tới khi có sự kiện |
+| **Digital Cuder APIs** | `Match ID`, path **tương đối** `Start work` = `/api/v1/matches/<UUID>/backlogs/start`, `Submit` = `/api/v1/matches/<UUID>/submissions`, cùng hai ví dụ `curl` |
+| **Company Tools** | MCP server riêng của trận, xem [§9](#9-company-tools-mcp-server-của-trận) |
+
+Hệ quả cho parser:
+- Match UUID có ngay từ lúc chuẩn bị, dạng text thường trong mục Digital Cuder APIs. URL API là path tương
+  đối: helper ghép với origin của trang rồi kiểm theo `allowedApiOrigins`.
+- So `Folder` với `repository.folder` thì bỏ `/` ở cuối.
+- Ví dụ submit trên trang cho biết `answer` tối thiểu là `{"backlogId","status":"SUBMITTED","changeSummary"}`
+  (template thật đến lúc Start Work, Spike S7).
+
+Repo của trận (`main` @ `1394523e`, commit *"Seed E1OOHQ5U/ from scenario for-player"*):
+
+```
+README.md
+E1OOHQ5U/
+  README.md          trận 40 phút; đề mở ở phút 0, 14, 29; nộp source + answers/<ID>/submit.json + evidence cùng một revision
+  exam-info.json     MTM_EXAM_LOCK, "immutable": true, graderFingerprint → không được sửa (thêm vào file cấm của gate)
+  answers/README.md  mỗi item một thư mục answers/<ID>/ chứa submit.json và evidence
+  env-require/       README, setup.ps1, db-setup.sql, prepare-source.ps1, doctor.ps1, requirements.json
+  src/               app: Next.js 15 + tRPC + Prisma 6 + PostgreSQL, pnpm, vitest (tests/: 4 file, 12 test)
+```
+
+- Source app nằm ở `matchRoot/src`, không phải `matchRoot`: `detect_profile` phải tìm manifest trong thư mục con.
+- `env-require/` là quy trình chuẩn bị BTC đưa kèm, xong khi `doctor.ps1` in `Environment status: READY`
+  (xem [09 §7](09-dong-goi-va-van-hanh.md#7-chuẩn-bị-máy-thi-làm-một-lần-trước-2610)). Phần cần quyền admin
+  (cài PostgreSQL 16 cổng **5433**, chạy `db-setup.sql` bằng superuser) phải làm tay **trước** trận;
+  `setup_environment` chỉ làm phần còn lại: `src/.env`, `prepare-source.ps1` (`pnpm install --frozen-lockfile`
+  + `pnpm run build`), `pnpm prisma migrate deploy`, `pnpm db:seed`, `doctor.ps1`.
+- Test làm rỗng test DB trước mỗi case: mỗi worktree chạy test song song phải có `TEST_DATABASE_URL` riêng
+  (chỉ đổi tên database, vd `.../freelanceos_test_task02`). Gate đặt biến này theo lane.
+- "Bẫy" đã thấy: Prisma in thông báo nâng lên bản major pre-release, không được làm theo; `package.json`
+  ghi `pnpm@11.9.0` còn `setup.ps1` kích hoạt `pnpm@10.12.3`.
 
 ## 3. Start Work
 
@@ -206,3 +281,30 @@ chính trang dùng (sau Spike S2); hai URL API đọc từ trang, trên `allowed
 **Không được:** Admin UI/API, Grader API, route `/api/v1/game-player/*` và Preparation Complete (của
 Player), trang hay dữ liệu của đội khác, đề/template/MVS chưa mở, đoán URL. Không follow redirect sang
 origin lạ. Không gửi bearer tới origin nào khác Game Master.
+
+## 9. Company Tools: MCP server của trận
+
+Có trên trang trận từ 26/10; technical guide 0.5.1 và source Player 0.9.33 **không** nhắc tới.
+
+- URL `https://masterthemachine.tech/api/v1/mcp/<matchId>` (theo **matchId** 8 ký tự, không phải Match UUID).
+  Transport MCP Streamable HTTP (JSON-RPC 2.0, response JSON).
+- Auth `Authorization: Bearer <TEAM_API_KEY>`: **cùng** key với Start Work / Submit.
+- `initialize` và `tools/list` chạy được từ lúc chuẩn bị; tool chỉ trả nội dung sau khi trận bắt đầu; nội
+  dung về một item chỉ có sau khi item hiện trên `/match`. Danh sách tool **đổi theo đề**.
+- *"Information from these systems is authoritative and overrides assumptions. Appropriate use of company
+  systems is part of process quality."* Server ghi lại mọi lần gọi theo đội và trận, nên việc dùng tool này
+  nhiều khả năng được chấm.
+- Lỗi: HTTP 401/403 (key sai, bị thu hồi, thiếu scope, đội không thuộc trận), 404 (Match ID lạ); lỗi nghiệp vụ
+  nằm trong kết quả tool với `isError: true` và `{"error":{"code","message"}}`.
+- Rate limit **120 request/phút mỗi API key**.
+
+Hệ quả cho thiết kế (chưa đưa vào 05):
+- Không khai được `[mcp_servers.company]` kiểu Codex native, vì Codex khởi động trước khi có key: bearer chỉ
+  có trong frame `START_GAME`/`RESUME_GAME`, và Player mới là bên khởi chạy Codex. Hướng chọn: helper làm
+  proxy, gồm `company_tools` (cache `tools/list`) và `company_call(name, arguments)`. Key vẫn chỉ nằm trong
+  helper; kết quả tool là dữ liệu untrusted, được bọc lại như nội dung item.
+- `hostAuthorization.apiOperations` của Player chỉ liệt kê START_WORK và SUBMIT. Cần hỏi BTC xem gọi
+  `/api/v1/mcp/...` bằng bearer có bị Player gắn cờ không (Q15).
+- Skill `item-analysis` phải tra Company Tools trước khi đoán (ví dụ log, ticket, tài liệu nội bộ), và ghi
+  rõ đã dùng tool nào trong `evidencePlan`.
+- Ngân sách gọi tool: 120/phút dùng chung cho mọi lane, nên helper cần token bucket.

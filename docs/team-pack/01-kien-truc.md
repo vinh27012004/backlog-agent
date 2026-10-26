@@ -54,7 +54,7 @@ thay cho người.
                        │     ├─ git clone / commit / push (chỉ repo + branch được giao)
                        │     └─ job nền: cài dependency, build, test, gate
                        │
-                       └─ subagent native (spawn_agent): team_repo_scout · team_feature_worker · team_quality_checker
+                       └─ subagent native (spawn_agent): team_fixer · team_reviewer · team_pi_hypothesis
                              └─ sửa code trong worktree riêng: checkoutRoot/.team-work/wt/<ID>/
 ```
 
@@ -94,7 +94,7 @@ Chi tiết hợp đồng: [02](02-hop-dong-player.md). Kịch bản chi tiết: 
 | **D7** | `clientSubmissionId` **tất định**: UUID dẫn xuất từ SHA-256 của `matchUuid|backlogId|gitRevision`. `answer` lấy từ `answers/<ID>/submit.json` **đã commit** ở đúng revision đó. Ghi ý định nộp vào journal trước khi POST. | Retry hoặc khởi động lại vẫn gửi cùng key + cùng body → server trả lại biên nhận cũ (`Idempotent-Replay`) | Không bao giờ nộp trùng; không mất biên nhận khi bị kill |
 | **D8** | Progress log do helper sở hữu: kiểm từng event theo bản sao luật của Player trước khi append; chỉ một writer; **ngân sách byte ≤ 230 KB**; polling mặc định 15 s, giãn dần khi log lớn. | Player từ chối log > 256 KB; event sai bị bỏ qua | Root không tự viết JSON log |
 | **D9** | **Giữ Jev (TypeSafe) cho các quyết định nhanh có lựa chọn cố định**, gọi từ **helper** bằng HTTP, không phải từ agent. Mỗi quyết định có luật code dự phòng (lỗi, quá hạn, dưới ngưỡng tin cậy thì dùng luật). Đội đã có API key. Không có nguồn nào của BTC cấm; chưa có xác nhận rõ ràng nên hỏi BTC (Q13) và giữ cờ `jev.enabled` để tắt ngay nếu BTC không đồng ý. | Giữ lợi thế của kiến trúc cũ: quyết định rẻ, nhanh, có xác suất, không tốn credit Codex | Port `jev.py` + `decisions.py` sang `src/jev.mjs`, `src/decisions.mjs`; guardrail ở [08 §8](08-guardrails.md#8-jev-typesafe) |
-| **D10** | Agent profiles: `team_orchestrator` (bắt buộc) + `team_repo_scout`, `team_feature_worker`, `team_quality_checker` (tên theo guide). **Không** ghim model, sandbox, approval trong profile; root chọn model từ `allowedModels` khi spawn. | Guide; Player cấm profile ghi đè quyền | Xem [06](06-agents-va-skills.md) |
+| **D10** | Agent profiles (**đổi 26/10** sau Practice #1): `team_orchestrator` (bắt buộc) + ba agent của đội sinh từ `agents/` bằng `tools/sync-agents.mjs`: `team_fixer`, `team_reviewer`, `team_pi_hypothesis`. Mỗi item một worktree. **Không** ghim model, sandbox, approval trong profile; root chọn model từ `allowedModels` khi spawn. | Guide; Player cấm profile ghi đè quyền | Xem [06](06-agents-va-skills.md) |
 | **D11** | **Helper chạy lại gate** trước mỗi lần commit/nộp: diff, file cấm, build, test đã khai, test toàn bộ (so với baseline lúc chuẩn bị), MVS nếu có lệnh. `BACKLOG_TESTS` chỉ ghi số thật. | Mỗi item nộp 1 lần; không tin lời agent | Port `gate.py` |
 | **D12** | **Giả định bị kill bất cứ lúc nào.** Nguồn sự thật bền: Git (commit, SHA đã push), progress log, server (Start Work replay, Submit idempotency, `ALREADY_SUBMITTED`, trạng thái trên trang), và journal nhỏ `checkoutRoot/.team-work/journal.json`. | T4: pause/end = kill; hết hạn mức Codex cũng dừng | Recovery đọc lại các nguồn này, không dựa vào RAM |
 | **D13** | TeamWorkspace **phải được trust** trong Codex. Installer/checker kiểm tra điều này. | T9: Codex bỏ qua `.codex/config.toml` của thư mục chưa trust | Bước bắt buộc trong checklist máy |

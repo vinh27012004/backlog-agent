@@ -116,6 +116,19 @@ Gửi qua kênh Q&A. Ghi câu trả lời và ngày bên dưới từng câu, r�
 | Q12 · Kết quả chấm trong trận | Thấp | Có thể bỏ qua; Practice sẽ thấy (spectator có cột `Graded`) |
 | Q13 · Gọi Jev | Vừa | Tắt `jev.enabled` nếu không được (R21) |
 | Q14 · Dependency giữa trận | Vừa | Cách worker xử lý item kiểu "Resolve production dependency vulnerabilities" |
+| Q15 · Company Tools qua bearer | **Cao** | Không được gọi từ helper thì phải tìm cách khác để dùng tool, mà việc dùng tool có tính vào chất lượng quy trình |
+
+15. **Q15 · Company Tools** ([03 §9](03-game-master.md#9-company-tools-mcp-server-của-trận)). Helper MCP của đội
+    gọi `https://masterthemachine.tech/api/v1/mcp/<matchId>` bằng bearer của đội (helper làm proxy để key
+    không vào phiên Codex) thì có hợp lệ không? `hostAuthorization.apiOperations` trong descriptor của Player
+    0.9.33 chỉ có START_WORK và SUBMIT: lời gọi này có bị coi là Suspected Violation không, và Player bản sau
+    có thêm operation cho MCP không? Nếu BTC muốn Codex nối thẳng thì key đến bằng cách nào khi Codex đã
+    chạy trước lúc có frame `START_GAME`?
+
+Rủi ro tương ứng: **R23** (M/H): không dùng được Company Tools, hoặc dùng mà bị gắn cờ, làm mất điểm chất lượng
+quy trình hoặc phải đoán thay vì tra. **R24** (M/C): máy thi thiếu PostgreSQL hoặc cấu hình sai thì doctor
+`NOT_READY`, test DB fail, gate không chạy được. Cách giảm: chạy `env-require/` của từng trận trên máy thi
+trước giờ thi, và checklist ngày thi phải có bước `doctor.ps1` READY.
 
 14. **Q14 · Dependency giữa trận** (tiếp Q3). Trong lúc làm item (giữa trận, không phải lúc setup), agent có
     được cài hoặc nâng dependency từ registry công khai không, ví dụ để vá lỗ hổng bảo mật theo yêu cầu của đề?

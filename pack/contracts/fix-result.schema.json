@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fix-result",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "fixed",
+        "partial",
+        "cannot_fix"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "description": "what was changed and why, for the submission"
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "done-conditions you derived from the item (PI: symptoms)"
+    },
+    "suspects": {
+      "type": "array",
+      "description": "code you identified as involved, at most 6",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "file",
+          "reason"
+        ]
+      }
+    },
+    "root_cause": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "BUG/PI: the cause; null for TASK/CR"
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests_added": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "each entry exactly as the {target} of test_one in the project profile, e.g. Java OrderServiceTest#percentCoupon, pytest tests/test_order.py::test_coupon, unittest tests.test_order.OrderTest.test_coupon, jest src/order.test.ts"
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "not_run"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "check",
+          "command",
+          "result",
+          "note"
+        ]
+      }
+    },
+    "needs_dependency": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "groupId:artifactId:version the orchestrator must download"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "criteria",
+    "suspects",
+    "root_cause",
+    "changed_files",
+    "tests_added",
+    "verification",
+    "needs_dependency",
+    "risks",
+    "confidence"
+  ]
+}
