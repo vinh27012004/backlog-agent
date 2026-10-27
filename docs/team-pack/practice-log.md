@@ -91,7 +91,7 @@ không kể guardian (`codex-auto-review` không có trong price card); guardian
 | L15 | Tool chỉ đọc không có `readOnlyHint` nên lần nào cũng qua guardian | 17% token | **Đã** gắn `readOnly` cho `match_state`, `read_item`, `wait_for_update`, `job_status`, `decide` (test kiểm đúng tập này). Còn `capture_evidence` và `worktree status` vẫn qua review. Cấu hình `default_tools_approval_mode = "approve"` (Codex nhận `auto|prompt|writes|approve`) bỏ được hết nhưng là vượt reviewer của Player: chờ BTC trả lời |
 | L16 | Evidence tốn nhiều nhất của fixer | CR-01 kéo 22 phút | **Đã** thêm ngân sách evidence vào skill root và luật chung của fixer: một `capture_evidence` mỗi kịch bản, tối đa 2 lần thử lại rồi `NOT_RUN`, tối đa một phần ba thời gian item; script riêng chỉ khi tool không làm được, đặt ở `.team-work/scratch/<ID>/`. Fixer không gửi tin nhắn tiến độ |
 | L17 | Jev `claims_supported` trả "không" ~0,9 cho cả item đã pass gate và được approve (gửi cả fix-result, Jev thấy ảnh chụp/MVS không có trong gate) | 7 lượt root vô ích, root bỏ qua kết quả | **Đã** sửa: chỉ gửi kết quả build/typecheck/test (`gateComparableClaims`) + `tests_added` + check gate kèm `counts`; không có gì để so thì luật code, không gọi Jev. Skill: gọi một lần mỗi gate job. **27/10: bỏ hẳn** `claims_supported` (gate tự chạy build/typecheck/`tests_added`/regression nên kết quả gate là đáp án) |
-| L18 | Item không có giới hạn thời gian mỗi lượt fixer, không có bước bỏ item rõ ràng | Item khó chạy tới deadline | **Một phần** (27/10): gate trả `signature` + `repeat`; cùng lỗi lần 3 thì `hint` bảo bỏ item và `decide next_action` không còn `retry`; skill root có bước 9 bỏ item (`BACKLOG_STATUS FAILED`, helper ghi `endedAt`). Giới hạn thời gian mỗi lượt fixer vẫn chưa có |
+| L18 | Item không có giới hạn thời gian mỗi lượt fixer, không có bước bỏ item rõ ràng | Item khó chạy tới deadline | **Một phần** (27/10): gate trả `signature` + `repeat`; cùng lỗi lần 3 thì `hint` bảo bỏ item và `decide next_action` không còn `retry`; skill root có bước 9 bỏ item (`BACKLOG_STATUS FAILED`, helper ghi `endedAt`). Giới hạn thời gian mỗi lượt fixer: xem L24 |
 | L19 | BUG-01 nộp `status: PARTIAL` dù 3/3 kịch bản PASS | Có thể mất điểm | **Đã** sửa (27/10): check `answer` cảnh báo khi mọi kịch bản PASS mà `PARTIAL`, chặn `DONE` khi có kịch bản không PASS và chặn `PASS` thiếu evidence mà MVS ghi; `record_verification` đếm từ `testResults` |
 | L20 | Jev: `difficulty` lần nào cũng dưới ngưỡng 0,7; `injection` TASK-01 = true ở 0,55 (ngưỡng 0,5), nhiều khả năng báo nhầm | Phần lớn triage rơi về luật code | **Một phần** (27/10): `decisions.ndjson` ghi thêm `rule` và câu trả lời thô `jev` (cả khi dưới ngưỡng) để chỉnh ngưỡng hoặc tắt điểm này sau trận tập tới; câu hỏi và ngưỡng chưa đổi |
 | L21 | Reviewer xếp `high` cho việc đòi thêm test signed-out và ảnh "before" ở CR-01 (300 điểm), ngoài MVS | Thêm một lượt fixer, hết hạn mức trước khi nộp | **Đã** sửa (27/10): reviewer chấm theo checklist R1–R9; `high` chỉ khi phá một kịch bản MVS/tiêu chí cụ thể hoặc vi phạm R2/R6/R7/R8, đòi thêm test/evidence ngoài MVS tối đa `medium`; mọi issue phải có vị trí |
@@ -106,3 +106,61 @@ dashboard đứng ở "Waiting for data"; Resume báo `MATCH_STATUS_UNAVAILABLE`
 0.9.35, ký `matchStatus` bằng Team API Key ([02 §12](02-hop-dong-player.md#12-khi-player-ra-bản-mới)).
 Chẩn đoán lần sau: đọc `%LOCALAPPDATA%\MTM Player\applications\<id>\diagnostics.ndjson` (chỉ để debug sau trận,
 không phải việc của đội trong trận).
+
+## #4 · 27/10/2026 · tự luyện `CV8WV1JM` (Player 0.9.35, dừng tay sau khi BUG-02 đóng)
+
+`allowedModels` = `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.6-luna`; root `gpt-6-luna` medium. 15,4M input (fixer 64%,
+root 21%, guardian 15%), ≈ 47,8 credit. Hạn mức Codex gói free hết lúc 06:25:22Z, sau đó 252 lượt lỗi và Player
+restart hơn 240 lần.
+
+| Item | Kết quả | Ghi chú |
+|---|---|---|
+| BUG-02 (150 điểm, deadline 18 phút) | CLOSED, không nộp | Fixer `gpt-5.6-terra` high sửa đúng trong 2 phút (test hồi quy fail trước/pass sau; report: VND 12345 minor, USD 12345 minor). 9 phút sau đó cho evidence: build 2 lần, `EADDRINUSE`, `capture_evidence` `ELEMENT_NOT_FOUND`/`ELEMENT_OBSCURED`, TC-02 (Payments, Select của Radix) 2 lần không xong. Chết vì hết hạn mức lúc đang ghi `submit.json`; gate chưa chạy |
+| BUG-01 | Chưa nộp | Lần 1 `gpt-6-luna` medium: gate regression (test cascade hoá đơn); lần 2 `gpt-5.6-terra` high bị cắt vì hết hạn mức |
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L23 | Root spawn fixer với `fork_turns: "all"` (skill không nói gì) | Mỗi fixer bắt đầu ở ~56–60K token và đọc lại ở mọi lượt; BUG-02 51 lượt, 4,9M input | **Đã** sửa skill root: luôn `fork_turns: "none"`, brief chứa đủ; `next` của `start_work` nhắc lại |
+| L24 | Fixer không biết giờ phải trả kết quả; root không canh deadline trong lúc chờ | BUG-02 sửa xong ở phút 3 nhưng không nộp được | **Đã** sửa (L18 xong phần giới hạn mỗi lượt fixer): `start_work` trả `timeBox.returnBy` (đóng − 5 phút), `match_state` lặp lại theo item; brief có `return_by`; fixer xem giờ trước mỗi kịch bản, quá hạn thì `NOT_RUN` "time box" rồi trả kết quả; root chờ tới `return_by` + 1 phút thì `send_message` bảo dừng, thêm 2 phút thì `interrupt_agent` và chạy gate trên worktree |
+| L25 | Hết hạn mức Codex (lần 2, sau L13) | Dừng cả trận | Chưa sửa: cần tài khoản có hạn mức. L23 giảm token fixer |
+| L26 | `capture_evidence` không bấm được Select của Radix ở màn Payments | TC-02 BUG-02 không có evidence | Chưa sửa: thêm hướng dẫn chọn option (`press`/`select`, mở trigger rồi click `role=option`) vào stack notes hoặc skill |
+
+
+## #5 · 27/10/2026 · tự luyện `BC3JL6ZC` (Player 0.9.35, cùng bộ item)
+
+| Item | Điểm | Ghi chú |
+|---|---|---|
+| BUG-01 | 200/200 | 3 lần fixer |
+| BUG-02 (deadline 18 phút) | 30/150 | Sửa code đúng, gate xanh, nộp `PARTIAL`: TC-01..03 `NOT_RUN` vì không chụp được ảnh, chỉ TC-04 (`pnpm test`) được điểm |
+| CR-01 | 300/300 | |
+| TASK-02 | 250/250 | |
+| TASK-01 | 100/100 | |
+
+Tổng 880/1000. Fixer BUG-02 (`gpt-5.6-terra`) sửa xong khoảng 07:33Z, rồi tốn 5 phút cho 6 lần gọi `capture_evidence`
+mà không lần nào xong, sau đó trả kết quả theo time box. Transcript: `~/.codex/sessions/2026/10/27/rollout-…-01a17c42-7050-…`.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L27 | Fixer viết selector Playwright (`[role=tab]:has-text('Invoices')`, `button:has-text('New invoice') >> nth=0`); `querySelectorAll` ném lỗi, tool nuốt lỗi và chờ hết giờ | 2 lần gọi báo `ELEMENT_NOT_FOUND`, fixer không biết vì sao | **Đã** sửa: chặn trước khi mở trình duyệt bằng `INVALID_SELECTOR` kèm cách viết đúng; CSS sai báo ngay; `selector` + `text` dùng chung được (`{selector:"[role=tab]", text:"Invoices"}`), `index` chọn phần tử thứ n |
+| L28 | `browserProfile` không giữ đăng nhập: Edge bị `taskkill /F` trước khi ghi cookie ra profile | Lần gọi bỏ bước login bị đẩy về `/login`, báo không thấy "Invoices" | **Đã** sửa: `Browser.close` qua CDP, chờ tiến trình thoát rồi mới kill. Test `browserProfile keeps the login cookie` |
+| L29 | Sidebar của BUG-01 (lỗi có sẵn trong base) che tab Accounting ở worktree BUG-02; `force:true` bấm bằng sự kiện JS | `ELEMENT_OBSCURED` rồi `#invCompany` không thấy: dialog không mở | **Đã** sửa: `force` cho lớp che tạm `pointer-events:none` rồi bấm bằng chuột thật (CDP), trả style sau đó; chỉ khi không gỡ được mới dùng sự kiện JS. Skill root ghi rõ item khác cần `force` |
+| L30 | Lỗi một bước chỉ trả mã lỗi, không cho biết trang đang ở đâu | Fixer đoán selector mù qua 6 lần gọi | **Đã** sửa: `error.details` có `failedStep`, `url`, `visibleText`, `candidates` (phần tử bấm được: tag, id, role, aria-label, text) và `stepsDone` |
+| L31 | Agent chỉ mở skill được chỉ đích danh. Fixer nào cũng đọc `backlog-<type>` + `stack-notes/node.md` (brief ghi tên), nhưng fixer BUG-01 bỏ `bug-patterns.md`, không ai đọc `retry-playbook.md`, 4 reviewer không đọc skill nào; prompt `team_pi_hypothesis` không trỏ tới `pi-triage.md` | Retry và review chạy thiếu hướng dẫn mà runtime cũ chèn sẵn vào prompt | **Đã** sửa trong `tools/sync-agents.mjs` (`reads` theo vai): fixer đọc thêm `bug-patterns` (BUG) / `pi-triage` (PI) và `retry-playbook` khi có `<previous_attempt>`; reviewer đọc skill trong brief; pi-hypothesis đọc `pi-triage`. Brief của reviewer/pi-hypothesis có dòng `Skill:`/`Stack notes:`. Test trong `install.test.mjs` |
+| L32 | `retry-playbook.md` nói worktree đã reset, thay đổi lần trước mất; pack không reset worktree | Fixer lần sau có thể làm lại từ đầu thay vì sửa tiếp | **Đã** sửa: bản trong pack nói worktree còn thay đổi của lần trước (`git diff HEAD`) |
+| L33 | Root retry bằng `send_message` vào luồng fixer cũ (5 `spawn_agent` fixer cho 5 item, mọi lần thử lại đều là message) | Thang model `fixer[n]` không có tác dụng: BUG-01 cả 3 lần chạy `gpt-6-luna` medium | **Đã** sửa: skill root bắt buộc mỗi lần thử là một `spawn_agent` mới (`<id>_fix<n>`, `fixer[n-1]`), `send_message` chỉ để bảo dừng; `run_gate` fail trả `next` nhắc đúng việc đó |
+
+L26 (Select của Radix) giờ là click trigger rồi click `{selector:"[role=option]", text}` bằng chuột thật; ghi trong skill
+root. Chưa kiểm trên app Solova thật: cần chạy lại BUG-02 ở trận sau.
+
+Token (`tools/judge/usage.mjs`, 27/10): 42,5M input (96,7% cache), 176K output. Fixer 20,1M (47%; riêng BUG-01 9,5M),
+root 13,9M (33%), guardian 7,4M (17%; `capture_evidence` 44 lượt), reviewer 1,1M. Item đến theo đợt: BUG-01/02 lúc
+07:26Z, CR-01/TASK-02 lúc 07:40Z, TASK-01 lúc 08:00Z; nộp xong cả 5 lúc 08:12Z.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L34 | Test DB của worktree trùng tên giữa các trận (`freelanceos_test_bug01`…). `global-setup.ts` chỉ tạo DB khi chưa có, `migrate deploy` báo "No pending migrations" nên schema cũ (FK CASCADE từ trận trước) còn nguyên. Rất có thể đây cũng là nguyên nhân regression BUG-01 lần 1 ở trận #4 | Gate báo regression sai ở BUG-01 và TASK-01 (`deleting a company with invoices is RESTRICTED`); BUG-01 mất ~8 phút, TASK-01 ~4 phút; fixer sửa constraint DB bằng tay | **Đã** sửa: `TEST_DATABASE_URL` có hậu tố trận ở checkout chính (`_<matchid>`) và trận + item ở worktree/probe (`_<matchid>_<item>`). Luật fixer và skill root: test không liên quan fail dù baseline pass thì nghi môi trường, không sửa schema/constraint bằng tay |
+| L35 | Root không lần nào dùng pragma `yield_time_ms` (0/71 `exec`): `exec` dừng ở 30 s trong khi gate chờ 45 s, nên root gọi `wait` 1 s ×3 rồi 10 s | 46 lượt `wait` = 4,4M, khoảng 1/3 token của root | **Đã** sửa skill: pragma bắt buộc cho mọi `exec` có chờ, `wait` không dưới 60 s; lúc không còn việc thì chờ trong một `exec` duy nhất (vòng `wait_for_update` tới 9 phút) |
+| L36 | Skill root vừa bắt mỗi lần thử phải là một spawn mới, vừa cho `followup_task` khi "gate/reviewer result needs rework"; root gọi `followup_task` 9 lần | 3 lần thử của BUG-01 dồn vào một thread, context lên 146K | **Đã** sửa: Root budget chỉ cho `send_message` để báo dừng; làm lại luôn là spawn mới |
+| L37 | Gate `answer_invalid` (TASK-02: dấu câu dính vào đường dẫn evidence) khiến root chạy lại cả gate dù build/test đã pass | Thêm ~1 phút và một lượt root | **Đã** sửa: `next` báo không cần chạy lại gate; `record_verification` kiểm lại answer khi gate chỉ hỏng answer; `answer_invalid` và gate main không còn đẩy thang model `fixer[n]` |
+| L38 | Sidebar lỗi của BUG-01 che màn hình ở mọi worktree; CR-01 chờ BUG-01 nộp rồi chép tay `layout.tsx`/`topbar.tsx` từ main vào worktree | BUG-02 không có evidence UI; CR-01 25 phút, có rủi ro trộn code của item khác | **Đã** thêm `worktree sync` (đưa worktree chưa commit lên HEAD của main, giữ việc dở; xung đột thì trả về nguyên trạng; dependency đổi thì cài lại). Skill: item sửa giao diện dùng chung được ưu tiên ngay sau item có deadline, publish sớm, rồi sync các worktree khác |
+| L39 | Jev `injection` = true cho BUG-02 ở 0,52 (ngưỡng 0,5), lần thứ hai báo nhầm sau L20; severity/difficulty 0/5 lần đủ ngưỡng; chỉ `model` có ích (TASK-02 `strong` 0,98 trong khi luật chọn `small`, và Jev đúng) | Fixer nhận lệnh bỏ qua phần giống chỉ dẫn trong một đề bình thường | **Đã** nâng ngưỡng `injection` lên 0,7 (regex vẫn là lưới an toàn) |

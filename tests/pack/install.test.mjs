@@ -11,6 +11,20 @@ test('pack agents and skills are in sync with agents/', () => {
   assert.equal(res.status, 0, `run node tools/sync-agents.mjs\n${res.stderr}`);
 });
 
+// Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
+test('every subagent is told which skills and references to read', () => {
+  const prompt = role => readFileSync(join(REPO, 'pack', 'agents', `team-${role}.toml`), 'utf8');
+  const fixer = prompt('fixer');
+  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/retry-playbook.md']) {
+    assert.ok(fixer.includes(f), `fixer prompt names ${f}`);
+  }
+  assert.match(prompt('reviewer'), /read the skill named in the brief/);
+  assert.match(prompt('pi-hypothesis'), /backlog-references\/pi-triage\.md/);
+  const playbook = readFileSync(join(REPO, 'pack', 'skills', 'backlog-references', 'retry-playbook.md'), 'utf8');
+  assert.doesNotMatch(playbook, /previous change is gone/, 'the pack keeps the worktree between attempts');
+  assert.match(readFileSync(join(REPO, 'pack', 'skills', 'team-orchestrator', 'SKILL.md'), 'utf8'), /Every new attempt is a new `spawn_agent`/);
+});
+
 test('installed pack passes Player verifyTeamRuntime', { skip: !hasPlayer }, async () => {
   const tw = join(tempDir('mtm-install-'), 'BUN');
   const result = install(tw);
@@ -55,7 +69,7 @@ test('installed helper answers initialize and tools/list', async () => {
     for (const t of list.result.tools) assert.equal(t.inputSchema.additionalProperties, false, t.name);
     // readOnlyHint = không qua auto_review: đúng các tool chỉ đọc, không thêm tool ghi nào.
     const readOnly = list.result.tools.filter(t => t.annotations.readOnlyHint).map(t => t.name).sort();
-    assert.deepEqual(readOnly, ['app_data', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'read_item', 'wait_for_update']);
+    assert.deepEqual(readOnly, ['app_data', 'code_graph', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'read_item', 'wait_for_update']);
     const bad = await client.request('nope/method');
     assert.equal(bad.error.code, -32601);
     const notConfigured = await client.request('tools/call', { name: 'match_state', arguments: {} });

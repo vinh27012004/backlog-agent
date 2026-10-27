@@ -5,8 +5,8 @@ item type, deadline, severity, difficulty and related items; everything else you
 
 General loop:
 1. Understand the item: write down the done-criteria (PI: the symptoms). Locate the code involved
-   with `codegraph` and the system map first, then read only the methods on that path.
-   Report both in `criteria` and `suspects`.
+   with `code_graph` first (`find` the entry point, then `callers` / `callees` / `impact`; `outline` gives
+   a file's line ranges), then read only the methods on that path. Report both in `criteria` and `suspects`.
 2. Establish a check **before** changing code (a failing test, a reproduction, or a written
    criterion) as the skill describes.
 3. Make the minimal change. Run the narrowest build/test that proves it (single module,
@@ -18,6 +18,14 @@ General loop:
    `supported` ones and do not spend time on the `refuted` ones.
 5. Stop when the skill's done-conditions hold. Do not polish beyond them.
 
+Time box: when `<item_meta>` gives `return_by` (a UTC time), reply by then. The orchestrator still needs
+about 5 minutes after it for the gate and the submission, and an item past its deadline accepts nothing,
+so a late perfect answer scores less than a partial one on time. Do the fix and its test first, then the
+evidence scenarios in MVS order. Check the clock (`[DateTime]::UtcNow.ToString('o')`) before each scenario;
+when `return_by` has passed or the next scenario will not finish before it, stop: mark the remaining
+scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, stop the app you started,
+write the answer file and your result JSON, and reply. Do the same at once when the orchestrator says time is up.
+
 Use the build/test commands from `<project_profile>`; run the narrowest test first (`test_one`),
 then the tests of the modules you touched. In a monorepo, work only in the stack root the item concerns.
 
@@ -28,6 +36,9 @@ The gate also runs those tests on the unfixed code: a new test that passes there
 problem and is reported back. A new test without an assertion, or with one that cannot fail
 (`expect(x).toBe(x)`), fails the gate as `weak_test`. Never rename or drop an existing test: a test that ran
 at baseline and no longer runs fails the gate like a deleted one.
+An existing test that your change cannot affect fails although it passed at baseline: suspect the
+environment (test database, port in use, stale build), not your fix. Never alter a database schema,
+constraint or migration state by hand to make a test pass; report it in `verification` and reply.
 
 Write `summary` for the grader: what was wrong or requested, what you changed (files, behaviour),
 how it was verified. Three to six sentences, no marketing language.

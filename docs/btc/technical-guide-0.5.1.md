@@ -1,12 +1,15 @@
 # MTM Contestant Guide — Build a Team Orchestrator for MTM (v0.5.1)
 
 > Bản text của `orchestrator-technical-guide.html` do BTC phát, bản tiếng Anh, dán lại nguyên văn ngày
-> 25/10/2026. Các khối ví dụ JSON/TOML bị thu gọn trong HTML gốc (vd *"team-runtime.json — complete
-> manifest"*, *"Complete active-game input"*) **không** có ở đây; xem bản HTML hoặc sample pack
+> 25/10/2026. Ngày 28/10 bổ sung các khối ví dụ bị thu gọn trong HTML ở mục 2–3 (profile TOML, cây thư
+> mục, `team-pack-info.json`, input PREPARE/START/RESUME/PAUSE/END, bộ dòng NDJSON mẫu). Bản dán 28/10 bị
+> cắt ở giữa *"Full progress schema"*; phần đã có khớp `vendor/team-orchestrator-pack-0.5.1/contracts/progress-event.schema.json`,
+> nên dùng file đó làm schema đầy đủ. Các khối thu gọn ở mục 5 (`package.json`, `team-runtime.json`,
+> profile orchestrator, `config/codex.toml`, `install.ps1`) vẫn **không** có ở đây; xem sample pack
 > `vendor/team-orchestrator-pack-0.5.1/`.
 >
-> BTC cảnh báo guide có thể cố tình gây nhiễu. Những chỗ guide khác source Player 0.9.33 đã được liệt kê
-> ở [`docs/team-pack/README.md`](../team-pack/README.md#những-chỗ-guide-khác-thực-tế-đã-kiểm-chứng).
+> BTC cảnh báo guide có thể cố tình gây nhiễu. Những chỗ guide khác source Player 0.9.33 (kiểm lại trên
+> 0.9.35) đã được liệt kê ở [`docs/team-pack/README.md`](../team-pack/README.md#những-chỗ-guide-khác-thực-tế-đã-kiểm-chứng).
 
 ---
 
@@ -58,11 +61,84 @@ Without a complete and valid progress log, mtm-player cannot accurately track th
 
 ### Agent declaration structure
 
-The following structure example corresponds to the Developer role in the diagram and uses the file `agents/team_developer.toml`. The value of `name` must match the agent name in the filename (excluding the `.toml` extension). These profile files show declaration structure only; they contain no instructions or implementation source.
+The following structure example corresponds to the Developer role in the diagram and uses the file `agents/team_developer.toml`.
+
+```toml
+# agents/team_developer.toml — structure example
+name = "team_developer"
+description = "Developer agent profile."
+```
+
+The value of `name` must match the agent name in the filename (excluding the `.toml` extension). These profile files show declaration structure only; they contain no instructions or implementation source.
 
 ### Source package and installed workspace folder layout
 
-Checkout root and match root: use the absolute paths supplied by mtm-player. `checkoutRoot` contains the Git checkout and `.git/`. `matchRoot = checkoutRoot/repository.folder` contains the assigned source, public challenge files, answers, and evidence. The repeated match ID in the example is intentional: the outer directory identifies the local checkout, and the inner directory comes from the server repository assignment.
+```
+team-orchestrator-pack-example/
+  package.json
+  team-pack-info.json
+  team-runtime.json
+  logs/MATCH_ID.progress.ndjson # empty file; replace MATCH_ID with the actual matchId
+  README.md
+  install.ps1
+  agents/                      # root + four roles from section 2
+    team-orchestrator.toml
+    team-business-analyst.toml
+    team-developer.toml
+    team-cyber-security.toml
+    team-tester.toml
+  config/codex.toml
+  skills/                      # instruction structure
+    team-orchestrator/SKILL.md
+    game-preparation/SKILL.md
+    team-recovery/SKILL.md
+  bin/runtime-server.mjs       # MCP Helper
+  src/runtime-session.mjs
+  contracts/progress-event.schema.json
+  docs/README.md
+  scripts/install.mjs
+  scripts/check-distribution.mjs
+```
+
+The five agent files show the suggested structure in section 2. Each file contains only a matching name and description. This is an illustrative role structure; mtm-player registration compatibility depends on the installed mtm-player version. MCP Helper and Progress NDJSON are shared runtime components, not agent profiles.
+
+```
+After installation: <teamWorkspace>/
+  matches/
+    <matchId>/             # checkoutRoot: Git checkout, contains .git/
+      <repository.folder>/ # matchRoot: assigned match subtree
+        src/
+        challenge/
+        answers/
+          <backlogId>/
+            submit.json
+            evidence/
+  team-sdlc-pack/runtime/     # immutable payload
+  team-sdlc-pack/logs/        # separate logs for each round/session
+  .mtm/                      # team-runtime.json, team-pack-info.json
+  .codex/agents/             # profile copies
+  .codex/config.toml         # absolute MCP path
+  .agents/skills/            # skill copies
+```
+
+### team-pack-info.json — required file with a fixed structure
+
+MUST create this file at the package root. Keep exactly the four fields shown; do not rename or add fields. schemaVersion remains 1. Set teamId and teamName to the code and name registered on mtm-game-server; teamId is not a UUID. Set version to the package version, matching package.json and team-runtime.json.
+
+```json
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "teamId": "HNKSUPER",
+  "teamName": "HNK Super"
+}
+```
+
+The example is HNKSUPER's identity. Other teams MUST replace it before building. The installer copies the file to team-sdlc-pack/runtime/team-pack-info.json and .mtm/team-pack-info.json in TeamWorkspace. mtm-player reads this identity when loading the team pack; both copies MUST match. See section 5 for character limits and naming rules.
+
+### Checkout root and match root
+
+Use the absolute paths supplied by mtm-player. `checkoutRoot` contains the Git checkout and `.git/`. `matchRoot = checkoutRoot/repository.folder` contains the assigned source, public challenge files, answers, and evidence. The repeated match ID in the example is intentional: the outer directory identifies the local checkout, and the inner directory comes from the server repository assignment.
 
 Clone into checkoutRoot; build, test, and write answers inside matchRoot. A specialist worktree uses its own `worktreeRoot/repository.folder` as matchRoot. Pass both paths to the specialist. The compatibility field `challengeWorkspace` may point to `matches/`; use the explicit roots rather than treating that field as the source folder. Do not edit sibling match folders. Init/reset applies only to the selected match checkout; existing matches remain available. Resume uses the saved paths and preserves completed work.
 
@@ -82,7 +158,7 @@ Use newline-delimited JSON-RPC for MCP over stdin/stdout. Implement initialize, 
 
 ## 3. From spawn to match end
 
-MUST log GAME_MASTER_API REQUESTED immediately before every login, refresh, Start Work, and Submit request; log SUCCEEDED or FAILED immediately after the result, including errors.
+MUST log GAME_MASTER_API REQUESTED immediately before every login, refresh, Start Work, and Submit request; log SUCCEEDED or FAILED immediately after the result, including errors. The sequence names actions and data; the steps below detail inputs and outputs.
 
 1. mtm-player spawns a new Team Orchestrator Agent — INPUT: team T01, match ABCD1234, repo/branch/folder, account, origins, model list
 2. MUST: ORCHESTRATOR_STARTED — OUTPUT log: schemaVersion=1, playerSessionId, type, summary
@@ -114,6 +190,60 @@ MUST: write logs to `<TeamWorkspace>/team-sdlc-pack/logs/<matchId>.progress.ndjs
 
 **1. Receive input and initialize.** The Team Orchestrator Agent receives session, team, match, repository, Git read access, account, password, allowed origins, and model policy. Read workspace AGENTS.md. No team bearer key is available in this step.
 
+Complete preparation input:
+
+```json
+{
+  "schemaVersion": 1,
+  "playerSessionId": "session-example",
+  "teamId": "T01",
+  "teamName": "Example Team",
+  "matchId": "ABCD1234",
+  "type": "PREPARE_GAME",
+  "requestId": "prepare-example",
+  "username": "example-account",
+  "password": "FAKE_PASSWORD_FOR_EXAMPLE",
+  "matchPageUrl": "https://ai-fest-five.vercel.app/match",
+  "allowedMatchOrigins": [
+    "https://ai-fest-five.vercel.app"
+  ],
+  "repository": {
+    "url": "https://github.com/example/repo.git",
+    "branch": "main",
+    "folder": "ABCD1234"
+  },
+  "hostAuthorization": {
+    "schemaVersion": 1,
+    "type": "MTM_PREPARATION_HOST_AUTHORIZATION",
+    "authority": "ORGANIZER_DECLARED_SCOPE",
+    "playerSessionId": "session-example",
+    "matchId": "ABCD1234",
+    "inheritance": "ORCHESTRATOR_TREE",
+    "enforcement": "TEAM_RESPONSIBILITY",
+    "taskPermissions": "INHERIT",
+    "credentialUse": "HOST_GIT_CREDENTIAL_TO_ASSIGNED_REPOSITORY_ONLY",
+    "repository": {
+      "url": "https://github.com/example/repo.git",
+      "branch": "main",
+      "folder": "ABCD1234"
+    },
+    "gitOperations": [
+      "READ_ASSIGNED_REPOSITORY",
+      "CLONE_ASSIGNED_BRANCH",
+      "FETCH_ASSIGNED_BRANCH"
+    ]
+  },
+  "checkoutRoot": "D:/mtm/T01/matches/ABCD1234",
+  "matchRoot": "D:/mtm/T01/matches/ABCD1234/ABCD1234"
+}
+```
+
+First log event — MUST. Write to `<TeamWorkspace>/team-sdlc-pack/logs/<matchId>.progress.ndjson` (example: `D:/mtm/T01/team-sdlc-pack/logs/ABCD1234.progress.ndjson`). Use the exact progressLogFile for the current session when supplied. Append the JSON below plus one newline (UTF-8). Do not overwrite the file. Replace playerSessionId and sample values with real session data.
+
+```json
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_STARTED","summary":"Orchestrator started."}
+```
+
 **2. Source Check Out.** The Team Orchestrator Agent checks host-provided Git access and checks out the assigned repository, branch, and folder under challenge. MUST append PREPARATION_STATUS for GIT_AUTH and REPOSITORY when each check starts and ends; report COMPLETED only after verifying source and revision. Do not push during preparation.
 
 ```json
@@ -132,11 +262,114 @@ MUST: write logs to `<TeamWorkspace>/team-sdlc-pack/logs/<matchId>.progress.ndjs
 
 **5. Open the exact match and verify assignment.** After logging in, visit /match/<matchId> on the same mtm-game-server. For example, matchId ABCD1234 means https://ai-fest-five.vercel.app/match/ABCD1234. Read the match, team, repository/branch/folder, and backlog shown there. Verify them against mtm-player input. During preparation, verify access and assignment only; do not start backlog work. MUST open the page for the exact matchId; the generic /match page does not identify the task. Output is the visible match information and authorized backlog, without requiring a specific internal API response.
 
-**6. Write the readiness log.** MUST log MATCH_LOGIN completed, then append an ENVIRONMENT_READY event to the exact progressLogFile through the team's progress writer/helper. mtm-player polls the log file, validates the event, and handles the required steps with mtm-game-server. The Team Orchestrator Agent does not send this JSON to an mtm-player API or need a parent task to forward it. The CLI final response may repeat the result for the reader; it does not replace the mandatory log. Flow: Team Orchestrator Agent → helper appends ENVIRONMENT_READY → progressLogFile → mtm-player polls and validates → mtm-player handles readiness with mtm-game-server. If the append does not succeed, mtm-player has not received readiness even if the transcript says preparation is complete.
+**6. Write the readiness log.** MUST log MATCH_LOGIN completed, then append an ENVIRONMENT_READY event to the exact progressLogFile through the team's progress writer/helper. mtm-player polls the log file, validates the event, and handles the required steps with mtm-game-server. The Team Orchestrator Agent does not send this JSON to an mtm-player API or need a parent task to forward it. The CLI final response may repeat the result for the reader; it does not replace the mandatory log.
+
+JSON appended to progress.ndjson — MUST; this is the channel to mtm-player:
+
+```json
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ENVIRONMENT_READY","requestId":"prepare-example","repository":{"url":"https://github.com/example/repo.git","branch":"main","folder":"ABCD1234"},"revision":"0123456789abcdef0123456789abcdef01234567","build":"PASS","matchLogin":"PASS"}
+```
+
+Information mtm-player reads and validates from the log:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "ENVIRONMENT_READY",
+  "requestId": "prepare-example",
+  "repository": {
+    "url": "https://github.com/example/repo.git",
+    "branch": "main",
+    "folder": "ABCD1234"
+  },
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "build": "PASS",
+  "matchLogin": "PASS"
+}
+```
+
+How mtm-player handles readiness. Flow: Team Orchestrator Agent → helper appends ENVIRONMENT_READY → progressLogFile → mtm-player polls and validates → mtm-player handles readiness with mtm-game-server. If the append does not succeed, mtm-player has not received readiness even if the transcript says preparation is complete.
 
 **7. Wait for mtm-player to acknowledge preparation.** mtm-player verifies readiness, reports preparation status to mtm-game-server, and waits for the system to accept it. The Team Orchestrator Agent does not perform this operation or write the milestone owned by mtm-player. Begin backlog work only after mtm-player supplies active-game input. There is no separate operator command to start backlogs after preparation completes.
 
 **8. Receive active-game access.** Validate environmentRevision, bearer UTF-8 length and SHA-256, origins, scopes, paths, and hostAuthorization. The helper retains repository and account information from preparation; start does not repeat them.
+
+Complete active-game input; sample key is fake:
+
+```json
+{
+  "schemaVersion": 1,
+  "playerSessionId": "session-example",
+  "teamId": "T01",
+  "teamName": "Example Team",
+  "matchId": "ABCD1234",
+  "type": "START_GAME",
+  "requestId": "start-example",
+  "teamUuid": "22222222-2222-4222-8222-222222222222",
+  "gameMasterApiUrl": "https://ai-fest-five.vercel.app/",
+  "apiKeySecret": "FAKE_TEAM_KEY_FOR_EXAMPLE",
+  "apiKeyLength": 25,
+  "apiKeySha256": "e7d23ff3be50646498fa0736d7d6d1483834f265b620fd566b72cb98a98294c6",
+  "apiKeyScopes": [
+    "backlogs:start",
+    "submissions:create"
+  ],
+  "gameMasterUrl": "https://ai-fest-five.vercel.app/",
+  "matchPageUrl": "https://ai-fest-five.vercel.app/match",
+  "teamInfoRequestId": "team-info-example",
+  "allowedApiOrigins": [
+    "https://ai-fest-five.vercel.app"
+  ],
+  "teamWorkspace": "D:/mtm/T01",
+  "challengeWorkspace": "D:/mtm/T01/matches",
+  "teamSdlcPackWorkspace": "D:/mtm/T01/team-sdlc-pack",
+  "progressLogFile": "D:/mtm/T01/team-sdlc-pack/logs/ABCD1234.progress.ndjson",
+  "environmentRevision": "0123456789abcdef0123456789abcdef01234567",
+  "hostAuthorization": {
+    "schemaVersion": 1,
+    "type": "MTM_HOST_AUTHORIZATION",
+    "authority": "ORGANIZER_DECLARED_SCOPE",
+    "playerSessionId": "session-example",
+    "matchId": "ABCD1234",
+    "inheritance": "ORCHESTRATOR_TREE",
+    "enforcement": "TEAM_RESPONSIBILITY",
+    "taskPermissions": "INHERIT",
+    "credentialUse": "TEAM_BEARER_TO_GAME_MASTER_ONLY",
+    "allowedOrigins": [
+      "https://ai-fest-five.vercel.app"
+    ],
+    "apiScopes": [
+      "backlogs:start",
+      "submissions:create"
+    ],
+    "apiOperations": [
+      {
+        "operation": "START_WORK",
+        "method": "POST",
+        "pathTemplate": "/api/v1/matches/{matchUuid}/backlogs/start"
+      },
+      {
+        "operation": "SUBMIT",
+        "method": "POST",
+        "pathTemplate": "/api/v1/matches/{matchUuid}/submissions"
+      }
+    ],
+    "gitOperations": [
+      "COMMIT_ASSIGNED_REPOSITORY",
+      "PUSH_ASSIGNED_BRANCH"
+    ]
+  },
+  "gitPolicy": {
+    "commitAssignedRepository": true,
+    "pushAssignedRepository": true,
+    "forcePush": false,
+    "mutateRemote": false,
+    "authentication": "ASK_USER"
+  },
+  "checkoutRoot": "D:/mtm/T01/matches/ABCD1234",
+  "matchRoot": "D:/mtm/T01/matches/ABCD1234/ABCD1234"
+}
+```
 
 **9. Synchronize and report the backlog.** Reopen /match/<matchId>; report BACKLOG_SYNC in progress and completed. MUST log DISCOVERED for each new visible item, including unselected work. Do not duplicate an event already emitted by the background helper.
 
@@ -202,6 +435,30 @@ Idempotency-Key: 33333333-3333-4333-8333-333333333333
 
 **16. Pause, end, and stop.** mtm-player sends session, match, and matchStatus. Stop new API, Git, tool, worker, and polling activity and pack-owned processes; preserve source and evidence. Do not log ORCHESTRATOR_ENDED for a pause. At match end, log the event if possible; do not submit further work.
 
+Input pause:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "MATCH_PAUSED",
+  "playerSessionId": "session-example",
+  "matchId": "ABCD1234",
+  "matchStatus": "PAUSED"
+}
+```
+
+End input:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "MATCH_ENDED",
+  "playerSessionId": "session-example",
+  "matchId": "ABCD1234",
+  "matchStatus": "FINISHED"
+}
+```
+
 ```json
 {"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_ENDED","status":"COMPLETED","summary":"The match has ended; all activity has stopped."}
 ```
@@ -209,6 +466,131 @@ Idempotency-Key: 33333333-3333-4333-8333-333333333333
 COMPLETED is a valid status for the ORCHESTRATOR_ENDED log event. The separate final result schema currently accepts only SUBMITTED/BLOCKED/FAILED; do not return COMPLETED in that schema.
 
 **17. Resume the same round when mtm-player requests it.** mtm-player starts a replacement Team Orchestrator Agent with fresh access, repository, paths, restartAttempt, and reason. Read the existing log and reconcile Git and receipts before retrying; MUST log ORCHESTRATOR_RESTARTED. A new init is a new round even if it uses the same public match code.
+
+Complete resume-game input:
+
+```json
+{
+  "schemaVersion": 1,
+  "playerSessionId": "session-example",
+  "teamId": "T01",
+  "teamName": "Example Team",
+  "matchId": "ABCD1234",
+  "type": "RESUME_GAME",
+  "requestId": "restart-session-example-1",
+  "restartAttempt": 1,
+  "reason": "OPERATOR_RESUME",
+  "teamUuid": "22222222-2222-4222-8222-222222222222",
+  "username": "example-account",
+  "password": "FAKE_PASSWORD_FOR_EXAMPLE",
+  "gameMasterUrl": "https://ai-fest-five.vercel.app/",
+  "matchPageUrl": "https://ai-fest-five.vercel.app/match",
+  "allowedMatchOrigins": [
+    "https://ai-fest-five.vercel.app"
+  ],
+  "repository": {
+    "url": "https://github.com/example/repo.git",
+    "branch": "main",
+    "folder": "ABCD1234"
+  },
+  "teamWorkspace": "D:/mtm/T01",
+  "challengeWorkspace": "D:/mtm/T01/matches",
+  "teamSdlcPackWorkspace": "D:/mtm/T01/team-sdlc-pack",
+  "progressLogFile": "D:/mtm/T01/team-sdlc-pack/logs/ABCD1234.progress.ndjson",
+  "environmentRevision": "0123456789abcdef0123456789abcdef01234567",
+  "gameMasterApiUrl": "https://ai-fest-five.vercel.app/",
+  "apiKeySecret": "FAKE_TEAM_KEY_FOR_EXAMPLE",
+  "apiKeyLength": 25,
+  "apiKeySha256": "e7d23ff3be50646498fa0736d7d6d1483834f265b620fd566b72cb98a98294c6",
+  "apiKeyScopes": [
+    "backlogs:start",
+    "submissions:create"
+  ],
+  "teamInfoRequestId": "team-info-example",
+  "allowedApiOrigins": [
+    "https://ai-fest-five.vercel.app"
+  ],
+  "hostAuthorization": {
+    "schemaVersion": 1,
+    "type": "MTM_HOST_AUTHORIZATION",
+    "authority": "ORGANIZER_DECLARED_SCOPE",
+    "playerSessionId": "session-example",
+    "matchId": "ABCD1234",
+    "inheritance": "ORCHESTRATOR_TREE",
+    "enforcement": "TEAM_RESPONSIBILITY",
+    "taskPermissions": "INHERIT",
+    "credentialUse": "TEAM_BEARER_TO_GAME_MASTER_ONLY",
+    "allowedOrigins": [
+      "https://ai-fest-five.vercel.app"
+    ],
+    "apiScopes": [
+      "backlogs:start",
+      "submissions:create"
+    ],
+    "apiOperations": [
+      {
+        "operation": "START_WORK",
+        "method": "POST",
+        "pathTemplate": "/api/v1/matches/{matchUuid}/backlogs/start"
+      },
+      {
+        "operation": "SUBMIT",
+        "method": "POST",
+        "pathTemplate": "/api/v1/matches/{matchUuid}/submissions"
+      }
+    ],
+    "gitOperations": [
+      "COMMIT_ASSIGNED_REPOSITORY",
+      "PUSH_ASSIGNED_BRANCH"
+    ]
+  },
+  "gitPolicy": {
+    "commitAssignedRepository": true,
+    "pushAssignedRepository": true,
+    "forcePush": false,
+    "mutateRemote": false,
+    "authentication": "ASK_USER"
+  },
+  "checkoutRoot": "D:/mtm/T01/matches/ABCD1234",
+  "matchRoot": "D:/mtm/T01/matches/ABCD1234/ABCD1234"
+}
+```
+
+Complete resume-preparation input:
+
+```json
+{
+  "schemaVersion": 1,
+  "playerSessionId": "session-example",
+  "teamId": "T01",
+  "teamName": "Example Team",
+  "matchId": "ABCD1234",
+  "type": "RESUME_PREPARATION",
+  "requestId": "restart-session-example-1",
+  "restartAttempt": 1,
+  "reason": "OPERATOR_RESUME",
+  "teamUuid": "22222222-2222-4222-8222-222222222222",
+  "username": "example-account",
+  "password": "FAKE_PASSWORD_FOR_EXAMPLE",
+  "gameMasterUrl": "https://ai-fest-five.vercel.app/",
+  "matchPageUrl": "https://ai-fest-five.vercel.app/match",
+  "allowedMatchOrigins": [
+    "https://ai-fest-five.vercel.app"
+  ],
+  "repository": {
+    "url": "https://github.com/example/repo.git",
+    "branch": "main",
+    "folder": "ABCD1234"
+  },
+  "teamWorkspace": "D:/mtm/T01",
+  "challengeWorkspace": "D:/mtm/T01/matches",
+  "teamSdlcPackWorkspace": "D:/mtm/T01/team-sdlc-pack",
+  "progressLogFile": "D:/mtm/T01/team-sdlc-pack/logs/ABCD1234.progress.ndjson",
+  "environmentRevision": null,
+  "checkoutRoot": "D:/mtm/T01/matches/ABCD1234",
+  "matchRoot": "D:/mtm/T01/matches/ABCD1234/ABCD1234"
+}
+```
 
 ```json
 {"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_RESTARTED","attempt":1,"phase":"GAME","reason":"OPERATOR_RESUME","summary":"Reconciled state before continuing."}
@@ -230,6 +612,30 @@ Append one UTF-8 JSON object per line to the exact progressLogFile. The envelope
 | Blocked / recover | BLOCKER_OPENED / BLOCKER_RESOLVED | stable blockerId; OPENED also needs backlogId/null and summary. |
 | Replacement Team Orchestrator Agent | ORCHESTRATOR_RESTARTED | attempt, phase PREPARATION/GAME, reason, summary. |
 | Match end or unrecoverable contract failure | ORCHESTRATOR_ENDED | status COMPLETED/BLOCKED/FAILED and summary; do not log merely for pause or wait. |
+
+Complete NDJSON lines for implementation checks:
+
+```json
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_STARTED","summary":"Orchestrator started."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"PREPARATION_STATUS","stage":"BUILD","status":"COMPLETED","summary":"Build passed."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ENVIRONMENT_READY","requestId":"prepare-example","repository":{"url":"https://github.com/example/repo.git","branch":"main","folder":"ABCD1234"},"revision":"0123456789abcdef0123456789abcdef01234567","build":"PASS","matchLogin":"PASS"}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"GAME_START_STATUS","stage":"BACKLOG_SYNC","status":"COMPLETED","summary":"Retrieved the current backlog."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BACKLOG_STATUS","backlogId":"TASK-01","title":"Fix customer search","status":"DISCOVERED","summary":"Work status updated.","revision":null,"receiptId":null}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"GAME_MASTER_API","operation":"START_WORK","backlogId":"TASK-01","method":"POST","origin":"https://ai-fest-five.vercel.app","path":"/api/v1/matches/11111111-1111-4111-8111-111111111111/backlogs/start","phase":"REQUESTED","httpStatus":null,"requestId":null,"summary":"Calling mtm-game-server."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"GAME_MASTER_API","operation":"START_WORK","backlogId":"TASK-01","method":"POST","origin":"https://ai-fest-five.vercel.app","path":"/api/v1/matches/11111111-1111-4111-8111-111111111111/backlogs/start","phase":"SUCCEEDED","httpStatus":200,"requestId":"req-start","summary":"Received the mtm-game-server result."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BACKLOG_STATUS","backlogId":"TASK-01","title":"Fix customer search","status":"IN_PROGRESS","summary":"Work status updated.","revision":null,"receiptId":null}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BACKLOG_TESTS","backlogId":"TASK-01","status":"NOT_RUN","required":2,"executed":0,"passed":0,"failed":0,"skipped":0,"summary":"Tests have not run."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BACKLOG_TESTS","backlogId":"TASK-01","status":"PASSED","required":2,"executed":2,"passed":2,"failed":0,"skipped":0,"summary":"Both required tests passed."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"GAME_MASTER_API","operation":"SUBMIT","backlogId":"TASK-01","method":"POST","origin":"https://ai-fest-five.vercel.app","path":"/api/v1/matches/11111111-1111-4111-8111-111111111111/submissions","phase":"REQUESTED","httpStatus":null,"requestId":null,"summary":"Calling mtm-game-server."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"GAME_MASTER_API","operation":"SUBMIT","backlogId":"TASK-01","method":"POST","origin":"https://ai-fest-five.vercel.app","path":"/api/v1/matches/11111111-1111-4111-8111-111111111111/submissions","phase":"SUCCEEDED","httpStatus":200,"requestId":"req-submit","summary":"Received the mtm-game-server result."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BACKLOG_STATUS","backlogId":"TASK-01","title":"Fix customer search","status":"SUBMITTED","summary":"Work status updated.","revision":"0123456789abcdef0123456789abcdef01234567","receiptId":"receipt-123"}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BLOCKER_OPENED","blockerId":"GIT_AUTHENTICATION_REQUIRED","backlogId":"TASK-01","summary":"Operator action is required for Git authentication."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"BLOCKER_RESOLVED","blockerId":"GIT_AUTHENTICATION_REQUIRED","summary":"Git access confirmed."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_RESTARTED","attempt":1,"phase":"GAME","reason":"OPERATOR_RESUME","summary":"Reconciled state before continuing."}
+{"schemaVersion":1,"playerSessionId":"session-example","type":"ORCHESTRATOR_ENDED","status":"COMPLETED","summary":"The match has ended; all activity has stopped."}
+```
+
+Full progress schema — usable as the file content: *(bản dán 28/10 bị cắt ở giữa nhánh `ENVIRONMENT_READY`; đoạn đã có khớp từng dòng với `vendor/team-orchestrator-pack-0.5.1/contracts/progress-event.schema.json`, xem file đó.)*
 
 Do not duplicate events written by the helper. DISCOVERED must not reset IN_PROGRESS or SUBMITTED. If append fails, keep a bounded queue and retry in order; report PROGRESS_LOG_UNAVAILABLE if recovery fails.
 

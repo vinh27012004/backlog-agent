@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fail, sleep } from './util.mjs';
+import { fail, HelperError, sleep } from './util.mjs';
 
 const MAX_TOTAL_MS = 50_000;
 
@@ -96,17 +96,53 @@ function kill(child) {
   else try { process.kill(-child.pid, 'SIGKILL'); } catch { /* đã chết */ }
 }
 
-// JS chạy trong trang: tìm phần tử theo selector CSS hoặc theo text hiển thị.
+// JS chạy trong trang: tìm phần tử theo selector CSS, theo text hiển thị, hoặc cả hai (text lọc trong các phần tử
+// khớp selector, `index` chọn phần tử thứ n).
 const FIND = `(q) => {
   const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
-  if (q.selector) { const all = [...document.querySelectorAll(q.selector)].filter(visible); return all[q.index || 0] || null; }
-  const want = String(q.text).trim().toLowerCase();
+  const textOf = el => ((el.innerText || el.textContent || '').trim() || el.getAttribute('aria-label') || '').trim().toLowerCase();
+  const hasText = q.text !== undefined && q.text !== null && String(q.text) !== '';
+  const want = String(q.text ?? '').trim().toLowerCase();
+  if (q.selector) {
+    const all = [...document.querySelectorAll(q.selector)].filter(visible);
+    if (!hasText) return all[q.index || 0] || null;
+    const exact = all.filter(el => textOf(el) === want);
+    return (exact.length ? exact : all.filter(el => textOf(el).includes(want)))[q.index || 0] || null;
+  }
   const pool = [...document.querySelectorAll('button,a,[role=button],[role=option],[role=menuitem],[role=tab],[role=link],label,summary,li,td,th,span,div,p,h1,h2,h3,h4,h5,h6,strong,dt,dd')].filter(visible);
-  const exact = pool.filter(el => (el.innerText || el.textContent || '').trim().toLowerCase() === want);
-  const loose = pool.filter(el => (el.innerText || el.textContent || '').trim().toLowerCase().includes(want));
+  const exact = pool.filter(el => textOf(el) === want);
+  const loose = pool.filter(el => textOf(el).includes(want));
   const pick = list => list.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
   return pick(exact) || pick(loose) || null;
+}`;
+
+// Practice #5 (BC3JL6ZC): fixer viết selector Playwright (`:has-text()`, `>> nth=0`); querySelectorAll ném lỗi,
+// lỗi bị nuốt và tool chờ hết giờ rồi báo ELEMENT_NOT_FOUND. Chặn ngay, chỉ cách viết đúng.
+const PLAYWRIGHT_ONLY = /:has-text\(|:text(-is|-matches)?\(|:visible\b|:nth-match\(|>>|^\s*(text|css|xpath|role)=/;
+
+function checkSelector(s, i) {
+  if (s.selector === undefined) return;
+  if (typeof s.selector !== 'string' || !s.selector.trim()) fail('INVALID_SELECTOR', `step ${i + 1}: selector must be a non-empty CSS string`);
+  if (PLAYWRIGHT_ONLY.test(s.selector)) {
+    fail('INVALID_SELECTOR', `step ${i + 1}: "${s.selector}" is Playwright syntax; selector is plain CSS. ` +
+      'Pick by visible text with {selector, text} (e.g. {selector:"[role=tab]", text:"Invoices"}) or {text} alone; index picks the n-th match');
+  }
+}
+
+// Khi một bước lỗi: trang đang ở đâu và có gì bấm được, để lần gọi sau sửa bước mà không phải đoán.
+const PAGE_STATE = `() => {
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  const els = [...document.querySelectorAll('button,a[href],[role=tab],[role=button],[role=option],[role=menuitem],[role=combobox],input,select,textarea')].filter(visible);
+  const candidates = els.slice(0, 50).map(el => {
+    const role = el.getAttribute('role'); const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name');
+    const text = (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+    return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (role ? '[role=' + role + ']' : '') +
+      (name ? '[' + (el.getAttribute('aria-label') ? 'aria-label' : el.getAttribute('placeholder') ? 'placeholder' : 'name') + '="' + name.slice(0, 40) + '"]' : '') +
+      (text ? ' "' + text + '"' : '');
+  });
+  return { url: location.href, title: document.title, visibleText: (document.body && document.body.innerText || '').slice(0, 800), candidates };
 }`;
 
 // Bước route (mục 13): trình duyệt tự trả lời request khớp `url` thay cho server, để chụp được cách app xử lý lỗi
@@ -142,6 +178,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     if (s.action === 'goto' && !loopback(s.url)) fail('URL_NOT_ALLOWED', 'goto only accepts http(s)://localhost or 127.0.0.1');
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
     if (s.action === 'route') rules.set(i, routeRule(s, i));
+    checkSelector(s, i);
   }
   const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
     ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', browserProfile)
@@ -152,10 +189,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const consoleErrors = [];
   const shots = [];
   let ws;
+  let cdp;
   try {
     ws = new WebSocket(endpoint);
     await new Promise((ok, reject) => { ws.addEventListener('open', ok, { once: true }); ws.addEventListener('error', () => reject(new Error('cdp connect failed')), { once: true }); });
-    const cdp = new Cdp(ws);
+    cdp = new Cdp(ws);
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
     const send = (m, p) => cdp.send(m, p, sessionId);
@@ -210,7 +248,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       const until = Math.min(deadline, Date.now() + waitMs);
       for (;;) {
         const box = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; el.scrollIntoView({block:'center', inline:'center'});
-          const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName }; }`, q).catch(() => null);
+          const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName }; }`, q)
+          .catch(e => /not a valid selector/i.test(e.message) ? fail('INVALID_SELECTOR', `${q.selector} is not valid CSS`) : null);
         if (box) return box;
         if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', q.selector ?? `text "${q.text}"`);
         await sleep(150);
@@ -238,96 +277,128 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         if (Date.now() >= until) break;
       }
       if (force && last) {
-        // Đủ chuỗi sự kiện con trỏ: Radix và nhiều UI kit kích hoạt ở pointerdown/mousedown, không ở click.
+        // Cho lớp che (vd sidebar của BUG-01 đè tab Invoices ở mọi item khác) tạm pointer-events:none rồi bấm bằng
+        // chuột thật như thường: Radix Tabs/Select nhận đúng chuỗi pointer. Trả lại style sau cú bấm.
+        const through = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null;
+          for (let n = 0; n < 6; n++) {
+            const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const hit = document.elementFromPoint(x, y);
+            if (hit && (el === hit || el.contains(hit))) return { x, y };
+            if (!hit || hit.contains(el)) return null;
+            let cover = hit; while (cover.parentElement && !cover.parentElement.contains(el)) cover = cover.parentElement;
+            cover.setAttribute('data-mtm-pe', cover.style.pointerEvents || ''); cover.style.pointerEvents = 'none';
+          }
+          return null; }`, q).catch(() => null);
+        if (through) {
+          for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+            await send('Input.dispatchMouseEvent', { type, x: through.x, y: through.y, button: 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
+          }
+        }
+        await evaluate(`() => { for (const el of document.querySelectorAll('[data-mtm-pe]')) {
+          el.style.pointerEvents = el.getAttribute('data-mtm-pe'); el.removeAttribute('data-mtm-pe'); } }`).catch(() => null);
+        if (through) return { obscured: true, by: last.by, forced: true };
+        // Không gỡ được lớp che: đủ chuỗi sự kiện con trỏ bằng JS (Radix kích hoạt ở pointerdown/mousedown).
         await evaluate(`(q) => { const el = (${FIND})(q); const r = el.getBoundingClientRect();
           const o = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, pointerType: 'mouse', isPrimary: true };
           el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new MouseEvent('mousedown', o)); el.focus?.();
           el.dispatchEvent(new PointerEvent('pointerup', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); el.dispatchEvent(new MouseEvent('click', o)); }`, q);
         return { obscured: true, by: last.by, forced: true };
       }
-      fail('ELEMENT_OBSCURED', `${q.selector ?? `text "${q.text}"`} is covered by ${last?.by ?? 'another element'} at its centre`);
+      fail('ELEMENT_OBSCURED', `${q.selector ?? `text "${q.text}"`} is covered by ${last?.by ?? 'another element'} at its centre; ` +
+        'force:true clicks through the cover');
     };
 
-    for (const [i, s] of steps.entries()) {
-      if (Date.now() > deadline) fail('CAPTURE_TIMEOUT', `stopped before step ${i + 1}`);
-      const q = { selector: s.selector, text: s.text, index: s.index };
-      switch (s.action) {
-        case 'goto':
-          await send('Page.navigate', { url: s.url });
-          await waitReady();
-          break;
-        case 'click': {
-          const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
-          if (r.obscured) log.push({ step: i + 1, action: 'click', obscuredBy: r.by, forced: true });
-          break;
-        }
-        case 'fill': {
-          const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
-          if (r.obscured) log.push({ step: i + 1, action: 'fill', obscuredBy: r.by, forced: true });
-          await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
-          await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-          await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-          await send('Input.insertText', { text: String(s.value ?? '') });
-          break;
-        }
-        case 'press': {
-          const key = String(s.key ?? 'Enter');
-          const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, Backspace: 8 };
-          for (const type of ['keyDown', 'keyUp']) {
-            await send('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: codes[key] ?? 0, ...(key === 'Enter' && type === 'keyDown' ? { text: '\r' } : {}) });
+    let at = -1;
+    try {
+      for (const [i, s] of steps.entries()) {
+        at = i;
+        if (Date.now() > deadline) fail('CAPTURE_TIMEOUT', `stopped before step ${i + 1}`);
+        const q = { selector: s.selector, text: s.text, index: s.index };
+        switch (s.action) {
+          case 'goto':
+            await send('Page.navigate', { url: s.url });
+            await waitReady();
+            break;
+          case 'click': {
+            const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+            if (r.obscured) log.push({ step: i + 1, action: 'click', obscuredBy: r.by, forced: true });
+            break;
           }
-          break;
-        }
-        case 'select':
-          await locate(q, s.timeoutMs);
-          await evaluate(`(q) => { const el = (${FIND})(q); el.value = q.value; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }`, { ...q, value: s.value });
-          break;
-        case 'waitFor':
-          if (s.selector) { await locate(q, s.timeoutMs ?? 10_000); break; }
-          {
-            const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
-            const want = String(s.text ?? '').toLowerCase();
-            while (!(await evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false))) {
-              if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', `text "${s.text}"`);
-              await sleep(150);
+          case 'fill': {
+            const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+            if (r.obscured) log.push({ step: i + 1, action: 'fill', obscuredBy: r.by, forced: true });
+            await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
+            await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+            await send('Input.insertText', { text: String(s.value ?? '') });
+            break;
+          }
+          case 'press': {
+            const key = String(s.key ?? 'Enter');
+            const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, Backspace: 8 };
+            for (const type of ['keyDown', 'keyUp']) {
+              await send('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: codes[key] ?? 0, ...(key === 'Enter' && type === 'keyDown' ? { text: '\r' } : {}) });
             }
+            break;
           }
-          break;
-        case 'wait':
-          await sleep(Math.min(10_000, Math.max(0, s.ms | 0)));
-          break;
-        case 'route':
-          active.unshift(rules.get(i));
-          break;
-        case 'unroute':
-          active.length = 0;
-          break;
-        case 'assertText': {
-          const found = await evaluate(`(t) => document.body && document.body.innerText.includes(t)`, String(s.text));
-          log.push({ step: i + 1, action: 'assertText', text: s.text, found });
-          if (!found && s.required !== false) fail('ASSERT_FAILED', `text not on page: ${s.text}`);
-          break;
-        }
-        case 'screenshot': {
-          await sleep(Math.min(3000, s.settleMs ?? 400));
-          let params = { format: 'png' };
-          if (s.fullPage) {
-            const m = await send('Page.getLayoutMetrics');
-            const size = m.cssContentSize ?? m.contentSize;
-            params = { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(15000, Math.ceil(size.height)), scale: 1 } };
+          case 'select':
+            await locate(q, s.timeoutMs);
+            await evaluate(`(q) => { const el = (${FIND})(q); el.value = q.value; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }`, { ...q, value: s.value });
+            break;
+          case 'waitFor':
+            if (s.selector) { await locate(q, s.timeoutMs ?? 10_000); break; }
+            {
+              const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
+              const want = String(s.text ?? '').toLowerCase();
+              while (!(await evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false))) {
+                if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', `text "${s.text}"`);
+                await sleep(150);
+              }
+            }
+            break;
+          case 'wait':
+            await sleep(Math.min(10_000, Math.max(0, s.ms | 0)));
+            break;
+          case 'route':
+            active.unshift(rules.get(i));
+            break;
+          case 'unroute':
+            active.length = 0;
+            break;
+          case 'assertText': {
+            const found = await evaluate(`(t) => document.body && document.body.innerText.includes(t)`, String(s.text));
+            log.push({ step: i + 1, action: 'assertText', text: s.text, found });
+            if (!found && s.required !== false) fail('ASSERT_FAILED', `text not on page: ${s.text}`);
+            break;
           }
-          const { data } = await send('Page.captureScreenshot', params);
-          mkdirSync(dirname(s.path), { recursive: true });
-          writeFileSync(s.path, Buffer.from(data, 'base64'));
-          const bytes = statSync(s.path).size;
-          if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
-          shots.push({ path: s.path, bytes });
-          break;
+          case 'screenshot': {
+            await sleep(Math.min(3000, s.settleMs ?? 400));
+            let params = { format: 'png' };
+            if (s.fullPage) {
+              const m = await send('Page.getLayoutMetrics');
+              const size = m.cssContentSize ?? m.contentSize;
+              params = { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(15000, Math.ceil(size.height)), scale: 1 } };
+            }
+            const { data } = await send('Page.captureScreenshot', params);
+            mkdirSync(dirname(s.path), { recursive: true });
+            writeFileSync(s.path, Buffer.from(data, 'base64'));
+            const bytes = statSync(s.path).size;
+            if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
+            shots.push({ path: s.path, bytes });
+            break;
+          }
+          default:
+            fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
         }
-        default:
-          fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
+        if (s.action !== 'assertText') log.push({ step: i + 1, action: s.action });
       }
-      if (s.action !== 'assertText') log.push({ step: i + 1, action: s.action });
+    } catch (error) {
+      // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).
+      if (error instanceof HelperError && at >= 0) {
+        const state = await evaluate(`(${PAGE_STATE})()`).catch(() => null);
+        error.details = { failedStep: at + 1, action: steps[at].action, ...(state ?? {}), stepsDone: log, consoleErrors: consoleErrors.slice(0, 5) };
+      }
+      throw error;
     }
     const finalUrl = await evaluate('location.href').catch(() => null);
     const title = await evaluate('document.title').catch(() => null);
@@ -336,10 +407,20 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       ...(rules.size ? { routed: routed.slice(0, 30),
         note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
   } finally {
+    // Đóng êm để trình duyệt ghi cookie ra profile: kill ngay thì browserProfile mất đăng nhập ở lần gọi sau
+    // (Practice #5: fixer goto /accounting bị đẩy về /login, tưởng tab Invoices không tồn tại).
+    if (cdp) await closeGracefully(cdp, child);
     try { ws?.close(); } catch { /* bỏ qua */ }
     kill(child);
     if (!browserProfile) await removeLater(profileDir);
   }
+}
+
+async function closeGracefully(cdp, child) {
+  if (child.exitCode !== null) return;
+  const exited = new Promise(ok => child.once('exit', ok));
+  await Promise.race([cdp.send('Browser.close').catch(() => null), sleep(2000)]);
+  await Promise.race([exited, sleep(3000)]);
 }
 
 // Tiến trình con của Edge còn giữ file vài trăm ms sau khi bị kill: dọn best-effort, không làm hỏng kết quả.

@@ -68,6 +68,7 @@ export class McpClient {
     if (msg.result.isError) {
       const err = new Error(`${name}: ${value.error.code} ${value.error.message}`);
       err.code = value.error.code;
+      err.details = value.error.details;
       throw err;
     }
     return value;
@@ -96,7 +97,8 @@ export function makeRemote(root, matchId) {
     "const ok = greet() === 'hello' || greet() === 'hello world';",
     "console.log(` Tests  ${ok ? '2 passed' : '1 passed | 1 failed'} (2)`);",
     'process.exit(ok ? 0 : 1);', ''].join('\n'));
-  writeFileSync(join(app, '.env.example'), 'DATABASE_URL="postgresql://app:CHANGE_ME@127.0.0.1:5433/app"\nAUTH_SECRET="CHANGE_ME"\n');
+  writeFileSync(join(app, '.env.example'), 'DATABASE_URL="postgresql://app:CHANGE_ME@127.0.0.1:5433/app"\n'
+    + 'TEST_DATABASE_URL="postgresql://app:CHANGE_ME@127.0.0.1:5433/app_test"\nAUTH_SECRET="CHANGE_ME"\n');
   writeFileSync(join(app, '.gitignore'), '.env\nnode_modules/\n');
   const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'seed', GIT_AUTHOR_EMAIL: 'seed@x', GIT_COMMITTER_NAME: 'seed', GIT_COMMITTER_EMAIL: 'seed@x' };
   sh('git', ['init', '-q', '-b', 'main'], work, gitEnv);

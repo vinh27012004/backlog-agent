@@ -1,7 +1,7 @@
 # Retry playbook
 
-`<previous_attempt>` tells you why the last attempt failed. The worktree was reset to a clean
-branch, so the previous change is gone; the condensed log and signature are what remain.
+`<previous_attempt>` tells you why the last attempt failed. The worktree still holds the previous
+attempt's change (`git diff HEAD`): keep what is right and change what the failure points at.
 
 | fail_kind | Meaning | What to do differently |
 |---|---|---|

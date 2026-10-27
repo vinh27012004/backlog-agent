@@ -103,7 +103,7 @@ Không có bearer key và không có `teamWorkspace` (helper tự suy ra từ ch
 | `gameMasterApiUrl`, `gameMasterUrl`, `matchPageUrl` | URL Game Master (API, site, trang `/match`) |
 | `apiKeySecret` | Bearer của đội. **Secret** |
 | `apiKeyLength`, `apiKeySha256` | Độ dài UTF-8 và SHA-256 hex của bearer, để kiểm chép đúng |
-| `apiKeyScopes` | Phải có `submission:create` |
+| `apiKeyScopes` | Player gửi `['submission:create', 'submission:read']`; helper đòi `submission:create` hoặc `submissions:create` (cách viết của guide, T13) |
 | `teamInfoRequestId` | Request id lấy team-info |
 | `allowedApiOrigins` | Origin được phép gọi API |
 | `teamWorkspace`, `checkoutRoot`, `matchRoot`, `challengeWorkspace`, `teamSdlcPackWorkspace` | Path (`challengeWorkspace` = `TeamWorkspace/matches`, chỉ để tương thích) |

@@ -1,7 +1,7 @@
 // Nhận diện stack (port rút gọn của orchestrator/profile.py) và chuẩn bị môi trường (05 §5.3).
 // Repo của BTC có thể kèm env-require/ (README, doctor.ps1...): khi có thì doctor.ps1 là thước đo READY.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { runPwsh } from './jobs.mjs';
 import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from './util.mjs';
@@ -91,7 +91,15 @@ export function detectProfile(matchRoot) {
 // biến kiểu SECRET/KEY/TOKEN sinh ngẫu nhiên. Không bao giờ ghi đè .env đã có.
 const PLACEHOLDER = /CHANGE_ME|changeme|<[^>]+>/;
 
-export function fillEnvFile(appRoot, machine) {
+// Thêm hậu tố vào tên DB của TEST_DATABASE_URL (không thêm lần hai). Test DB phải mới theo trận: DB cùng tên còn lại
+// từ trận trước giữ schema cũ mà `migrate deploy` báo "No pending migrations" (Practice #5 BC3JL6ZC: test DB của
+// BUG-01/TASK-01 còn FK CASCADE, gate báo regression sai hai lần).
+export const scopedTestDb = (text, suffix) => text.replace(/^(\s*TEST_DATABASE_URL\s*=\s*["']?[^"'\s?]*?\/)([A-Za-z0-9_]+)(?=["'?\s]|$)/m,
+  (m, pre, db) => `${pre}${db.endsWith(suffix) ? db : db + suffix}`);
+
+export const dbSuffix = name => `_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+
+export function fillEnvFile(appRoot, machine, { testDbSuffix = null } = {}) {
   const example = join(appRoot, '.env.example');
   const target = join(appRoot, '.env');
   if (!existsSync(example)) return { created: false, reason: 'no .env.example' };
@@ -110,7 +118,8 @@ export function fillEnvFile(appRoot, machine) {
     unresolved.push(key);
     return line;
   });
-  writeFileSync(target, lines.join('\n'), 'utf8');
+  const text = lines.join('\n');
+  writeFileSync(target, testDbSuffix ? scopedTestDb(text, testDbSuffix) : text, 'utf8');
   return { created: true, unresolved };
 }
 
@@ -128,7 +137,7 @@ const step = async (job, name, command, opts) => {
 const lastLines = (text, n = 8) => String(text).trim().split(/\r?\n/).slice(-n).join('\n');
 
 // Môi trường cho worktree của một item: .env chép từ checkout chính (gitignored nên worktree không có),
-// TEST_DATABASE_URL riêng theo item (test làm rỗng test DB trước mỗi case), rồi cài dependency + generate.
+// TEST_DATABASE_URL riêng theo trận và item (test làm rỗng test DB trước mỗi case), rồi cài dependency + generate.
 export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir }) {
   const profile = detectProfile(wtMatchRoot);
   const main = detectProfile(mainMatchRoot);
@@ -136,9 +145,9 @@ export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key,
   if (!profile.root) return { ...out, ok: false, failure: 'no application manifest in worktree' };
   const mainEnv = main.root ? join(main.root, '.env') : null;
   if (mainEnv && existsSync(mainEnv) && !existsSync(join(profile.root, '.env'))) {
-    const suffix = `_${key.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const text = readFileSync(mainEnv, 'utf8').replace(/^(\s*TEST_DATABASE_URL\s*=\s*["']?[^"'\s?]*?\/)([A-Za-z0-9_]+)(?=["'?\s]|$)/m,
-      (m, pre, db) => `${pre}${db.endsWith(suffix) ? db : db + suffix}`);
+    // Thư mục trận mang tên matchId; .env chính tạo trước bản sửa này chưa có hậu tố trận thì thêm ở đây.
+    const suffix = dbSuffix(key);
+    const text = scopedTestDb(scopedTestDb(readFileSync(mainEnv, 'utf8'), dbSuffix(basename(mainMatchRoot))), suffix);
     writeFileSync(join(profile.root, '.env'), text, 'utf8');
     out.steps.push({ name: 'env-file', copied: true, testDatabaseSuffix: suffix });
   }
@@ -167,7 +176,7 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
   }
   const cwd = profile.root;
   const machine = readMachineConfig(localDir);
-  const env = fillEnvFile(cwd, machine);
+  const env = fillEnvFile(cwd, machine, { testDbSuffix: dbSuffix(basename(matchRoot)) });
   out.steps.push({ name: 'env-file', ...env });
 
   const c = profile.commands;

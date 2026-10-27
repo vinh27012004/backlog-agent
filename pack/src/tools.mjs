@@ -2,11 +2,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { captureEvidence } from './browser.mjs';
+import { ACTIONS as CODE_GRAPH_ACTIONS, CodeGraph, codeGraphTarget } from './codegraph.mjs';
 import { CompanyTools } from './company.mjs';
 import { appDataLock } from './datalock.mjs';
 import { Decider } from './decisions.mjs';
 import { JevClient, loadJevConfig } from './jev.mjs';
 import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './environment.mjs';
+import { modelPlan } from './models.mjs';
 import { EventQueue } from './events.mjs';
 import { GameMaster } from './game.mjs';
 import { answerCheck, changedFiles, runGate, scenarioCounts } from './gate.mjs';
@@ -23,6 +25,8 @@ import { HelperError, fail, isId, oneLine, writeFileAtomic } from './util.mjs';
 
 const PREPARE_BUDGET_MS = 8 * 60_000;
 const GATE_LIMITS = { maxFiles: 25, buildMs: 300_000, testMs: 300_000 };
+// Phút để dành cho gate + integrate + push + submit sau khi fixer trả kết quả (CV8WV1JM: gate ~1 phút, root vài lượt).
+const PUBLISH_RESERVE_MIN = 5;
 const TERMINAL = new Set(['FINISHED', 'CANCELLED']);
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
 const typeOf = key => String(key).split('-')[0].toUpperCase();
@@ -130,8 +134,8 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key, e.g. BUG-01.') }, ['backlogItemKey']), readOnly: true, handler: a => this.readItem(a) },
       { name: 'start_work', description: 'GAME: call Start Work for an item, save template/MVS/files under .team-work/items/<ID>/, copy the template to answers/<ID>/submit.json and log IN_PROGRESS.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start even if little time is left.'), requiredScenarios: num('Number of verification scenarios you will run (MVS count or acceptance criteria, min 1).') }, ['backlogItemKey']), handler: a => this.startWork(a) },
-      { name: 'worktree', description: 'GAME: per-item git worktree. create: new worktree at the main HEAD (+ .env with a per-item test database, dependency install as a job, template copied to answers/<ID>/submit.json). integrate: commit the worktree and cherry-pick onto the main checkout; only the exact content of the last gate whose build and tests passed (answers/<ID>/ may still change), else GATE_REQUIRED / GATE_STALE. remove: delete it. status: paths and state.',
-        inputSchema: obj({ action: { type: 'string', enum: ['create', 'integrate', 'remove', 'status'] }, backlogItemKey: str('Item key.'), message: str('integrate: one-line commit message.') }, ['action', 'backlogItemKey']), handler: a => this.worktree(a) },
+      { name: 'worktree', description: 'GAME: per-item git worktree. create: new worktree at the main HEAD (+ .env with a per-item test database, dependency install as a job, template copied to answers/<ID>/submit.json). integrate: commit the worktree and cherry-pick onto the main checkout; only the exact content of the last gate whose build and tests passed (answers/<ID>/ may still change), else GATE_REQUIRED / GATE_STALE. sync: move a worktree with no commit yet onto the main HEAD, keeping its uncommitted work (pulls in fixes other items already integrated, e.g. a shared layout bug; WORKTREE_CONFLICT leaves it unchanged; reinstall job when dependencies changed). remove: delete it. status: paths and state.',
+        inputSchema: obj({ action: { type: 'string', enum: ['create', 'integrate', 'sync', 'remove', 'status'] }, backlogItemKey: str('Item key.'), message: str('integrate: one-line commit message.') }, ['action', 'backlogItemKey']), handler: a => this.worktree(a) },
       { name: 'run_gate', description: 'GAME: background job that re-checks an item: diff, forbidden changes, test quality (new tests without assertions or with assertions that cannot fail → weak_test), code scan of the added lines (TODO, stubs, debug output, SQL built from strings, credentials, backup/helper files; warnings only), typecheck/build, declared tests, full regression vs baseline (failures rerun once to rule out flakiness; baseline tests that no longer run fail like a test change), the declared tests on the unfixed code (fail-before, worktree only), answer file (template scenarios, MVS-required evidence for PASS scenarios, status vs results). where=worktree (default when the item has one) or main. A failure has a stable `signature` and `repeat` (how often this item failed with it); warnings are collected in `findings` for the reviewer.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), where: { type: 'string', enum: ['worktree', 'main'] }, needsDependency: bool('True only if the item requires changing dependency/build files.'), testsAdded: { type: 'array', items: { type: 'string' }, description: 'Test files or names added/changed for this item.' },
           allowTestChange: { type: 'object', description: 'Only when an existing test is provably wrong: {reason, source} where source quotes the item text or a company standard (e.g. kb_search result id). Without it, editing a baseline-failing test or removing assertions fails the gate.' },
@@ -150,11 +154,16 @@ export class Runtime {
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
         inputSchema: obj({ path: str('Absolute folder; default matchRoot.') }), readOnly: true, handler: a => this.detectProfile(a) },
-      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key}, waitFor{selector|text,timeoutMs}, wait{ms}, assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click anyway. Use browserProfile to keep a login across calls.',
+      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key}, waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
         inputSchema: obj({ steps: { type: 'array', items: { type: 'object' }, description: 'Ordered actions, max 60.' },
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
         handler: a => this.captureEvidence(a) },
+      { name: 'code_graph', description: 'Any agent: code navigation for the app under `path` (your worktree matchRoot); cheaper than rg plus reading whole files. find {query}: declarations by name (functions, classes, components, tRPC procedures). outline {file}: declarations of one file with line ranges, so you read only the lines you need. callers {symbol}: call sites with the enclosing function. callees {symbol}: project functions it calls (with where they are defined) plus external calls. references {symbol}: every use (JSX, types, client calls of a tRPC procedure); imports are listed in importedBy. impact {symbol, depth}: transitive callers up to depth and the tests among them. symbol is a name or Container.name (class, object, router or file name, e.g. cardRouter.create or card.create); when several declarations match you get `candidates`: call again with file (+ line). TS/JS uses the project\'s own TypeScript compiler (engine "typescript", first call ~5 s); other stacks match by name (engine "lexical"). Paths are relative to `path`.',
+        inputSchema: obj({ action: { type: 'string', enum: CODE_GRAPH_ACTIONS }, path: str('Absolute folder: matchRoot from <worktree> in your brief.'),
+          symbol: str('Name or Container.name.'), query: str('find: part of a name.'), file: str('File relative to path.'), line: num('1-based line in file (picks the symbol on that line).'),
+          depth: num('impact: levels of callers, 1-4 (default 2).'), limit: num('Max results, default 40, max 100.') }, ['action', 'path']),
+        readOnly: true, handler: a => this.codeGraph(a) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
       // lặp lại khi chờ khoá, qua auto_review mỗi lần thì tốn token vô ích.
       { name: 'app_data', description: 'Any agent: lock for the app database that every worktree shares. lock before running a seed script or creating data through the app for MVS evidence; unlock once the evidence/report that reads that data is written. While another item holds it, lock returns locked:false: call again (waitSeconds up to 50) and do not seed or create data meanwhile. Expires after `minutes` (default 15, max 30); lock again to renew.',
@@ -393,7 +402,17 @@ export class Runtime {
   itemRows() {
     return (this.gm.view?.items ?? []).map(i => ({ key: i.key, type: i.type, title: i.title, status: i.status,
       points: i.points, deadlineMinutes: i.deadlineMinutes, minutesLeft: this.gm.itemMinutesLeft(i), local: this.localState(i.key),
-      revisionNo: i.revisionNo }));
+      revisionNo: i.revisionNo, returnBy: i.status === 'CLOSED' ? null : this.timeBox(i)?.returnBy ?? null }));
+  }
+
+  // Giờ fixer phải trả kết quả: trước khi item (hoặc trận) đóng, chừa PUBLISH_RESERVE_MIN cho gate và nộp.
+  // Giờ tuyệt đối theo đồng hồ máy; trận PAUSED thì hạn thật lùi lại, nên root đọc lại returnBy sau khi trận chạy tiếp.
+  timeBox(item) {
+    const left = this.gm.itemMinutesLeft(item);
+    if (left === null) return null;
+    const work = Math.max(1, left - PUBLISH_RESERVE_MIN);
+    return { minutesLeft: left, deadline: typeof item.deadlineMinutes === 'number', workMinutes: Math.round(work * 10) / 10,
+      returnBy: new Date(Date.now() + work * 60_000).toISOString() };
   }
 
   matchState() {
@@ -461,8 +480,9 @@ export class Runtime {
     const triage = await this.autoTriage(key);
     return { untrusted: true, type: ji.type, replay: Boolean(data?.replay), startInstruction: data?.startInstruction ?? null,
       submitTemplate: data?.submitTemplate ?? null, minimumVerificationScenarios: data?.minimumVerificationScenarios ?? null,
-      files: saved, materialsDir: dir, minutesLeft: left, triage,
-      next: 'worktree create, then brief a team_fixer with the worktree paths (strong model if triage.modelTier is "strong").' };
+      files: saved, materialsDir: dir, minutesLeft: left, timeBox: this.timeBox(item), triage,
+      next: 'worktree create, then spawn_agent team_fixer with fork_turns "none", model/reasoning_effort from triage.models.fixer[0] '
+        + 'and the full brief (return_by = timeBox.returnBy in <item_meta>).' };
   }
 
   profile() {
@@ -527,6 +547,39 @@ export class Runtime {
       delete ji.worktreeBase;
       j.save();
       return { removed: true };
+    }
+    // Đưa worktree lên HEAD của main, giữ thay đổi chưa commit của item (Practice #5: sidebar lỗi của BUG-01 che màn
+    // hình ở mọi worktree; CR-01 phải chép tay layout.tsx từ main vào worktree để chụp evidence).
+    if (action === 'sync') {
+      const cwd = wt.worktreeRoot;
+      const mainHead = await revParse(checkoutRoot);
+      const oldBase = ji.worktreeBase;
+      if (mainHead === oldBase) return { synced: false, baseRevision: mainHead, hint: 'Already at the main HEAD.' };
+      if ((await revParse(cwd)) !== oldBase) fail('WORKTREE_CONFLICT', 'the worktree has its own commits; sync only before integrate');
+      const dirty = Boolean((await git(['status', '--porcelain'], { cwd })).out.trim());
+      if (dirty) await git(['stash', 'push', '--include-untracked', '-m', `sync ${key}`], { cwd });
+      await git(['reset', '--hard', mainHead], { cwd });
+      if (dirty && (await git(['stash', 'pop'], { cwd, allowFail: true })).code !== 0) {
+        const conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], { cwd, allowFail: true })).out.split(/\r?\n/).filter(Boolean);
+        // Trả worktree về như cũ: stash còn nguyên khi pop hỏng; file untracked đều nằm trong stash nên clean (không -x) an toàn.
+        await git(['reset', '--hard', oldBase], { cwd });
+        await git(['clean', '-fd'], { cwd });
+        await git(['stash', 'pop'], { cwd });
+        fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ') || 'unknown'}; the worktree is unchanged`);
+      }
+      ji.worktreeBase = mainHead;
+      const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);
+      // Dependency hay schema đổi: cài lại và generate trong worktree (.env đã có nên giữ nguyên).
+      const deps = changed.filter(f => /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pom\.xml|build\.gradle(\.kts)?|requirements\.txt|pyproject\.toml|go\.(mod|sum)|composer\.(json|lock)|[^/]+\.prisma)$/.test(f));
+      let setupJobId = null;
+      if (deps.length) {
+        const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
+          mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
+        ji.worktreeSetupJob = setupJobId = job.id;
+      }
+      j.save();
+      return { synced: true, baseRevision: mainHead, changedFiles: changed.length, ...(setupJobId ? { setupJobId } : {}),
+        hint: `${setupJobId ? 'Wait for setupJobId, then rebuild. ' : ''}Restart the app from this worktree before new evidence; the last gate is stale, run run_gate again.` };
     }
     if (action === 'integrate') {
       const files = await changedFiles(wt.worktreeRoot, 'HEAD');
@@ -638,6 +691,19 @@ export class Runtime {
         if (result.repeat >= 3) result.hint = `Same failure ${result.repeat} times: drop the item unless a genuinely different approach fits in the time left.`;
         else if (result.repeat === 2) result.hint = 'Same failure as an earlier attempt: tell the next fixer sameSignatureAsBefore; change the hypothesis, not the details.';
       }
+      // Practice #5: root retry bằng send_message vào fixer cũ, nên thang model fixer[n] không bao giờ được dùng.
+      // Lượt fixer kế tiếp đếm theo gate trên worktree; gate main và gate chỉ hỏng submit.json không phải một lượt fixer.
+      if (!result.passed && inWorktree && result.failKind !== 'answer_invalid' && (result.repeat ?? 0) < 3) {
+        const n = ji.gateHistory.filter(h => h.where === 'worktree' && h.failKind !== 'answer_invalid').length + 1;
+        result.next = `Retry = a new spawn_agent team_fixer (task_name ${key.toLowerCase().replace(/-/g, '')}_fix${n}, model/reasoning_effort `
+          + `from triage.models.fixer[${n - 1}] or its last entry) with the full brief + <previous_attempt>; never send_message to the old fixer.`;
+      }
+      // Practice #5 (TASK-02): chỉ submit.json hỏng mà root chạy lại cả gate (~1 phút). Build/test đã pass và tree đã lưu;
+      // integrate và commit_and_push tự kiểm lại answers/<ID>/.
+      if (result.failKind === 'answer_invalid' && result.codePassed) {
+        result.next = 'Only submit.json is wrong: fix it as `detail` says, then go on (record_verification, worktree integrate, commit_and_push). '
+          + 'Do not run run_gate again: build and tests passed, and commit_and_push re-checks the answer.';
+      }
       ji.lastGate = { jobId: job.id, where: result.where, passed: result.passed, failKind: result.failKind,
         signature: result.signature, repeat: result.repeat ?? 0, tree: result.codePassed ? result.tree : null };
       j.save();
@@ -664,7 +730,10 @@ export class Runtime {
     const differs = counted && given.some(v => v !== undefined) && (n(given[0]) !== sp || n(given[1]) !== sf || n(given[2]) !== ss);
     // Quy ước (04 §4): required = số kịch bản bắt buộc + 1 (gate). PASSED chỉ khi MỌI kịch bản bắt buộc đã chạy và
     // pass và gate pass; kịch bản chưa chạy (skipped) không bao giờ được tính là đạt (Practice #1, L4).
-    const gatePassed = job.state === 'done' && job.result.passed;
+    // Gate chỉ hỏng submit.json (build/test đã pass): root sửa answer rồi gọi tiếp, không chạy lại gate; kiểm answer ngay đây.
+    const answerFixed = job.state === 'done' && job.result.failKind === 'answer_invalid' && job.result.codePassed
+      && !answerCheck(answerRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key)).problems.length;
+    const gatePassed = job.state === 'done' && (job.result.passed || answerFixed);
     const requiredScenarios = Math.max(1, ji.requiredScenarios ?? 1);
     const required = requiredScenarios + 1;
     const passed = sp + (gatePassed ? 1 : 0);
@@ -854,6 +923,13 @@ export class Runtime {
     return captureEvidence({ teamWorkspace: this.teamWorkspace, steps, viewport, browserProfile, timeoutMs });
   }
 
+  async codeGraph({ path, ...args }) {
+    if (!this.teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
+    const target = codeGraphTarget(this.teamWorkspace, path);
+    this.codeGraphObj ??= new CodeGraph();
+    return this.codeGraphObj.query(target, args);
+  }
+
   // ------------------------------------------------------------------ Jev (D9)
   decider() {
     if (!this.deciderObj) {
@@ -883,7 +959,7 @@ export class Runtime {
   // của LLM, không tốn lời gọi nào của root). Kết quả gọn để ít token; lỗi thì luật code. Lưu journal để không hỏi lại.
   async autoTriage(key) {
     const ji = this.journal.item(key);
-    if (ji.triage && ji.route) return this.compactTriage(ji);
+    if (ji.triage && ji.route) return this.compactTriage(key, ji);
     try {
       const pending = this.itemRows().filter(r => r.status !== 'CLOSED' && ['todo', 'started'].includes(r.local)).length;
       const { triage: t, route: r } = await this.decider().intake(key, this.jevItem(key), { pendingItems: pending, minutesLeft: this.minutesLeft() });
@@ -892,14 +968,21 @@ export class Runtime {
       ji.route = { modelTier: r.model.value, reviewer: r.reviewer.value };
       ji.triageSource = [...Object.values(t), ...Object.values(r)].map(x => `${x.name}:${x.source}`).join(' ');
       this.journal.save();
-      return this.compactTriage(ji);
+      return this.compactTriage(key, ji);
     } catch (error) {
-      return { error: oneLine(error.message, 120) };
+      return { error: oneLine(error.message, 120), models: this.spawnModels(key, null) };
     }
   }
 
-  compactTriage(ji) {
-    return { ...ji.triage, ...ji.route, by: ji.triageSource };
+  compactTriage(key, ji) {
+    return { ...ji.triage, ...ji.route, by: ji.triageSource, models: this.spawnModels(key, ji.route?.modelTier) };
+  }
+
+  // Model cho từng lần spawn (src/models.mjs), tính lại mỗi lần vì allowedModels có thể đổi khi Resume; null khi Player
+  // không gửi MTM_MODEL_POLICY_V1.
+  spawnModels(key, modelTier) {
+    const item = this.gm.view?.items.find(i => i.key === key);
+    return modelPlan({ type: typeOf(key), modelTier, deadline: Boolean(item?.deadlineMinutes), allowed: this.session.models?.allowedModels });
   }
 
   async decide({ point, backlogItemKey: key, context = {} }) {
@@ -994,7 +1077,8 @@ export async function callTool(runtime, tool, args, ctx) {
   } catch (error) {
     const activity = runtime.http.takeActivity();
     const body = redactDeep({ error: { code: error instanceof HelperError ? error.code : 'INTERNAL_ERROR',
-      message: oneLine(error instanceof HelperError ? error.message : String(error?.stack ?? error), 600) } });
+      message: oneLine(error instanceof HelperError ? error.message : String(error?.stack ?? error), 600),
+      ...(error instanceof HelperError && error.details ? { details: error.details } : {}) } });
     return { content: [{ type: 'text', text: JSON.stringify(body) }],
       structuredContent: { ...body, ...(activity.length ? { networkActivity: activity } : {}) }, isError: true };
   }

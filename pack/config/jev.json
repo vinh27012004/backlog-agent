@@ -8,5 +8,5 @@
   "retries": 0,
   "breaker": { "failures": 2, "cooldownMs": 300000 },
   "maxStateChars": 4000,
-  "thresholds": { "choice": 0.7, "noulYes": 0.8, "noulNo": 0.2, "injection": 0.5 }
+  "thresholds": { "choice": 0.7, "noulYes": 0.8, "noulNo": 0.2, "injection": 0.7 }
 }

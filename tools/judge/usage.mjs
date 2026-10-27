@@ -117,6 +117,8 @@ export function parseTranscript(file, keys = []) {
     const ts = Date.parse(r.timestamp ?? p.timestamp);
     if (Number.isFinite(ts)) { t.start ??= ts; t.end = ts; }
     if (r.type === 'session_meta') {
+      // Thread fork (spawn_agent không có fork_turns "none") chép cả session_meta của root vào sau: chỉ lấy dòng đầu.
+      if (t.id) continue;
       Object.assign(t, { id: p.id, sessionId: p.session_id, parent: p.parent_thread_id ?? null, role: roleOf(p), agentPath: p.agent_path ?? null });
       t.item = itemOf(p.agent_path, keys);
     } else if (r.type === 'turn_context') {

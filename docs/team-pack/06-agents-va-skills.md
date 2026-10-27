@@ -22,7 +22,8 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 > khung. Pack dùng **ba agent của đội trong `agents/`** (fixer, reviewer, pi-hypothesis), sinh tự động bằng
 > `node tools/sync-agents.mjs`. `agents/` là nguồn duy nhất: sửa prompt ở đó rồi chạy lại script; có test báo
 > lỗi khi pack lệch với `agents/`. Script thay các chỗ chỉ đúng với runtime cũ (`codex exec` + output schema,
-> tool `codegraph`/`runner`, "không có mạng") bằng cách làm có thật trong pack.
+> tool `runner`, "không có mạng") bằng cách làm có thật trong pack. Prompt gọi thẳng tool `code_graph` của helper
+> ([05 §5.21](05-mcp-helper.md#521-code_graph-a-mới-2810)); "system map" đã bỏ và script báo lỗi nếu còn sót.
 
 - File `pack/agents/team-<role>.toml`, `name` = `team_<role>` (gạch ngang thành `_`).
   `developer_instructions` = khối mở đầu (các thẻ trong brief, chỉ đọc hay được sửa) + `agents/rules/common.md`
@@ -124,14 +125,38 @@ Tất cả sinh từ `agents/` bằng `tools/sync-agents.mjs`:
 | `backlog-references/` (`bug-patterns.md`, `pi-triage.md`, `retry-playbook.md`) | `agents/references/` | Skill trỏ tới đường dẫn file thay cho thẻ `<bug_patterns>`/`<pi_triage>` của prompt cũ |
 | `stack-notes/` (`<stack>.md`) | `agents/stacks/` | Root trỏ đúng file theo `detect_profile` |
 
+Agent chỉ mở file được chỉ đích danh (Practice #5, L31), nên `sync-agents.mjs` ghi vào đầu prompt mỗi vai những gì
+phải đọc trước khi làm:
+
+| Vai | Đọc |
+|---|---|
+| `team_fixer` | Skill `backlog-<type>` trong brief + stack notes; BUG thêm `bug-patterns.md`, PI thêm `pi-triage.md`; có `<previous_attempt>` thì `retry-playbook.md` trước tiên |
+| `team_reviewer` | Skill `backlog-<type>` trong brief (điều kiện "xong" cho R1, R2, R5) + stack notes |
+| `team_pi_hypothesis` | `pi-triage.md` + stack notes |
+
+Root ghi `Item <ID> (<TYPE>). Skill: … Stack notes: …` ở dòng đầu brief của cả ba vai. Mỗi lần thử lại là một
+`spawn_agent` mới để dùng model `fixer[n-1]`; `send_message` chỉ để bảo fixer dừng.
+
 Chụp evidence không cần skill riêng: tool `capture_evidence` của helper (Edge headless qua CDP, chỉ URL
 loopback, ảnh chỉ vào `answers/<ID>/evidence/`) và hướng dẫn trong skill `team-orchestrator`.
 
 ## 9. Chọn model
 
 - Root dùng `orchestratorModel` (operator chọn ở trang Init) với effort đã chọn.
-- Khi spawn: chỉ dùng model trong `allowedModels`. Gợi ý: fixer cho PI và CR khó dùng model mạnh nhất;
-  reviewer và pi-hypothesis dùng model rẻ hơn nếu có. Tham số model của `spawn_agent` cần xác minh (Spike S4).
-  Không có tham số thì subagent dùng model mặc định của phiên.
-- Không bao giờ thử model ngoài danh sách. Provider từ chối model trong danh sách thì báo
-  `MODEL_UNAVAILABLE` (blocker) và dùng model khác trong danh sách.
+- Khi spawn: `spawn_agent` nhận `model` và `reasoning_effort` (đã thấy trong transcript ngày 26/10). Helper chọn sẵn
+  trong `start_work` (`triage.models`, `src/models.mjs`). Mỗi tier trong `config/models.json` là một danh sách ưu
+  tiên, và helper lấy model đầu tiên có trong `allowedModels`:
+
+  | Tier | Thứ tự ưu tiên | Dùng cho |
+  |---|---|---|
+  | `small` | 6.1-terra, 6-luna, 5.6-luna (medium) | Lần 1 của item không deadline, tier `small`; `team_pi_hypothesis` |
+  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Từ lần 2; lần 1 của item có deadline, PI, CR, item `hard` |
+  | `top` | 6-astra, rồi như `strong` (high) | Lần cuối (3, PI 4) của item có deadline hoặc PI |
+  | `review` | 6.1-sol, 6-sol, 5.6-terra, 6.1-terra, 6-luna (medium) | `team_reviewer` |
+
+  Thứ tự theo giá chính thức và số token thật của các trận tập (27/10): một lượt fixer điển hình (4M input,
+  cache 97%, 25K output) tốn khoảng $0,06 trên 6-luna, $0,44 trên 6.1-terra, $0,88 trên 6.1-sol và $6,33 trên astra.
+  6-sol, 5.6-sol, 5.6-terra đắt hơn 6.1-sol mà cũ hơn, nên chỉ là dự phòng khi tài khoản không có model mới
+  (tài khoản free chỉ có 6-luna, 5.6-terra, 5.6-luna). Effort tối đa là `high`: `ultra` tự spawn thêm agent.
+- Không bao giờ thử model ngoài danh sách. Không model nào trong tier khớp `allowedModels`, hoặc provider từ chối
+  (`MODEL_UNAVAILABLE`), thì spawn không truyền model: subagent dùng model của root.

@@ -110,6 +110,8 @@ không tự `git push`.
 > hoặc làm chậm `delayMs` rồi cho đi tiếp; `times` giới hạn số lần, luật mới nhất thắng. Dùng cho MVS kiểu "khi API lỗi
 > / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
 > `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
+>
+> **28/10:** `code_graph` (A, §5.21): CodeGraph của kiến trúc cũ (chưa từng dựng) thành tool có thật; bỏ "system map".
 
 Ký hiệu: **R** = chỉ root (cần đã configure); **A** = mọi agent. "Job" = trả `jobId` ngay nếu chưa xong
 trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) hoặc `job_status`.
@@ -124,7 +126,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.6 | `refresh_match` | R | GAME | Đọc trang; lần đầu thì backlog sync; bật poller nền |
 | 5.7 | `match_state` | R | GAME | Bảng trạng thái gọn + thứ tự gợi ý (không gọi mạng) |
 | 5.8 | `start_work` | R | GAME | Start Work + lưu vật liệu + event |
-| 5.9 | `worktree` | R | GAME | `create` / `integrate` / `remove` / `status` |
+| 5.9 | `worktree` | R | GAME | `create` / `integrate` / `sync` / `remove` / `status` |
 | 5.10 | `run_gate` | R (job) | GAME | Gate trên worktree hoặc checkout chính |
 | 5.11 | `record_verification` | R | GAME | Tạo `BACKLOG_TESTS` từ kết quả checker + gate |
 | 5.12 | `commit_and_push` | R | GAME | Kiểm answer + path, commit, push, xác minh SHA |
@@ -134,6 +136,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.16 | `job_status` | R | mọi | Kết quả job |
 | 5.17 | `detect_profile` | A | mọi | Nhận diện stack và lệnh build/test cho một path |
 | 5.20 | `app_data` | A | mọi | Khoá database dùng chung của app khi seed / tạo dữ liệu kịch bản (mục 8) |
+| 5.21 | `code_graph` | A | mọi | Tra code: khai báo, outline, ai gọi, gọi ai, tham chiếu, vùng ảnh hưởng |
 | 5.18 | `condense_log` | A | mọi | Rút gọn log lỗi, trả chữ ký |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 
@@ -145,7 +148,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
   TeamWorkspace và đúng công thức (`checkoutRoot = TW/matches/<matchId>`,
   `matchRoot = checkoutRoot/<folder>`, `progressLogFile = TW/team-sdlc-pack/logs/<matchId>.progress.ndjson`);
   `repository.folder == matchId`; origin `https` (loopback chỉ khi `MTM_TEAM_TEST_MODE=1`); bearer có
-  độ dài UTF-8 và SHA-256 khớp `apiKeyLength`/`apiKeySha256`; `apiKeyScopes` có `submission:create`;
+  độ dài UTF-8 và SHA-256 khớp `apiKeyLength`/`apiKeySha256`; `apiKeyScopes` có `submission:create` (hoặc `submissions:create` như guide ghi, T13);
   `playerSessionId` không đổi so với lần configure trước trong cùng tiến trình.
 - `START_GAME` cần `username`/`password` từ lượt PREPARE. Thiếu (helper đã bị khởi động lại) thì trả
   `NEEDS_PREPARATION_FRAME`, và root gọi lại `configure_session` với frame PREPARE còn trong lịch sử
@@ -219,7 +222,13 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
   `.team-work/items/<ID>/` → `BACKLOG_STATUS IN_PROGRESS` → `BACKLOG_TESTS NOT_RUN` (`required` theo
   quy ước [04 §4](04-progress-log.md#4-luật-liên-field-player-kiểm-bằng-code)).
 - Replay (200) không ghi lại `IN_PROGRESS` nếu log đã có.
-- **Output**: `{type, replay, startInstruction, templateKeys, mvsCount, materialsDir, deadlineAt}`.
+- **Output**: `{type, replay, startInstruction, submitTemplate, minimumVerificationScenarios, files, materialsDir,
+  minutesLeft, timeBox, triage, next}`. `timeBox` = `{minutesLeft, deadline, workMinutes, returnBy}`: `returnBy` là giờ
+  UTC fixer phải trả kết quả, bằng lúc item (hoặc trận, cái nào đóng trước) đóng trừ 5 phút cho gate + nộp
+  (`PUBLISH_RESERVE_MIN`), tối thiểu 1 phút làm việc. `match_state` lặp lại `returnBy` cho mỗi item chưa đóng để lần thử
+  lại lấy hạn mới; trận PAUSED thì hạn thật lùi lại, root đọc lại sau khi trận chạy tiếp.
+  `triage.models` = `{fixer: [lần 1, lần 2, …], reviewer, piHypothesis}`, mỗi phần tử
+  `{model, reasoning_effort, tier}` hoặc `null` ([06 §9](06-agents-va-skills.md#9-chọn-model)).
 
 ### 5.9 `worktree`
 
@@ -234,8 +243,15 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
     với `journal.items[ID].lastGate.tree`. Chưa có gate nào build + test pass → `GATE_REQUIRED`; nội dung khác
     → `GATE_STALE` kèm danh sách file khác. Chặn trường hợp code sửa sau gate (fixer chạy tiếp, reviewer lỡ ghi,
     root vá) lọt vào bản nộp mà không ai kiểm.
+- `sync {backlogItemKey}`: worktree chưa có commit riêng → `git stash -u`, `reset --hard <HEAD chính>`,
+  `stash pop`, `worktreeBase` = HEAD chính. Pop xung đột thì trả worktree về nguyên trạng và báo
+  `WORKTREE_CONFLICT` kèm file. Dependency hoặc schema Prisma đổi thì bắt đầu lại job cài (`setupJobId`).
+  Dùng khi item khác đã tích hợp bản sửa giao diện dùng chung (Practice #5, L38). **Output**:
+  `{synced, baseRevision, changedFiles, setupJobId?}`.
 - `remove {backlogItemKey}`: `git worktree remove --force` + xoá branch cục bộ `team/<ID>`.
 - Branch `team/<ID>` **chỉ** tồn tại cục bộ, không bao giờ push.
+- `.env` của worktree: `TEST_DATABASE_URL` có hậu tố `_<matchid>_<item>` (checkout chính `_<matchid>`), để test DB
+  luôn mới theo trận (Practice #5, L34).
 
 ### 5.10 `run_gate` (job)
 
@@ -445,6 +461,8 @@ pack/src/
   profile.mjs                   # port profile.py
   gate.mjs                      # port gate.py
   logs.mjs                      # port logs.py (chữ ký lỗi, rút log)
+  codegraph.mjs                 # code_graph: engine TypeScript / lexical, client tiến trình con (§5.21)
+  codegraph-worker.mjs          # tiến trình con giữ engine theo app root
   testreport.mjs                # chạy test với reporter JSON/JUnit, id từng test, baseline, test cần chạy lại
   probe.mjs                     # worktree probe ở base cho check fail-before
   jev.mjs decisions.mjs         # port jev.py + decisions.py (D9)
@@ -462,7 +480,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 `LOGIN_FAILED`, `GIT_AUTH_FAILED`, `CHECKOUT_MISMATCH`, `ITEM_NOT_OPEN`, `TOO_LATE`, `WORKTREE_CONFLICT`,
 `GATE_FAILED`, `GATE_REQUIRED`, `GATE_STALE`, `ANSWER_INVALID`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
 `SUBMIT_REJECTED`, `ALREADY_SUBMITTED_NO_RECEIPT`, `EVENT_INVALID`, `LOG_BUDGET_EXCEEDED`,
-`ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`.
+`ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`, `NO_APP`, `FILE_NOT_FOUND`, `CODEGRAPH_TIMEOUT`, `CODEGRAPH_FAILED`.
 
 ### 5.20 `app_data` (A, mới, mục 8)
 
@@ -478,6 +496,38 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   đơn của TC-01, report đọc hoá đơn mới nhất sau cả ba case, nên **không** seed lại trước từng kịch bản); dữ liệu
   hỏng giữa chừng (bấm nhầm, giá trị sai, bản ghi VOID) thì dừng, seed lại nếu script ghi là chạy lại an toàn, và làm
   lại từ kịch bản dữ liệu đầu tiên.
+
+### 5.21 `code_graph` (A, mới 28/10)
+
+- Thay "CodeGraph + bản đồ hệ thống" của kiến trúc cũ (chỉ có khai báo `enabled = false`, chưa dựng). Practice #4–#5:
+  fixer tìm chỗ sửa mất khoảng 8–13 lượt model (0,25–0,46M input) bằng `rg` + đọc nguyên file, và còn đi tìm
+  "system map" không tồn tại (prompt cũ). "System map" đã bỏ khỏi prompt; `sync-agents.mjs` báo lỗi nếu còn.
+- **Input**: `{action, path, symbol?, query?, file?, line?, depth?, limit?}`. `path` là `matchRoot` trong `<worktree>`
+  của brief, phải nằm trong `TeamWorkspace/matches`, không qua symlink/junction. Không trạng thái: subagent gọi
+  helper ở tiến trình riêng chưa `configure_session` (Practice #5: `read_item` của fixer trả `NOT_CONFIGURED`).
+- **Action**: `find {query}` (khai báo theo tên, gồm cả procedure tRPC), `outline {file}` (khai báo của file kèm dòng
+  đầu–cuối, theo thứ tự dòng, sâu tới 2), `callers {symbol}` (chỗ gọi + chuỗi tên bao quanh, vd.
+  `createJournalEntry > mutation() callback`; không có lời gọi trực tiếp thì trả tham chiếu, `via: "references"`),
+  `callees {symbol}` (lời gọi trong khai báo, cả callback và JSX; hàm của project kèm chỗ định nghĩa, còn lại gom vào
+  `external` theo gói), `references {symbol}` (mọi chỗ dùng; dòng import gom vào `importedBy`), `impact {symbol, depth
+  1–4}` (người gọi bắc cầu, `files` và `tests` trong số đó). `symbol` là tên hoặc `Container.name` (class, object,
+  router hay tên file: `cardRouter.create`, `card.create`); nhiều khai báo khớp thì trả `candidates` để gọi lại với
+  `file` (+ `line`). Không thấy thì `notFound` + `suggestions`. Kết quả cắt theo `limit` (mặc định 40, tối đa 100),
+  phần dư báo ở `truncated`; path tương đối với `path`.
+- **Engine `typescript`** khi app có `tsconfig.json`/`jsconfig.json` và `require('typescript')` tìm được từ app root:
+  dùng chính compiler của repo (pack vẫn không có dependency), LanguageService với version theo mtime + size nên file
+  agent vừa sửa được thấy ngay; tsconfig đọc lại tối đa 5 s/lần để thấy file mới. `navigateTo` của TypeScript bỏ qua
+  thuộc tính của object truyền vào hàm, nên helper dò thêm navigation tree (thuộc tính/method ngay dưới khai báo cấp
+  file). Đo trên Solova (175 file): lần đầu 3–4 s và ~530 MB, sau đó 30–250 ms mỗi lời gọi.
+- **Engine `lexical`** cho stack khác (Python, Java, C#, Kotlin, Go, PHP) hoặc JS không có typescript: khai báo bằng
+  regex theo ngôn ngữ, thân hàm theo thụt lề (Python) hoặc đếm ngoặc nhọn, chỗ gọi theo tên. Kết quả có `note` nhắc
+  là các symbol trùng tên bị gộp.
+- **Tiến trình con** (`codegraph-worker.mjs`, `fork` với `childEnv()` không có biến bí mật vì nó chạy compiler lấy từ
+  `node_modules` của repo, `--max-old-space-size=4096`): lần nạp đầu không chặn vòng lặp của helper và hết bộ nhớ
+  không làm sập helper. Giữ engine của 2 app root dùng gần nhất, tự tắt sau 10 phút rảnh, quá 100 s thì kill và trả
+  `CODEGRAPH_TIMEOUT`.
+- `readOnlyHint`: chỉ đọc file. Test: `tests/pack/codegraph.test.mjs` (test TypeScript chạy khi có
+  `MTM_TEST_TYPESCRIPT`, xem CLAUDE.md).
 
 ### 5.19 `decide` (R, mới, D9)
 

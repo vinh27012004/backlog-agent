@@ -102,6 +102,74 @@ test('capture_evidence reports covered elements and can force the click', { skip
   }
 });
 
+// Practice #5 (BC3JL6ZC, BUG-02): sidebar của BUG-01 đè tab Invoices; tab của Radix chỉ nhận sự kiện con trỏ thật.
+const TABS = page(`<nav style="position:fixed;z-index:10;left:0;top:0;width:300px;height:100%;background:#222"><a href="#">Contacts</a></nav>
+<div role="tablist" style="position:absolute;left:40px;top:60px"><button role="tab" id="t-inv">Invoices</button><button role="tab">Payments</button></div>
+<div id="panel" style="position:absolute;left:400px;top:120px"></div>
+<script>document.getElementById('t-inv').addEventListener('pointerdown', e => { if (e.isTrusted) panel.innerHTML = '<button>New invoice</button>'; });</script>`);
+
+test('capture_evidence force clicks through a cover with real input; selector and text combine', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'goto', url },
+      { action: 'click', selector: '[role=tab]', text: 'Invoices', timeoutMs: 800, force: true },
+      { action: 'waitFor', selector: '#panel button', text: 'New invoice', timeoutMs: 2000 }] });
+    assert.match(res.steps.find(s => s.forced).obscuredBy, /Contacts/);
+    // Lớp che được trả lại pointer-events sau cú bấm.
+    assert.match(res.visibleText, /New invoice/);
+  } finally {
+    server.close();
+  }
+});
+
+test('capture_evidence rejects Playwright selectors and reports the page on a failed step', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "[role=tab]:has-text('Invoices')" }] }),
+    e => e.code === 'INVALID_SELECTOR' && /selector, text/.test(e.message));
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "button >> nth=0" }] }), /INVALID_SELECTOR/);
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const t0 = Date.now();
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'click', selector: 'button[' }] }),
+      e => e.code === 'INVALID_SELECTOR' && e.details.failedStep === 2);
+    assert.ok(Date.now() - t0 < 4000, 'invalid CSS fails at once, not after the wait');
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'click', text: 'Receipts', timeoutMs: 500 }] }), e => {
+      assert.equal(e.code, 'ELEMENT_NOT_FOUND');
+      assert.equal(e.details.failedStep, 2);
+      assert.ok(e.details.url.startsWith(url));
+      assert.ok(e.details.candidates.includes('button#t-inv[role=tab] "Invoices"'), e.details.candidates.join(' | '));
+      assert.deepEqual(e.details.stepsDone, [{ step: 1, action: 'goto' }]);
+      return true;
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('capture_evidence browserProfile keeps the login cookie across calls', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => {
+    const cookie = req.url === '/login' ? { 'Set-Cookie': 'sid=ok; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400' } : {};
+    res.writeHead(200, { 'Content-Type': 'text/html', ...cookie });
+    res.end(req.url === '/login' || /sid=ok/.test(req.headers.cookie ?? '') ? '<h1>Accounting</h1>' : '<h1>Please sign in</h1>');
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/login` }] });
+    const res = await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] });
+    assert.match(res.visibleText, /Accounting/);
+  } finally {
+    server.close();
+  }
+});
+
 test('capture_evidence refuses non-loopback URLs and paths outside answers/<ID>/evidence', async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
   await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: 'https://example.com/' }] }), /URL_NOT_ALLOWED/);
@@ -119,6 +187,9 @@ test('capture_evidence is callable through MCP without configure_session', { ski
     const shot = join(tw, 'matches', 'M1', 'M1', 'answers', 'BUG-01', 'evidence', 'login.png');
     const res = await client.call('capture_evidence', { steps: [{ action: 'goto', url: `${url}/login` }, { action: 'screenshot', path: shot }] });
     assert.equal(res.screenshots[0].path, shot);
+    // Lỗi một bước tới agent kèm trạng thái trang.
+    await assert.rejects(client.call('capture_evidence', { steps: [{ action: 'goto', url: `${url}/login` }, { action: 'click', text: 'Invoices', timeoutMs: 300 }] }),
+      e => e.code === 'ELEMENT_NOT_FOUND' && e.details.candidates.some(c => c.includes('Sign in')));
   } finally {
     client.close();
     server.close();

@@ -16,7 +16,7 @@ the team's own tests are the only proof, and the grader judges the result agains
 - Ambiguous? Pick the interpretation closest to how similar features already behave in this project.
 
 ## 2. Find the template inside the project
-Locate the most similar existing feature (code search (`rg`), directory listing, search by naming) and copy
+Locate the most similar existing feature (`code_graph` `find`, directory listing, search by naming) and copy
 its structure: layers, naming, DTOs, validation style, error handling, test style, where config lives.
 Do not introduce a new framework, library or architectural layer unless the task requires it.
 

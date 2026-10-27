@@ -51,7 +51,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     repository, preparationComplete: null, teamInfoRequestId: 'req_team', allowedApiOrigins: [gm.origin]
   };
   const manifest = discoverTeamRuntime(tw).manifest;
-  const policy = { schemaVersion: 2, orchestratorModel: 'gpt-test', orchestratorReasoningEffort: 'medium', allowedModels: ['gpt-test'],
+  const policy = { schemaVersion: 2, orchestratorModel: 'gpt-test', orchestratorReasoningEffort: 'medium', allowedModels: ['gpt-test', 'gpt-6-luna', 'gpt-6.1-sol'],
     enforcement: 'OBSERVE_ONLY', catalogSource: 'TEST', catalogFetchedAt: new Date().toISOString() };
   const prep = modelPolicyFrame(prepareNativePreparation(session, manifest, { availableAgentTypes: ['team_orchestrator'] }, 'prepare-abc'), policy);
 
@@ -107,11 +107,23 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(work.submitTemplate.status, 'DRAFT');
     assert.deepEqual(work.files, ['challenge/TASK-01-submit.json', 'challenge/TASK-01-submit.schema.json']);
     const work2 = await client.call('start_work', { backlogItemKey: 'TASK-02', requiredScenarios: 1 });
+    // Fixer trả kết quả trước hạn item 5 phút (chừa cho gate + nộp); item không deadline thì theo giờ hết trận.
+    assert.equal(work.timeBox.deadline, true);
+    assert.ok(Math.abs(work.timeBox.workMinutes - (work.timeBox.minutesLeft - 5)) < 0.2);
+    assert.ok(Math.abs(Date.parse(work.timeBox.returnBy) - Date.now() - work.timeBox.workMinutes * 60_000) < 15_000);
+    assert.equal(work2.timeBox.deadline, false);
+    assert.match(work.next, /fork_turns "none"/);
+    const rows = (await client.call('match_state')).items;
+    assert.ok(Math.abs(Date.parse(rows.find(i => i.key === 'TASK-01').returnBy) - Date.parse(work.timeBox.returnBy)) < 15_000);
 
     // Jev chạy trong helper lúc start_work (triage + route, một request mỗi item), không tốn lời gọi nào của root;
     // key không lọt ra.
     assert.equal(work.triage.difficulty, 'easy');           // Jev giả chọn phương án đầu với độ tin 0.9
     assert.equal(work.triage.modelTier, 'small');
+    // Model cho spawn lấy trong allowedModels: TASK-01 có deadline nên mạnh ngay, TASK-02 lần 1 rẻ.
+    assert.deepEqual(work.triage.models.fixer.map(m => m.model), ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
+    assert.deepEqual(work2.triage.models.fixer.map(m => m.model), ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol']);
+    assert.equal(work2.triage.models.reviewer.model, 'gpt-6.1-sol');
     assert.match(work.triage.by, /difficulty:jev/);
     assert.equal(jevCalls.length, 2);
     assert.equal(work2.triage.injection, true, 'regex sees the end of a long item');
@@ -135,14 +147,37 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(JSON.parse(readFileSync(wt1.answerFile, 'utf8')).status, 'DRAFT');
     const wtEnv = readFileSync(join(wt1.matchRoot, 'src', '.env'), 'utf8');
     assert.match(wtEnv, /db%20pass/);
+    // Test DB theo trận và item: DB cùng tên từ trận trước giữ schema cũ (Practice #5: FK CASCADE, regression sai).
+    assert.match(wtEnv, /^TEST_DATABASE_URL=.*\/app_test_test1234_task01"$/m);
+    assert.match(wtEnv, /^DATABASE_URL=.*\/app"$/m, 'the shared app database keeps its name');
+    assert.match(readFileSync(join(tw, 'matches', MATCH, MATCH, 'src', '.env'), 'utf8'), /^TEST_DATABASE_URL=.*\/app_test_test1234"$/m);
 
     // "fixer" TASK-02 sửa dở trong worktree của nó (không tích hợp)
     writeFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'module.exports = () => "bye";\n');
     // "fixer" TASK-01: sửa code + điền answer + evidence trong worktree của nó
-    writeFileSync(join(wt1.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hello world" };\n');
     writeFileSync(join(wt1.evidenceDir, 'TASK-01-TC-01.json'), JSON.stringify({ scenario: 'greet', result: 'passed' }));
     writeFileSync(wt1.answerFile, JSON.stringify({ backlogId: 'TASK-01', status: 'SUBMITTED',
       changeSummary: 'greet() now returns hello world.', evidence: ['evidence/TASK-01-TC-01.json'] }, null, 2));
+    // Lần 1 hỏng: lần thử sau phải là spawn mới với model fixer[1] (Practice #5 retry bằng send_message).
+    writeFileSync(join(wt1.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hello world" ;\n');
+    const broken = await settle(await client.call('run_gate', { backlogItemKey: 'TASK-01', waitSeconds: 45 }));
+    assert.equal(broken.result.passed, false);
+    assert.notEqual(broken.result.failKind, 'answer_invalid', JSON.stringify(broken.result.checks));
+    assert.match(broken.result.next, /new spawn_agent team_fixer \(task_name task01_fix2, .*fixer\[1\].*never send_message/);
+    writeFileSync(join(wt1.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hello world" };\n');
+
+    // Chỉ submit.json hỏng (Practice #5 TASK-02): không phải lượt fixer, không cần chạy lại gate.
+    const answer = readFileSync(wt1.answerFile, 'utf8');
+    writeFileSync(wt1.answerFile, JSON.stringify({ ...JSON.parse(answer), status: 'DRAFT' }, null, 2));
+    const answerOnly = await settle(await client.call('run_gate', { backlogItemKey: 'TASK-01', waitSeconds: 45 }));
+    assert.equal(answerOnly.result.failKind, 'answer_invalid');
+    assert.equal(answerOnly.result.codePassed, true);
+    assert.match(answerOnly.result.next, /Do not run run_gate again/);
+    const stillDraft = await client.call('record_verification', { backlogItemKey: 'TASK-01', gateJobId: answerOnly.jobId, scenariosPassed: 1 });
+    assert.equal(stillDraft.status, 'FAILED');
+    writeFileSync(wt1.answerFile, answer);
+    const fixedAnswer = await client.call('record_verification', { backlogItemKey: 'TASK-01', gateJobId: answerOnly.jobId, scenariosPassed: 1 });
+    assert.equal(fixedAnswer.status, 'PASSED');
 
     const gate = await settle(await client.call('run_gate', { backlogItemKey: 'TASK-01', waitSeconds: 45 }));
     assert.equal(gate.result.passed, true, JSON.stringify(gate.result));
@@ -200,6 +235,26 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.ok(Date.parse(done.endedAt) >= Date.parse(done.startedAt));
     assert.equal(journal.items['TASK-02'].endedAt, undefined);
     assert.equal(journal.preparation.jobs[0].kind, 'setup_environment');
+    // sync: TASK-02 (còn sửa dở) nhận bản sửa TASK-01 đã lên main, giữ nguyên việc của mình (Practice #5, CR-01).
+    const synced = await client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' });
+    assert.equal(synced.synced, true);
+    assert.equal(synced.baseRevision, pushed.revision);
+    assert.equal(synced.setupJobId, undefined, 'no dependency changed, no reinstall');
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'utf8'), /hello world/);
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'utf8'), /bye/);
+    assert.equal(JSON.parse(readFileSync(wt2.answerFile, 'utf8')).status, 'DRAFT');
+    assert.equal((await client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' })).synced, false);
+    // Xung đột với commit mới của main: worktree giữ nguyên như trước khi sync.
+    const mainCheckout = join(tw, 'matches', MATCH);
+    writeFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hi" };\n');
+    writeFileSync(join(mainCheckout, MATCH, 'src', 'lib.js'), 'module.exports = { greet: () => "hey" };\n');
+    sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-am', 'other item'], mainCheckout);
+    await assert.rejects(client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' }), /WORKTREE_CONFLICT.*lib\.js.*unchanged/);
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'utf8'), /"hi"/);
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'utf8'), /bye/);
+    assert.equal(JSON.parse(readFileSync(wt2.answerFile, 'utf8')).status, 'DRAFT');
+    assert.equal((await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).baseRevision, pushed.revision);
+    sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout);
     // Root bỏ item (skill root, bước 9): BACKLOG_STATUS FAILED ghi mốc kết thúc.
     await client.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'Dropped: no time left.' } });
     const dropped = JSON.parse(readFileSync(join(tw, 'matches', MATCH, '.team-work', 'journal.json'), 'utf8')).items['TASK-02'];

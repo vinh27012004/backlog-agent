@@ -54,6 +54,7 @@ Khi BTC phát hành Player bản mới, đối chiếu lại theo [02 §12](02-h
 | T10 | MTM_MODEL_POLICY_V1 có các field … | Source trả `schemaVersion: 2` và thêm `orchestratorReasoningEffort` | Parse lỏng, bỏ qua field lạ |
 | T11 | (không nói) | Player gắn cờ `TEAM_RUNTIME_INTEGRITY_ACCESS` cho mọi lần **ghi** vào đường dẫn có đoạn `\.mtm\` hoặc `team-sdlc-pack\runtime` (`progress.mjs:693`) | Thư mục làm việc tạm của đội **không** đặt tên `.mtm`; dùng `.team-work/` |
 | T12 | `repository.folder` là thư mục bất kỳ | Player bắt buộc `repository.folder == matchId` (`preparation.mjs:61`) | `matchRoot = checkoutRoot/<matchId>`; mọi path trong commit bắt đầu bằng `<matchId>/` |
+| T13 | `apiKeyScopes` là `backlogs:start`, `submissions:create` | Player gửi `submission:create`, `submission:read` (`bootstrap.mjs:13`) | Helper nhận cả `submission:create` lẫn `submissions:create`, phòng khi Player lúc thi đổi theo guide |
 
 ## Bản đồ tài liệu
 

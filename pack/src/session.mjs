@@ -11,6 +11,8 @@ const MARKERS = {
   RESUME_GAME_V1: 'RESUME_GAME'
 };
 const POLICY_MARKERS = ['MTM_SUBMISSION_POLICY_V1', 'MTM_MODEL_POLICY_V1'];
+// Player 0.9.35 gửi `submission:create` (bootstrap.mjs:13); guide 0.5.1 ghi `submissions:create`. Nhận cả hai.
+const SUBMIT_SCOPES = ['submission:create', 'submissions:create'];
 
 // Frame = dòng marker + dòng JSON, rồi các khối policy (dòng trống + marker + JSON). Không parse cả prompt.
 export function parseFrame(frame) {
@@ -90,7 +92,7 @@ export class Session {
       if (typeof key !== 'string' || Buffer.byteLength(key, 'utf8') !== d.apiKeyLength || sha256(key) !== d.apiKeySha256) {
         fail('API_KEY_INTEGRITY_MISMATCH');
       }
-      if (!Array.isArray(d.apiKeyScopes) || !d.apiKeyScopes.includes('submission:create')) {
+      if (!Array.isArray(d.apiKeyScopes) || !d.apiKeyScopes.some(s => SUBMIT_SCOPES.includes(s))) {
         fail('INVALID_FRAME', 'apiKeyScopes lacks submission:create');
       }
       secrets.apiKey = key;
