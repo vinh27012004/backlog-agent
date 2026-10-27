@@ -35,6 +35,17 @@ for (const s of ['game-preparation', 'team-orchestrator', 'team-recovery']) {
 const server = join(runtime, 'bin', 'runtime-server.mjs').replaceAll('\\', '/');
 const cfg = existsSync(join(tw, '.codex', 'config.toml')) ? read(join(tw, '.codex', 'config.toml')) : '';
 check('mcp config', cfg.includes(JSON.stringify(server)), server);
+// Codegraph (05 §5.21): đúng phiên bản, khai trong config, shim chạy được. Thiếu thì pack vẫn chạy, agent dùng rg.
+try {
+  const want = JSON.parse(read(join(runtime, 'config', 'codegraph.json')));
+  const shim = join(tw, 'team-sdlc-pack', 'codegraph', 'node_modules', ...want.package.split('/'), 'npm-shim.js');
+  const res = existsSync(shim) ? spawnSync(process.execPath, [shim, 'version'], { encoding: 'utf8', timeout: 30_000,
+    env: { ...process.env, CODEGRAPH_TELEMETRY: '0', DO_NOT_TRACK: '1', CODEGRAPH_NO_DOWNLOAD: '1' } }) : null;
+  const version = res?.stdout?.trim().split(/\s+/).pop() ?? null;
+  const declared = cfg.includes(JSON.stringify(shim.replaceAll('\\', '/')));
+  check('codegraph', version === want.version && declared,
+    !res ? 'not installed: rerun install without --no-codegraph' : `${version ?? 'no version'}${declared ? '' : ', missing from .codex/config.toml'}`);
+} catch (error) { check('codegraph', false, error.message); }
 const major = Number(process.versions.node.split('.')[0]);
 check('node >= 20', major >= 20, process.versions.node);
 

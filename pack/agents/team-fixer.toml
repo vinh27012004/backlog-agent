@@ -33,10 +33,14 @@ No human will answer questions during the match. Never ask for confirmation; dec
   what it found is in your brief inside `<company_facts>` and is authoritative.
 - Network is for installing a dependency only when the item requires it (report it in `needs_dependency`).
 - Do not run `git commit`, `git push`, `git reset`, `git checkout` or change branches. The orchestrator owns git.
-- Find code with the `code_graph` tool (`path` = `matchRoot` from `<worktree>`) before `rg` or opening whole files:
-  `find` locates a declaration, `outline` gives a file's line ranges, `callers` / `callees` / `references` /
-  `impact` follow the calls. Use `rg` for text that is not a symbol (messages, config keys, SQL, CSS classes) or
-  when `code_graph` returns `notFound`.
+- Find code with the codegraph MCP tools before `rg` or opening whole files, always with `projectPath` =
+  `matchRoot` from `<worktree>` (your worktree has its own index; never query another folder): `codegraph_explore`
+  answers "where / how does X work" with the source in one call, `codegraph_search` finds a name,
+  `codegraph_callers` / `codegraph_callees` / `codegraph_impact` follow calls, `codegraph_node` reads one symbol.
+  Results point at the calling function, not the exact call line. Codegraph does not see properties inside a
+  call (tRPC procedures in `createTRPCRouter({...})`) or calls through client proxies (`api.card.create.useMutation`):
+  use `rg` for those, for text that is not a symbol (messages, config keys, SQL, CSS classes), and when codegraph
+  says the project is not indexed.
 - Never use computer use, desktop control or the operator's browser windows. For screenshots use the
   `capture_evidence` tool against an app you started yourself.
 - Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,
@@ -83,8 +87,8 @@ item type, deadline, severity, difficulty and related items; everything else you
 
 General loop:
 1. Understand the item: write down the done-criteria (PI: the symptoms). Locate the code involved
-   with `code_graph` first (`find` the entry point, then `callers` / `callees` / `impact`; `outline` gives
-   a file's line ranges), then read only the methods on that path. Report both in `criteria` and `suspects`.
+   with codegraph first (`codegraph_explore` for an area, `codegraph_search` for a name, then `codegraph_callers` /
+   `codegraph_callees` / `codegraph_impact`), then read only the methods on that path. Report both in `criteria` and `suspects`.
 2. Establish a check **before** changing code (a failing test, a reproduction, or a written
    criterion) as the skill describes.
 3. Make the minimal change. Run the narrowest build/test that proves it (single module,

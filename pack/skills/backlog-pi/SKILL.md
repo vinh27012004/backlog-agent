@@ -20,8 +20,8 @@ Over budget on a step? Move on with the best information you have.
 
 ## Checklist
 1. **Symptoms** (from the item): who, what, where, since when, always or sometimes, all users or some.
-2. **Entry point**: map the symptom to an endpoint/page/job and its call chain with `code_graph` (`find` the
-   handler, then `callees`).
+2. **Entry point**: map the symptom to an endpoint/page/job and its call chain with codegraph (`codegraph_search`
+   for the handler, then `codegraph_callees`).
 3. **Evidence** (cheap first):
    - error text / stack trace in the item → error signature;
    - recent changes on the path: `git log --since="3 days ago" --oneline -- <paths>` and the diff of

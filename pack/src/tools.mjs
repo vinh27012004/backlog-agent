@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { captureEvidence } from './browser.mjs';
-import { ACTIONS as CODE_GRAPH_ACTIONS, CodeGraph, codeGraphTarget } from './codegraph.mjs';
+import { indexCodegraph } from './codegraph.mjs';
 import { CompanyTools } from './company.mjs';
 import { appDataLock } from './datalock.mjs';
 import { Decider } from './decisions.mjs';
@@ -159,11 +159,6 @@ export class Runtime {
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
         handler: a => this.captureEvidence(a) },
-      { name: 'code_graph', description: 'Any agent: code navigation for the app under `path` (your worktree matchRoot); cheaper than rg plus reading whole files. find {query}: declarations by name (functions, classes, components, tRPC procedures). outline {file}: declarations of one file with line ranges, so you read only the lines you need. callers {symbol}: call sites with the enclosing function. callees {symbol}: project functions it calls (with where they are defined) plus external calls. references {symbol}: every use (JSX, types, client calls of a tRPC procedure); imports are listed in importedBy. impact {symbol, depth}: transitive callers up to depth and the tests among them. symbol is a name or Container.name (class, object, router or file name, e.g. cardRouter.create or card.create); when several declarations match you get `candidates`: call again with file (+ line). TS/JS uses the project\'s own TypeScript compiler (engine "typescript", first call ~5 s); other stacks match by name (engine "lexical"). Paths are relative to `path`.',
-        inputSchema: obj({ action: { type: 'string', enum: CODE_GRAPH_ACTIONS }, path: str('Absolute folder: matchRoot from <worktree> in your brief.'),
-          symbol: str('Name or Container.name.'), query: str('find: part of a name.'), file: str('File relative to path.'), line: num('1-based line in file (picks the symbol on that line).'),
-          depth: num('impact: levels of callers, 1-4 (default 2).'), limit: num('Max results, default 40, max 100.') }, ['action', 'path']),
-        readOnly: true, handler: a => this.codeGraph(a) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
       // lặp lại khi chờ khoá, qua auto_review mỗi lần thì tốn token vô ích.
       { name: 'app_data', description: 'Any agent: lock for the app database that every worktree shares. lock before running a seed script or creating data through the app for MVS evidence; unlock once the evidence/report that reads that data is written. While another item holds it, lock returns locked:false: call again (waitSeconds up to 50) and do not seed or create data meanwhile. Expires after `minutes` (default 15, max 30); lock again to renew.',
@@ -247,8 +242,10 @@ export class Runtime {
       await git(['config', '--local', 'user.name', `${d.teamName ?? d.teamId} team`], { cwd: checkoutRoot });
       await git(['config', '--local', 'user.email', `${d.teamId.toLowerCase()}-team@users.noreply.github.com`], { cwd: checkoutRoot });
       const exclude = join(checkoutRoot, '.git', 'info', 'exclude');
+      // .codegraph/: index của codegraph trong thư mục trận và mỗi worktree (file exclude dùng chung cho mọi worktree).
       const current = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
-      if (!current.includes('.team-work/')) writeFileSync(exclude, `${current.trimEnd()}\n.team-work/\n`, 'utf8');
+      const missing = ['.team-work/', '.codegraph/'].filter(p => !current.split(/\r?\n/).includes(p));
+      if (missing.length) writeFileSync(exclude, `${current.trimEnd()}\n${missing.join('\n')}\n`, 'utf8');
     } catch (error) {
       this.stage('REPOSITORY', 'FAILED', oneLine(`Checkout failed: ${error.code ?? 'error'}`, 200));
       throw error;
@@ -271,8 +268,11 @@ export class Runtime {
     if (!job) {
       const logDir = join(this.session.paths.teamWork, 'logs');
       job = this.jobs.start('setup_environment', async job => {
+        // Index codegraph chạy song song (chỉ đọc source, vài giây), không chặn và không làm hỏng setup.
+        const index = indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot, logFile: join(logDir, 'prepare-codegraph.log') });
         const result = await setupEnvironment(job, { matchRoot, localDir: local, logDir,
           report: (s, st, sum) => this.stage(s, st, sum), deadlineAt: this.configuredAt + PREPARE_BUDGET_MS });
+        result.steps.push(await index);
         const j = this.journal;
         j.data.preparation.profile = result.profile;
         j.data.preparation.baseline = result.baseline;
@@ -532,13 +532,17 @@ export class Runtime {
         const value = JSON.parse(readFileSync(template, 'utf8'));
         if (value && typeof value === 'object') writeFileSync(join(wtAnswer, 'submit.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
       }
+      // Index trước khi trả về: fixer gọi codegraph lên worktree chưa index thì bị bảo thôi dùng cả phiên.
+      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
+        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
       const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
         mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
       this.probe().prepare();
       ji.worktreeSetupJob = job.id;
       j.save();
       return { ...wt, baseRevision: ji.worktreeBase, answerFile: join(wtAnswer, 'submit.json'), evidenceDir: join(wtAnswer, 'evidence'),
-        setupJobId: job.id, hint: 'Wait for setupJobId (job_status) before building or testing in the worktree.' };
+        setupJobId: job.id, codegraph: codegraph.skipped ?? (codegraph.code === 0 ? 'indexed' : 'failed'),
+        hint: 'Wait for setupJobId (job_status) before building or testing in the worktree.' };
     }
     if (!existsSync(wt.worktreeRoot)) fail('WORKTREE_MISSING', `${key} has no worktree`);
     if (action === 'remove') {
@@ -921,13 +925,6 @@ export class Runtime {
   async captureEvidence({ steps, viewport, browserProfile, timeoutMs }) {
     if (!this.teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
     return captureEvidence({ teamWorkspace: this.teamWorkspace, steps, viewport, browserProfile, timeoutMs });
-  }
-
-  async codeGraph({ path, ...args }) {
-    if (!this.teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
-    const target = codeGraphTarget(this.teamWorkspace, path);
-    this.codeGraphObj ??= new CodeGraph();
-    return this.codeGraphObj.query(target, args);
   }
 
   // ------------------------------------------------------------------ Jev (D9)

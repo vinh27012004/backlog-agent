@@ -5,8 +5,8 @@ item type, deadline, severity, difficulty and related items; everything else you
 
 General loop:
 1. Understand the item: write down the done-criteria (PI: the symptoms). Locate the code involved
-   with `code_graph` first (`find` the entry point, then `callers` / `callees` / `impact`; `outline` gives
-   a file's line ranges), then read only the methods on that path. Report both in `criteria` and `suspects`.
+   with codegraph first (`codegraph_explore` for an area, `codegraph_search` for a name, then `codegraph_callers` /
+   `codegraph_callees` / `codegraph_impact`), then read only the methods on that path. Report both in `criteria` and `suspects`.
 2. Establish a check **before** changing code (a failing test, a reproduction, or a written
    criterion) as the skill describes.
 3. Make the minimal change. Run the narrowest build/test that proves it (single module,

@@ -1,7 +1,8 @@
 #Requires -Version 7
 param(
   [Parameter(Mandatory = $true)][string]$TeamWorkspace,
-  [switch]$Force
+  [switch]$Force,
+  [switch]$NoCodegraph
 )
 $ErrorActionPreference = 'Stop'
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -10,5 +11,6 @@ $major = [int](((& node --version) -replace '^v', '').Split('.')[0])
 if ($major -lt 20) { throw "Node.js 20+ is required (found $major)." }
 $arguments = @("$PSScriptRoot/scripts/install.mjs", '--team-workspace', $TeamWorkspace)
 if ($Force) { $arguments += '--force' }
+if ($NoCodegraph) { $arguments += '--no-codegraph' }
 & node @arguments
 exit $LASTEXITCODE

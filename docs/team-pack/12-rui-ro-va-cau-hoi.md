@@ -117,6 +117,11 @@ Gửi qua kênh Q&A. Ghi câu trả lời và ngày bên dưới từng câu, r�
 | Q13 · Gọi Jev | ~~Vừa~~ Đã chốt | Đội xác nhận hợp lệ (26/10); Jev bật mặc định, vẫn tắt được bằng `team-sdlc-pack/local/jev.json` → `"enabled": false` (R21) |
 | Q14 · Dependency giữa trận | Vừa | Cách worker xử lý item kiểu "Resolve production dependency vulnerabilities" |
 | Q15 · Company Tools qua bearer | **Cao** | Không được gọi từ helper thì phải tìm cách khác để dùng tool, mà việc dùng tool có tính vào chất lượng quy trình |
+| Q16 · MCP server thứ hai (codegraph) | Vừa | Không được thì cài với `-NoCodegraph`; agent quay về `rg` (05 §5.21) |
+
+16. **Q16 · MCP server của bên thứ ba.** Ngoài helper `team_runtime`, `.codex/config.toml` của đội có được khai thêm
+    một MCP server mã nguồn mở chạy local, chỉ đọc code (`@colbymchenry/codegraph`, MIT, telemetry tắt, index nằm
+    trong thư mục trận và không vào commit) không? Pack cài nó bằng npm lúc chạy installer.
 
 15. **Q15 · Company Tools** ([03 §9](03-game-master.md#9-company-tools-mcp-server-của-trận)). Helper MCP của đội
     gọi `https://masterthemachine.tech/api/v1/mcp/<matchId>` bằng bearer của đội (helper làm proxy để key

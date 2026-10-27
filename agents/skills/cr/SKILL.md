@@ -17,7 +17,7 @@ Spec unclear? Pick the interpretation that breaks the fewest existing callers an
 in `summary`.
 
 ## 2. Find every place the change touches
-Use `code_graph` (`references`, `impact`) from the thing you change outward. Typical chain in a web app:
+Use codegraph (`codegraph_impact`, `codegraph_callers`) from the thing you change outward. Typical chain in a web app:
 route/controller → request/response DTO + validation → service/business rule → repository/query →
 schema/migration → serializers/mappers → error handling → tests → API docs (OpenAPI, README) if the
 project keeps them. Frontend in the same repo consumes the API? Check it too.

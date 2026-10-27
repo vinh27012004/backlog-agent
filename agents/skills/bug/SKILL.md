@@ -16,7 +16,7 @@ MVS scenario that must pass, and they check that nothing else broke.
 - Classify the bug with `<bug_patterns>` below; it tells you where to look first.
 
 ## 2. Locate
-- Start from the error signature and the entry point. Use `code_graph` (`callers`, `callees`, `impact`) to walk from the entry
+- Start from the error signature and the entry point. Use codegraph (`codegraph_callers`, `codegraph_callees`, `codegraph_impact`) to walk from the entry
   point (endpoint / job / handler) to the failing frame.
 - Read only the methods on that path. Check recent commits on those files:
   `git log -n 10 --oneline -- <files>`; a recent change is often the cause.

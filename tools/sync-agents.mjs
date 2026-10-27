@@ -45,10 +45,14 @@ const COMMON_SECTIONS = {
     '  what it found is in your brief inside `<company_facts>` and is authoritative.',
     '- Network is for installing a dependency only when the item requires it (report it in `needs_dependency`).',
     '- Do not run `git commit`, `git push`, `git reset`, `git checkout` or change branches. The orchestrator owns git.',
-    '- Find code with the `code_graph` tool (`path` = `matchRoot` from `<worktree>`) before `rg` or opening whole files:',
-    '  `find` locates a declaration, `outline` gives a file\'s line ranges, `callers` / `callees` / `references` /',
-    '  `impact` follow the calls. Use `rg` for text that is not a symbol (messages, config keys, SQL, CSS classes) or',
-    '  when `code_graph` returns `notFound`.',
+    '- Find code with the codegraph MCP tools before `rg` or opening whole files, always with `projectPath` =',
+    '  `matchRoot` from `<worktree>` (your worktree has its own index; never query another folder): `codegraph_explore`',
+    '  answers "where / how does X work" with the source in one call, `codegraph_search` finds a name,',
+    '  `codegraph_callers` / `codegraph_callees` / `codegraph_impact` follow calls, `codegraph_node` reads one symbol.',
+    '  Results point at the calling function, not the exact call line. Codegraph does not see properties inside a',
+    '  call (tRPC procedures in `createTRPCRouter({...})`) or calls through client proxies (`api.card.create.useMutation`):',
+    '  use `rg` for those, for text that is not a symbol (messages, config keys, SQL, CSS classes), and when codegraph',
+    '  says the project is not indexed.',
     '- Never use computer use, desktop control or the operator\'s browser windows. For screenshots use the',
     '  `capture_evidence` tool against an app you started yourself.',
     '- Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,',
@@ -152,7 +156,7 @@ for (const f of readdirSync(join(SRC, 'schemas')).filter(f => f.endsWith('.schem
 }
 
 // Còn sót tool cũ thì báo lỗi, để prompt không trỏ tới thứ không tồn tại.
-const stale = [...outputs].filter(([, text]) => /\b(codegraph|mvs_run|app_call|output schema|system[ _-]?map)\b|web_search/i.test(text)).map(([p]) => p);
+const stale = [...outputs].filter(([, text]) => /\b(code_graph|mvs_run|app_call|output schema|system[ _-]?map)\b|web_search/i.test(text)).map(([p]) => p);
 if (stale.length) { console.error(`stale references to legacy tools in:\n${stale.join('\n')}`); process.exit(1); }
 
 let changed = 0;

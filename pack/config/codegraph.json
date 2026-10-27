@@ -1,0 +1,5 @@
+{
+  "package": "@colbymchenry/codegraph",
+  "version": "1.6.2",
+  "tools": ["codegraph_explore", "codegraph_search", "codegraph_callers", "codegraph_callees", "codegraph_impact", "codegraph_node"]
+}

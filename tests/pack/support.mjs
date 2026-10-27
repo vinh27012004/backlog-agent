@@ -19,8 +19,10 @@ export function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-export function install(teamWorkspace) {
-  const res = spawnSync(process.execPath, [join(PACK, 'scripts', 'install.mjs'), '--team-workspace', teamWorkspace], { encoding: 'utf8' });
+// Test không tải codegraph từ npm (--no-codegraph); codegraph.test.mjs dùng một bản giả đặt sẵn.
+export function install(teamWorkspace, { codegraph = false } = {}) {
+  const res = spawnSync(process.execPath, [join(PACK, 'scripts', 'install.mjs'), '--team-workspace', teamWorkspace,
+    ...(codegraph ? [] : ['--no-codegraph'])], { encoding: 'utf8' });
   if (res.status !== 0) throw new Error(`install failed: ${res.stdout} ${res.stderr}`);
   return JSON.parse(res.stdout.trim().split('\n').pop());
 }

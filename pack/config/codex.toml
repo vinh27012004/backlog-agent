@@ -13,6 +13,22 @@ env_vars = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "
   # Jev (D9): chỉ helper cầm key; shell của model không thấy vì shell_environment_policy loại *KEY*.
   "TYPESAFE_API_KEY"]
 
+# BEGIN codegraph: installer bỏ khối này khi chưa cài được codegraph (config/codegraph.json, 05 §5.21).
+# Code graph cho agent: index .codegraph/ do helper dựng ở thư mục trận và mỗi worktree. Mọi tool có readOnlyHint.
+[mcp_servers.codegraph]
+command = "node"
+args = [__CODEGRAPH_SHIM__, "serve", "--mcp"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+env_vars = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"]
+
+[mcp_servers.codegraph.env]
+CODEGRAPH_TELEMETRY = "0"
+DO_NOT_TRACK = "1"
+CODEGRAPH_NO_DOWNLOAD = "1"
+CODEGRAPH_MCP_TOOLS = __CODEGRAPH_TOOLS__
+# END codegraph
+
 [shell_environment_policy]
 exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]
 

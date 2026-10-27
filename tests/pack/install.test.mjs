@@ -69,7 +69,7 @@ test('installed helper answers initialize and tools/list', async () => {
     for (const t of list.result.tools) assert.equal(t.inputSchema.additionalProperties, false, t.name);
     // readOnlyHint = không qua auto_review: đúng các tool chỉ đọc, không thêm tool ghi nào.
     const readOnly = list.result.tools.filter(t => t.annotations.readOnlyHint).map(t => t.name).sort();
-    assert.deepEqual(readOnly, ['app_data', 'code_graph', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'read_item', 'wait_for_update']);
+    assert.deepEqual(readOnly, ['app_data', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'read_item', 'wait_for_update']);
     const bad = await client.request('nope/method');
     assert.equal(bad.error.code, -32601);
     const notConfigured = await client.request('tools/call', { name: 'match_state', arguments: {} });
@@ -82,6 +82,8 @@ test('installed helper answers initialize and tools/list', async () => {
   const report = JSON.parse(checker.stdout);
   const failed = report.checks.filter(c => !c.ok).map(c => c.id);
   // Workspace tạm chưa trust nên Codex bỏ qua [features] của nó: hai mục codex phụ thuộc máy, không kiểm ở đây.
-  assert.deepEqual(failed.filter(id => !['codex trust', 'codex features', 'machine config'].includes(id)), []);
+  // codegraph: install() của test bỏ qua bước tải (--no-codegraph), codegraph.test.mjs kiểm phần đó.
+  assert.deepEqual(failed.filter(id => !['codex trust', 'codex features', 'machine config', 'codegraph'].includes(id)), []);
+  assert.ok(report.checks.some(c => c.id === 'codegraph' && /not installed/.test(c.detail)));
   assert.ok(report.checks.some(c => c.id === 'codex features'));
 });

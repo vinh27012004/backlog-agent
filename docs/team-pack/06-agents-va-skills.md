@@ -22,8 +22,9 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 > khung. Pack dùng **ba agent của đội trong `agents/`** (fixer, reviewer, pi-hypothesis), sinh tự động bằng
 > `node tools/sync-agents.mjs`. `agents/` là nguồn duy nhất: sửa prompt ở đó rồi chạy lại script; có test báo
 > lỗi khi pack lệch với `agents/`. Script thay các chỗ chỉ đúng với runtime cũ (`codex exec` + output schema,
-> tool `runner`, "không có mạng") bằng cách làm có thật trong pack. Prompt gọi thẳng tool `code_graph` của helper
-> ([05 §5.21](05-mcp-helper.md#521-code_graph-a-mới-2810)); "system map" đã bỏ và script báo lỗi nếu còn sót.
+> tool `runner`, "không có mạng") bằng cách làm có thật trong pack. Prompt gọi thẳng các tool `codegraph_*` của MCP
+> codegraph ([05 §5.21](05-mcp-helper.md#521-codegraph-mcp-server-ngoài-mới-2810)); "system map" đã bỏ và script báo lỗi
+> nếu còn sót.
 
 - File `pack/agents/team-<role>.toml`, `name` = `team_<role>` (gạch ngang thành `_`).
   `developer_instructions` = khối mở đầu (các thẻ trong brief, chỉ đọc hay được sửa) + `agents/rules/common.md`

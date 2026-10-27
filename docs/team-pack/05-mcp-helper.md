@@ -111,7 +111,8 @@ không tự `git push`.
 > / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
 > `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
 >
-> **28/10:** `code_graph` (A, §5.21): CodeGraph của kiến trúc cũ (chưa từng dựng) thành tool có thật; bỏ "system map".
+> **28/10:** codegraph (§5.21): MCP server ngoài `@colbymchenry/codegraph` thay cho CodeGraph của kiến trúc cũ (chưa từng
+> dựng); helper chỉ dựng index. Bỏ "system map".
 
 Ký hiệu: **R** = chỉ root (cần đã configure); **A** = mọi agent. "Job" = trả `jobId` ngay nếu chưa xong
 trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) hoặc `job_status`.
@@ -136,7 +137,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.16 | `job_status` | R | mọi | Kết quả job |
 | 5.17 | `detect_profile` | A | mọi | Nhận diện stack và lệnh build/test cho một path |
 | 5.20 | `app_data` | A | mọi | Khoá database dùng chung của app khi seed / tạo dữ liệu kịch bản (mục 8) |
-| 5.21 | `code_graph` | A | mọi | Tra code: khai báo, outline, ai gọi, gọi ai, tham chiếu, vùng ảnh hưởng |
+| 5.21 | (codegraph) | A | mọi | Không phải tool của helper: MCP server thứ hai, helper chỉ dựng index |
 | 5.18 | `condense_log` | A | mọi | Rút gọn log lỗi, trả chữ ký |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 
@@ -461,8 +462,7 @@ pack/src/
   profile.mjs                   # port profile.py
   gate.mjs                      # port gate.py
   logs.mjs                      # port logs.py (chữ ký lỗi, rút log)
-  codegraph.mjs                 # code_graph: engine TypeScript / lexical, client tiến trình con (§5.21)
-  codegraph-worker.mjs          # tiến trình con giữ engine theo app root
+  codegraph.mjs                 # dựng index codegraph cho checkout chính và worktree (§5.21)
   testreport.mjs                # chạy test với reporter JSON/JUnit, id từng test, baseline, test cần chạy lại
   probe.mjs                     # worktree probe ở base cho check fail-before
   jev.mjs decisions.mjs         # port jev.py + decisions.py (D9)
@@ -480,7 +480,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 `LOGIN_FAILED`, `GIT_AUTH_FAILED`, `CHECKOUT_MISMATCH`, `ITEM_NOT_OPEN`, `TOO_LATE`, `WORKTREE_CONFLICT`,
 `GATE_FAILED`, `GATE_REQUIRED`, `GATE_STALE`, `ANSWER_INVALID`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
 `SUBMIT_REJECTED`, `ALREADY_SUBMITTED_NO_RECEIPT`, `EVENT_INVALID`, `LOG_BUDGET_EXCEEDED`,
-`ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`, `NO_APP`, `FILE_NOT_FOUND`, `CODEGRAPH_TIMEOUT`, `CODEGRAPH_FAILED`.
+`ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`.
 
 ### 5.20 `app_data` (A, mới, mục 8)
 
@@ -497,37 +497,40 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   hỏng giữa chừng (bấm nhầm, giá trị sai, bản ghi VOID) thì dừng, seed lại nếu script ghi là chạy lại an toàn, và làm
   lại từ kịch bản dữ liệu đầu tiên.
 
-### 5.21 `code_graph` (A, mới 28/10)
+### 5.21 codegraph (MCP server ngoài, mới 28/10)
 
 - Thay "CodeGraph + bản đồ hệ thống" của kiến trúc cũ (chỉ có khai báo `enabled = false`, chưa dựng). Practice #4–#5:
   fixer tìm chỗ sửa mất khoảng 8–13 lượt model (0,25–0,46M input) bằng `rg` + đọc nguyên file, và còn đi tìm
-  "system map" không tồn tại (prompt cũ). "System map" đã bỏ khỏi prompt; `sync-agents.mjs` báo lỗi nếu còn.
-- **Input**: `{action, path, symbol?, query?, file?, line?, depth?, limit?}`. `path` là `matchRoot` trong `<worktree>`
-  của brief, phải nằm trong `TeamWorkspace/matches`, không qua symlink/junction. Không trạng thái: subagent gọi
-  helper ở tiến trình riêng chưa `configure_session` (Practice #5: `read_item` của fixer trả `NOT_CONFIGURED`).
-- **Action**: `find {query}` (khai báo theo tên, gồm cả procedure tRPC), `outline {file}` (khai báo của file kèm dòng
-  đầu–cuối, theo thứ tự dòng, sâu tới 2), `callers {symbol}` (chỗ gọi + chuỗi tên bao quanh, vd.
-  `createJournalEntry > mutation() callback`; không có lời gọi trực tiếp thì trả tham chiếu, `via: "references"`),
-  `callees {symbol}` (lời gọi trong khai báo, cả callback và JSX; hàm của project kèm chỗ định nghĩa, còn lại gom vào
-  `external` theo gói), `references {symbol}` (mọi chỗ dùng; dòng import gom vào `importedBy`), `impact {symbol, depth
-  1–4}` (người gọi bắc cầu, `files` và `tests` trong số đó). `symbol` là tên hoặc `Container.name` (class, object,
-  router hay tên file: `cardRouter.create`, `card.create`); nhiều khai báo khớp thì trả `candidates` để gọi lại với
-  `file` (+ `line`). Không thấy thì `notFound` + `suggestions`. Kết quả cắt theo `limit` (mặc định 40, tối đa 100),
-  phần dư báo ở `truncated`; path tương đối với `path`.
-- **Engine `typescript`** khi app có `tsconfig.json`/`jsconfig.json` và `require('typescript')` tìm được từ app root:
-  dùng chính compiler của repo (pack vẫn không có dependency), LanguageService với version theo mtime + size nên file
-  agent vừa sửa được thấy ngay; tsconfig đọc lại tối đa 5 s/lần để thấy file mới. `navigateTo` của TypeScript bỏ qua
-  thuộc tính của object truyền vào hàm, nên helper dò thêm navigation tree (thuộc tính/method ngay dưới khai báo cấp
-  file). Đo trên Solova (175 file): lần đầu 3–4 s và ~530 MB, sau đó 30–250 ms mỗi lời gọi.
-- **Engine `lexical`** cho stack khác (Python, Java, C#, Kotlin, Go, PHP) hoặc JS không có typescript: khai báo bằng
-  regex theo ngôn ngữ, thân hàm theo thụt lề (Python) hoặc đếm ngoặc nhọn, chỗ gọi theo tên. Kết quả có `note` nhắc
-  là các symbol trùng tên bị gộp.
-- **Tiến trình con** (`codegraph-worker.mjs`, `fork` với `childEnv()` không có biến bí mật vì nó chạy compiler lấy từ
-  `node_modules` của repo, `--max-old-space-size=4096`): lần nạp đầu không chặn vòng lặp của helper và hết bộ nhớ
-  không làm sập helper. Giữ engine của 2 app root dùng gần nhất, tự tắt sau 10 phút rảnh, quá 100 s thì kill và trả
-  `CODEGRAPH_TIMEOUT`.
-- `readOnlyHint`: chỉ đọc file. Test: `tests/pack/codegraph.test.mjs` (test TypeScript chạy khi có
-  `MTM_TEST_TYPESCRIPT`, xem CLAUDE.md).
+  "system map" không tồn tại. "System map" đã bỏ khỏi prompt; `sync-agents.mjs` báo lỗi nếu còn.
+- **Chọn `@colbymchenry/codegraph`** (MIT, ghim phiên bản trong `config/codegraph.json`) thay vì engine tự viết (đã thử
+  rồi bỏ, commit 673f8f7): parser cho hơn 30 ngôn ngữ, BTC sẽ đưa repo nhiều stack. Đo 28/10: index Solova (TS, 156
+  file) 4,4 s, Flask (Python, 83 file) 2,5 s, spring-petclinic (Java, 50 file) 1,8 s; mỗi truy vấn qua MCP 0,1–1 s;
+  `sync` sau khi sửa một file 1,6 s. Trên Python/Java tách đúng hàm trùng tên, bỏ qua docstring, `callees` đầy đủ.
+- **Giới hạn đã biết** (ghi trong luật chung của subagent): kết quả chỉ tới hàm gọi (dòng khai báo), không tới dòng
+  gọi; không thấy thuộc tính trong lời gọi (procedure tRPC trong `createTRPCRouter({...})`) và lời gọi qua proxy client
+  (`api.card.create.useMutation`); nối lời gọi theo tên nên có thể báo nhầm (hàm gọi `Sidebar()` mà không import vẫn
+  bị tính). Những chỗ đó agent dùng `rg`.
+- **Cài**: installer chạy `npm-cli.js` đi kèm Node (không qua shell): `npm install --prefix
+  <TeamWorkspace>/team-sdlc-pack/codegraph --no-save <package>@<version>` (khoảng 258 MB vì kèm runtime Node riêng),
+  ngoài `runtime/` (T11). Đã đúng phiên bản thì bỏ qua. Lỗi (không có mạng) hoặc `--no-codegraph` / `-NoCodegraph`
+  thì chỉ cảnh báo `CODEGRAPH_NOT_INSTALLED` và bỏ khối `# BEGIN codegraph … # END codegraph` khỏi
+  `.codex/config.toml`; pack vẫn chạy, agent dùng `rg`. Checker có mục `codegraph` (phiên bản, khai báo, shim chạy).
+- **Khai báo** `[mcp_servers.codegraph]`: `node <shim> serve --mcp`, `CODEGRAPH_TELEMETRY=0`, `DO_NOT_TRACK=1`,
+  `CODEGRAPH_NO_DOWNLOAD=1` (shim không tự tải bundle từ GitHub giữa trận), `CODEGRAPH_MCP_TOOLS` bật
+  `codegraph_explore`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`,
+  `codegraph_node` (mặc định chỉ có `explore`). Mọi tool có `readOnlyHint` nên không qua auto_review. Biến bí mật
+  không tới server: Codex chỉ chuyển các biến trong `env_vars`.
+- **Index** (`pack/src/codegraph.mjs`): server không tự index, và gọi lên thư mục chưa index thì nó bảo agent thôi
+  dùng codegraph cả phiên. Nên helper chạy `init -y` (lần sau `sync`) cho `matchRoot` song song với
+  `setup_environment`, và cho `wt.matchRoot` ngay trong `worktree create` trước khi trả về (kết quả có
+  `codegraph: indexed|failed|not installed`). Lỗi không bao giờ làm hỏng bước gọi nó. Index nằm ở `.codegraph/` trong
+  thư mục trận; `prepare_checkout` thêm `.codegraph/` vào `.git/info/exclude` (dùng chung cho mọi worktree) nên không
+  lọt vào diff, gate hay commit. Sau đó watcher của server tự `sync` khi agent sửa file (debounce 2 s).
+- **Cần theo dõi ở practice**: server giữ file SQLite trong `.codegraph/` của worktree; nếu tiến trình còn sống lúc
+  `worktree remove` thì Windows có thể khoá file. Câu hỏi cho BTC: thêm một MCP server thứ hai vào
+  `.codex/config.toml` có được không.
+- Test: `tests/pack/codegraph.test.mjs` (bản codegraph giả: khối config theo trạng thái cài, checker, `init` rồi
+  `sync`, lỗi không ném ra).
 
 ### 5.19 `decide` (R, mới, D9)
 

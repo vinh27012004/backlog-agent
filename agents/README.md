@@ -105,7 +105,7 @@ và một dòng trong `runs/state.db`.
 
 | Server | Tool | Dùng bởi |
 |---|---|---|
-| `codegraph` | callers, callees, impact (pack: tool `code_graph` của helper `team_runtime`, đã dựng) | fixer, reviewer, pi_hypothesis |
+| `codegraph` | callers, callees, impact (pack: MCP `@colbymchenry/codegraph`, tool `codegraph_*`, đã dùng) | fixer, reviewer, pi_hypothesis |
 | `runner` | build, test, mvs_run, app_call | fixer, pi_hypothesis |
 | `web` | web_search, web_fetch (chặn Game Master/Admin/Grader) | tất cả |
 

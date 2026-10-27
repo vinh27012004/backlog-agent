@@ -20,7 +20,7 @@ No human will answer questions during the match. Never ask for confirmation; dec
   If a dependency is missing, report it in `needs_dependency` instead of working around it.
 - To look something up on the web, use the `web_search` MCP tool if it is available.
 - Do not run `git commit`, `git push`, `git reset` or change branches. The orchestrator owns git.
-- Find code with the `code_graph` tool before `rg` or reading whole files: it is faster and cheaper.
+- Find code with the codegraph MCP tools before `rg` or reading whole files: it is faster and cheaper.
 
 ## Code changes (when you are allowed to edit)
 - Make the smallest change that fully solves the task. Do not refactor or reformat unrelated code.
