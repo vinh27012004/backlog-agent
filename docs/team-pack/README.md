@@ -92,7 +92,7 @@ Khi BTC phát hành Player bản mới, đối chiếu lại theo [02 §12](02-h
 
 ## Quan hệ với code hiện có
 
-- `orchestrator/` (Python), `fake_gamemaster/`, `monitor/`: giữ làm **tài liệu tham chiếu** và nguồn để
+- `orchestrator/` (Python), `monitor/`: giữ làm **tài liệu tham chiếu** và nguồn để
   port logic (gate, nhận diện stack, log condenser). Không còn là runtime lúc thi. Chi tiết ở
   [01 §6](01-kien-truc.md#6-giữ--port--bỏ-từ-code-cũ).
 - `agents/` (prompt tiếng Anh): port thành skill theo loại item và developer instructions cho

@@ -20,7 +20,6 @@ backlog-agent/
 │
 │   — legacy: Python orchestrator gọi `codex exec`; giữ để port gate / nhận diện stack / log condenser / Jev —
 ├── orchestrator/        code Python
-├── fake_gamemaster/     Game Master giả (Python)
 ├── monitor/             trang monitor cũ (thay bằng dashboard của Player)
 ├── config/              cấu hình agent, gate, Jev, Codex của bản cũ
 └── tests/               test Python (không tốn $)

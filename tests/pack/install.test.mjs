@@ -53,6 +53,9 @@ test('installed helper answers initialize and tools/list', async () => {
       assert.ok(names.includes(n), n);
     }
     for (const t of list.result.tools) assert.equal(t.inputSchema.additionalProperties, false, t.name);
+    // readOnlyHint = không qua auto_review: đúng các tool chỉ đọc, không thêm tool ghi nào.
+    const readOnly = list.result.tools.filter(t => t.annotations.readOnlyHint).map(t => t.name).sort();
+    assert.deepEqual(readOnly, ['app_data', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'read_item', 'wait_for_update']);
     const bad = await client.request('nope/method');
     assert.equal(bad.error.code, -32601);
     const notConfigured = await client.request('tools/call', { name: 'match_state', arguments: {} });

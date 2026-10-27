@@ -109,6 +109,27 @@ const FIND = `(q) => {
   return pick(exact) || pick(loose) || null;
 }`;
 
+// Bước route (mục 13): trình duyệt tự trả lời request khớp `url` thay cho server, để chụp được cách app xử lý lỗi
+// (500, timeout, mất mạng, mạng chậm) mà không sửa code hay tắt server/database dùng chung. Chỉ có tác dụng trong
+// trình duyệt headless của lần gọi này. `url`: chuỗi con của URL, hoặc mẫu có `*`.
+const ABORT_REASONS = new Set(['Failed', 'TimedOut', 'ConnectionRefused', 'ConnectionReset', 'InternetDisconnected', 'AddressUnreachable']);
+
+function routeRule(s, i) {
+  const bad = msg => fail('INVALID_ARGUMENT', `route at step ${i + 1}: ${msg}`);
+  if (typeof s.url !== 'string' || !s.url.trim() || s.url.length > 300) bad('url must be a non-empty string');
+  if (s.status !== undefined && !(Number.isInteger(s.status) && s.status >= 100 && s.status <= 599)) bad('status must be 100-599');
+  if (s.abort !== undefined && !ABORT_REASONS.has(s.abort)) bad(`abort must be one of ${[...ABORT_REASONS].join(', ')}`);
+  if (s.abort !== undefined && s.status !== undefined) bad('use either status or abort');
+  if (s.status === undefined && s.abort === undefined && !s.delayMs) bad('give status, abort or delayMs');
+  const delayMs = Math.min(30_000, Math.max(0, Number(s.delayMs) || 0));
+  const pattern = s.url.includes('*') ? new RegExp(`^${s.url.split('*').map(p => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`) : null;
+  const body = s.body === undefined ? '' : typeof s.body === 'string' ? s.body : JSON.stringify(s.body);
+  return { step: i + 1, url: s.url, method: s.method ? String(s.method).toUpperCase() : null, status: s.status ?? null, abort: s.abort ?? null,
+    delayMs, body, contentType: s.contentType ?? (typeof s.body === 'object' ? 'application/json' : 'text/plain; charset=utf-8'),
+    left: Number.isInteger(s.times) && s.times > 0 ? s.times : Infinity,
+    matches(url, method) { return (pattern ? pattern.test(url) : url.includes(s.url)) && (!this.method || this.method === method); } };
+}
+
 export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
   timeoutMs = 45_000 }) {
   if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
@@ -116,9 +137,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   if (!browser) fail('BROWSER_NOT_FOUND', 'no Edge or Chrome installation found');
   const vp = { width: Math.min(3840, Math.max(320, viewport.width | 0 || 1366)), height: Math.min(4000, Math.max(240, viewport.height | 0 || 900)) };
   // Kiểm toàn bộ bước trước khi mở trình duyệt.
-  for (const s of steps) {
+  const rules = new Map();
+  for (const [i, s] of steps.entries()) {
     if (s.action === 'goto' && !loopback(s.url)) fail('URL_NOT_ALLOWED', 'goto only accepts http(s)://localhost or 127.0.0.1');
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
+    if (s.action === 'route') rules.set(i, routeRule(s, i));
   }
   const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
     ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', browserProfile)
@@ -146,6 +169,29 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false });
+
+    // route: luật bật từ bước của nó trở đi, luật mới nhất thắng; unroute bỏ hết. Request không khớp đi tiếp như thường.
+    const active = [];
+    const routed = [];
+    if (rules.size) {
+      cdp.listeners.push(msg => {
+        if (msg.sessionId !== sessionId || msg.method !== 'Fetch.requestPaused') return;
+        const { requestId, request } = msg.params;
+        const rule = active.find(r => r.left > 0 && r.matches(request.url, request.method));
+        (async () => {
+          if (!rule) return send('Fetch.continueRequest', { requestId });
+          rule.left--;
+          routed.push({ step: rule.step, method: request.method, url: request.url.slice(0, 200),
+            ...(rule.status ? { status: rule.status } : {}), ...(rule.abort ? { abort: rule.abort } : {}), ...(rule.delayMs ? { delayMs: rule.delayMs } : {}) });
+          if (rule.delayMs) await sleep(rule.delayMs);
+          if (rule.abort) return send('Fetch.failRequest', { requestId, errorReason: rule.abort });
+          if (!rule.status) return send('Fetch.continueRequest', { requestId });
+          return send('Fetch.fulfillRequest', { requestId, responseCode: rule.status,
+            responseHeaders: [{ name: 'Content-Type', value: rule.contentType }], body: Buffer.from(rule.body).toString('base64') });
+        })().catch(() => { /* request đã huỷ (trang chuyển đi) */ });
+      });
+      await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    }
 
     const evaluate = async (expression, arg) => {
       const res = await send('Runtime.evaluate', { expression: arg === undefined ? expression : `(${expression})(${JSON.stringify(arg)})`,
@@ -250,6 +296,12 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         case 'wait':
           await sleep(Math.min(10_000, Math.max(0, s.ms | 0)));
           break;
+        case 'route':
+          active.unshift(rules.get(i));
+          break;
+        case 'unroute':
+          active.length = 0;
+          break;
         case 'assertText': {
           const found = await evaluate(`(t) => document.body && document.body.innerText.includes(t)`, String(s.text));
           log.push({ step: i + 1, action: 'assertText', text: s.text, found });
@@ -280,7 +332,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const finalUrl = await evaluate('location.href').catch(() => null);
     const title = await evaluate('document.title').catch(() => null);
     const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
-    return { screenshots: shots, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log };
+    return { screenshots: shots, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
+      ...(rules.size ? { routed: routed.slice(0, 30),
+        note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
   } finally {
     try { ws?.close(); } catch { /* bỏ qua */ }
     kill(child);

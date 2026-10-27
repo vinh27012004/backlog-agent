@@ -61,16 +61,38 @@ export class JevClient {
       try { this.key = readFileSync(config.apiKeyFile, 'utf8').trim() || null; } catch { this.key = null; }
     }
     if (this.key) registerSecret(this.key);
+    this.failures = 0;
+    this.pausedUntil = 0;
   }
 
   get available() { return Boolean(this.config.enabled && (this.transport || this.key)); }
 
+  get paused() { return Date.now() < this.pausedUntil; }
+
   get status() {
-    return { enabled: Boolean(this.config.enabled), keyPresent: Boolean(this.key), available: this.available, model: this.config.model };
+    return { enabled: Boolean(this.config.enabled), keyPresent: Boolean(this.key), available: this.available, paused: this.paused, model: this.config.model };
   }
 
+  // Cầu dao (config.breaker): breaker.failures lần hỏi lỗi liên tiếp thì nghỉ breaker.cooldownMs; trong lúc nghỉ, các
+  // điểm quyết định dùng luật code ngay thay vì chờ timeout.
   async ask(state, questions) {
     if (!this.available) throw new HelperError('JEV_ERROR', this.config.enabled ? 'API key missing' : 'disabled');
+    if (this.paused) throw new HelperError('JEV_ERROR', 'paused after repeated errors');
+    try {
+      const answers = await this.request(state, questions);
+      this.failures = 0;
+      return answers;
+    } catch (error) {
+      const breaker = this.config.breaker;
+      if (breaker && ++this.failures >= breaker.failures) {
+        this.pausedUntil = Date.now() + breaker.cooldownMs;
+        this.failures = 0;
+      }
+      throw error;
+    }
+  }
+
+  async request(state, questions) {
     const text = String(state).slice(0, this.config.maxStateChars ?? 4000);
     const body = { model: this.config.model, state: text, questions };
     const raw = this.transport ? await this.transport(body) : await this.http(body);

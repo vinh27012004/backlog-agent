@@ -3,7 +3,10 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { runPwsh } from './jobs.mjs';
+import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from './util.mjs';
+
+export { failingTests, parseTestCounts } from './testreport.mjs';
 
 const MANIFESTS = ['package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'pyproject.toml',
   'requirements.txt', 'go.mod', 'composer.json'];
@@ -37,7 +40,7 @@ export function detectProfile(matchRoot) {
     const install = pm === 'pnpm' ? 'pnpm install --frozen-lockfile' : pm === 'yarn' ? 'yarn install --frozen-lockfile' : 'npm ci';
     const runner = deps.vitest ? 'vitest' : deps.jest ? 'jest' : null;
     return {
-      root, relRoot: rel, stack: 'node', packageManager: pm, testRunner: runner,
+      root, relRoot: rel, stack: 'node', packageManager: pm, testRunner: runner, testScript: scripts.test ?? null,
       prisma: Boolean(deps.prisma || deps['@prisma/client']),
       commands: {
         install,
@@ -113,42 +116,6 @@ export function fillEnvFile(appRoot, machine) {
 
 export function readMachineConfig(localDir) {
   return readJson(join(localDir, 'machine.json')) ?? {};
-}
-
-// Đếm test từ output của các runner phổ biến. Không đọc được thì trả null (không bịa số).
-export function parseTestCounts(text) {
-  const t = String(text);
-  let m = t.match(/Tests\s+(.+?)\(\s*(\d+)\s*\)/);          // vitest: "Tests  10 passed | 2 failed (12)"
-  if (m) {
-    const part = m[1];
-    const n = re => Number((part.match(re) ?? [])[1] ?? 0);
-    const passed = n(/(\d+)\s+passed/), failed = n(/(\d+)\s+failed/), skipped = n(/(\d+)\s+skipped/) + n(/(\d+)\s+todo/);
-    return { total: Number(m[2]), passed, failed, skipped };
-  }
-  m = t.match(/Tests:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+skipped,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total/);   // jest
-  if (m) return { total: Number(m[4]), failed: Number(m[1] ?? 0), skipped: Number(m[2] ?? 0), passed: Number(m[3] ?? 0) };
-  m = t.match(/=+\s+(?:(\d+)\s+failed,?\s*)?(?:(\d+)\s+passed,?\s*)?(?:(\d+)\s+skipped)?.*?in\s+[\d.]+s/);    // pytest
-  if (m && (m[1] || m[2])) {
-    const failed = Number(m[1] ?? 0), passed = Number(m[2] ?? 0), skipped = Number(m[3] ?? 0);
-    return { total: failed + passed + skipped, passed, failed, skipped };
-  }
-  m = t.match(/Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)/g);             // maven
-  if (m) {
-    const last = m[m.length - 1].match(/(\d+)\D+(\d+)\D+(\d+)\D+(\d+)/);
-    const total = Number(last[1]), failed = Number(last[2]) + Number(last[3]), skipped = Number(last[4]);
-    return { total, failed, skipped, passed: total - failed - skipped };
-  }
-  return null;
-}
-
-// Tên test fail (vitest/jest: dòng "FAIL  path > suite > name" hoặc "× name").
-export function failingTests(text) {
-  const out = new Set();
-  for (const line of String(text).split(/\r?\n/)) {
-    const m = line.match(/^\s*(?:FAIL|×|✕)\s+(.+?)(?:\s+\d+ms)?\s*$/);
-    if (m && !/Tests?\s+\d/.test(m[1])) out.add(m[1].trim().slice(0, 200));
-  }
-  return [...out].slice(0, 100);
 }
 
 const step = async (job, name, command, opts) => {
@@ -249,10 +216,11 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
   out.build = 'PASS';
   if (c.test_all) {
     const budget = Math.min(baselineMs, Math.max(30_000, deadlineAt - Date.now() - 60_000));
-    const test = await step(job, 'baseline-tests', c.test_all, { cwd, timeoutMs: budget, logFile: log('baseline-tests'), tailBytes: 64 * 1024 });
-    const counts = parseTestCounts(test.tail);
-    out.baseline = test.timedOut ? { status: 'TIMEOUT' } :
-      { status: test.code === 0 ? 'PASS' : 'FAIL', counts, failing: test.code === 0 ? [] : failingTests(test.tail) };
+    // Có reporter máy đọc thì baseline giữ trạng thái từng test (gate so test fail mới / test biến mất theo id).
+    job.progress.push('baseline-tests: running');
+    const run = await runTests(profile, 'test_all', { logFile: log('baseline-tests'), timeoutMs: budget });
+    job.progress.push(`baseline-tests: ${run.res.code === 0 ? 'ok' : `exit ${run.res.code}`} (${Math.round(run.res.ms / 1000)}s, ${run.source})`);
+    out.baseline = baselineOf(run);
   }
   const b = out.baseline;
   const note = !b ? 'no test command' : b.status === 'TIMEOUT' ? 'baseline tests timed out' :

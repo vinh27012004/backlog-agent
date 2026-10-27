@@ -51,3 +51,48 @@ Progress log cuối trận: 44 KB (ngân sách 230 KB).
 | L10 | Lượt GAME bị ngắt lúc 05:10Z (không PAUSED), Player tạo lượt RESUME_GAME | Mất vài phút đối chiếu | Chưa rõ nguyên nhân (operator hay Player); xem lại dashboard round |
 | L12 | Player không chạy Codex CLI 0.164.0 trên PATH (cài qua npm, chỉ có shim `codex.cmd`/`.ps1`) mà chạy `codex.exe` của Codex Desktop (`%LOCALAPPDATA%\OpenAI\Codex\bin\…`, 0.164.0-alpha.11.1). Cả hai bản đều áp `[features]` của TeamWorkspace | Desktop tự cập nhật thì hành vi có thể đổi mà không ai biết | **Đã** thêm mục `codex features` vào checker (chọn exe như Player, hoặc `--codex <exe>`), checklist ngày thi ([09 §10](09-dong-goi-va-van-hanh.md#10-checklist-ngày-thi)) |
 | L11 | Template có `status: "NOT_STARTED"`, gate chỉ chặn `DRAFT` | Có thể nộp sai trạng thái | **Đã** sửa (validator JSON Schema tự viết; 4 bài đã nộp khớp schema, template gốc thì không). Gate kiểm `submit.json` theo `submit.schema.json` của item và `status` khác giá trị ban đầu của template |
+
+## #2 · 26/10/2026 · tự luyện `DXG0OC4L` (Solova, cùng bộ item với #1)
+
+- Player 0.9.33, pack sau #1 (worktree, `capture_evidence`, tests-guard, Jev), `codex.exe` của Codex Desktop
+  0.164.0-alpha.11.1, model `gpt-6-luna` effort medium cho root và mọi subagent (TASK-01: `gpt-5.6-luna`).
+- Thời gian: PREPARE 08:32–08:34Z, GAME từ 08:34Z. **09:14:56Z tài khoản Codex hết hạn mức** (gói free, cửa sổ
+  30 ngày: 48% lúc vào trận, 100% sau 42 phút). Từ đó mọi lượt lỗi `usage_limit_exceeded`; Player gửi lại khung
+  RESUME khoảng 5 s một lần tới 09:24Z.
+
+### Kết quả
+
+| Item | Kết quả | Ghi chú |
+|---|---|---|
+| BUG-02 | SUBMITTED 08:49Z (PARTIAL) | Gate pass; TC-01/TC-03 FAIL (bấm nhầm làm VOID hoá đơn), TC-02 NOT_RUN |
+| BUG-01 | SUBMITTED 08:51Z (PARTIAL) | 3/3 kịch bản PASS nhưng vẫn ghi `status: PARTIAL` |
+| TASK-02 | SUBMITTED 09:09Z (DONE) | |
+| CR-01 (300 điểm) | Không nộp | Gate pass, reviewer đòi thêm test signed-out và ảnh "before"; hết hạn mức khi đang sửa |
+| TASK-01 | Không nộp | Fixer xong đáp án, gate vừa chạy thì hết hạn mức |
+
+### Token (47,3M input, 97,5% cache; 154K output)
+
+Tính lại được bằng `node tools/judge/usage.mjs D:\mtm\BUN\matches\DXG0OC4L` (27/10): khớp bảng dưới, ≈ 14,0 credit
+không kể guardian (`codex-auto-review` không có trong price card); guardian của root ra 82 lượt review.
+
+| Nhóm | Input | Ghi chú |
+|---|---|---|
+| Root | 19,3M (41%) | 220 lần gọi model, context tới 151K. 42 `wait_agent` 30 s, 12 `list_agents`, ~25 lần tự đọc thư mục evidence/answers của fixer, 23 tin nhắn cho fixer, tự đọc code CR-01 và lần git TASK-01. Không dùng `wait_for_update` |
+| Fixer | 19,4M (41%) | Chủ yếu là evidence: BUG-02 27 lần `capture_evidence` từng bước, CR-01 ~40 lần sửa script Playwright tự viết (tải CSV) |
+| Guardian (`auto_review`) | 8,0M (17%) | 88 lượt review cho tool MCP của root (`job_status` 16, `worktree` 14, `decide` 7…), 25 cho `capture_evidence`. Tool có `readOnlyHint` không bị review |
+| Reviewer | 0,6M (1%) | |
+
+### Lỗi và bài học
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L13 | Tài khoản Codex gói free hết hạn mức giữa trận | Mất CR-01 và TASK-01 | Luyện tập cần tài khoản có đủ hạn mức; hỏi BTC hạn mức ngày thi tính theo tài khoản nào |
+| L14 | Root polling: `wait_agent` 30 s, `list_agents`, tự đọc file của fixer, chỉ đạo fixer, tự kiểm lại code | 41% token | **Đã** sửa skill root: mục Root budget; `wait_agent` 180 s rồi `wait_for_update` 1 s; chờ job trong một `exec` (pragma `yield_time_ms`, `job_status` tới 110 s) |
+| L15 | Tool chỉ đọc không có `readOnlyHint` nên lần nào cũng qua guardian | 17% token | **Đã** gắn `readOnly` cho `match_state`, `read_item`, `wait_for_update`, `job_status`, `decide` (test kiểm đúng tập này). Còn `capture_evidence` và `worktree status` vẫn qua review. Cấu hình `default_tools_approval_mode = "approve"` (Codex nhận `auto|prompt|writes|approve`) bỏ được hết nhưng là vượt reviewer của Player: chờ BTC trả lời |
+| L16 | Evidence tốn nhiều nhất của fixer | CR-01 kéo 22 phút | **Đã** thêm ngân sách evidence vào skill root và luật chung của fixer: một `capture_evidence` mỗi kịch bản, tối đa 2 lần thử lại rồi `NOT_RUN`, tối đa một phần ba thời gian item; script riêng chỉ khi tool không làm được, đặt ở `.team-work/scratch/<ID>/`. Fixer không gửi tin nhắn tiến độ |
+| L17 | Jev `claims_supported` trả "không" ~0,9 cho cả item đã pass gate và được approve (gửi cả fix-result, Jev thấy ảnh chụp/MVS không có trong gate) | 7 lượt root vô ích, root bỏ qua kết quả | **Đã** sửa: chỉ gửi kết quả build/typecheck/test (`gateComparableClaims`) + `tests_added` + check gate kèm `counts`; không có gì để so thì luật code, không gọi Jev. Skill: gọi một lần mỗi gate job. **27/10: bỏ hẳn** `claims_supported` (gate tự chạy build/typecheck/`tests_added`/regression nên kết quả gate là đáp án) |
+| L18 | Item không có giới hạn thời gian mỗi lượt fixer, không có bước bỏ item rõ ràng | Item khó chạy tới deadline | **Một phần** (27/10): gate trả `signature` + `repeat`; cùng lỗi lần 3 thì `hint` bảo bỏ item và `decide next_action` không còn `retry`; skill root có bước 9 bỏ item (`BACKLOG_STATUS FAILED`, helper ghi `endedAt`). Giới hạn thời gian mỗi lượt fixer vẫn chưa có |
+| L19 | BUG-01 nộp `status: PARTIAL` dù 3/3 kịch bản PASS | Có thể mất điểm | **Đã** sửa (27/10): check `answer` cảnh báo khi mọi kịch bản PASS mà `PARTIAL`, chặn `DONE` khi có kịch bản không PASS và chặn `PASS` thiếu evidence mà MVS ghi; `record_verification` đếm từ `testResults` |
+| L20 | Jev: `difficulty` lần nào cũng dưới ngưỡng 0,7; `injection` TASK-01 = true ở 0,55 (ngưỡng 0,5), nhiều khả năng báo nhầm | Phần lớn triage rơi về luật code | **Một phần** (27/10): `decisions.ndjson` ghi thêm `rule` và câu trả lời thô `jev` (cả khi dưới ngưỡng) để chỉnh ngưỡng hoặc tắt điểm này sau trận tập tới; câu hỏi và ngưỡng chưa đổi |
+| L21 | Reviewer xếp `high` cho việc đòi thêm test signed-out và ảnh "before" ở CR-01 (300 điểm), ngoài MVS | Thêm một lượt fixer, hết hạn mức trước khi nộp | **Đã** sửa (27/10): reviewer chấm theo checklist R1–R9; `high` chỉ khi phá một kịch bản MVS/tiêu chí cụ thể hoặc vi phạm R2/R6/R7/R8, đòi thêm test/evidence ngoài MVS tối đa `medium`; mọi issue phải có vị trí |
+| L22 | BUG-02: bấm nhầm làm VOID hoá đơn, TC-01/TC-03 chạy tiếp trên dữ liệu đã hỏng; các worktree còn dùng chung một database dev nên seed của item này (CR-01 xoá mọi hoá đơn) phá được evidence của item khác | BUG-02 nộp PARTIAL | **Đã** sửa (27/10): tool `app_data` (khoá database dùng chung); luật: seed rồi chạy kịch bản dữ liệu theo thứ tự MVS trong một lượt, hỏng thì seed lại và làm lại từ đầu, không đi tiếp trên dữ liệu hỏng. Gate thêm `code-scan` (cảnh báo TODO, debug, SQL ghép chuỗi, secret, file rác như `*.cr01-backup` của CR-01) |

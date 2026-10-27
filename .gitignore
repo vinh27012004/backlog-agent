@@ -19,3 +19,6 @@ skills-lock.json
 
 # phần mềm của BTC (88 MB, có .exe, NDA): chỉ giữ cục bộ
 vendor/mtm-player-*/
+
+# harness mẫu của dự án khác (có tên khách hàng): chỉ để tham khảo, không commit
+harness/

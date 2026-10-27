@@ -25,7 +25,7 @@ Codex nên **chỉ dùng lúc phát triển**, không bao giờ nằm trong pack
 | `http.mjs` | Redirect sang origin lạ bị chặn; cookie jar; giới hạn kích thước; header `Date` → skew; `networkActivity` không có query |
 | `match-page.mjs` | Parse fixture HTML/JSON thật (sau Spike S2); trang lệch định danh; không thấy Match UUID |
 | `git.mjs` | Push không có `--force`; ref đích đúng; path commit ngoài `<folder>/` bị chặn; xác minh `ls-remote` |
-| `gate.mjs`, `profile.mjs`, `log-condenser.mjs` | Port case từ `tests/test_gate.py` và phần profile/logs trong `tests/test_agents.py` |
+| `gate.mjs`, `profile.mjs`, `log-condenser.mjs` | Port case từ `tests/test_gate.py` và phần profile/logs trong `tests/test_agents.py`. Bản đã dựng: `gate.test.mjs`, `logs.test.mjs`, `testreport.test.mjs` (định dạng JSON thật của vitest 3.2, JUnit pytest/maven), `gate-runs.test.mjs` (runner giả ghi JSON kiểu vitest, repo git tạm, probe thật: test flaky, test biến mất, `weak_test`, fail-before) |
 | `scheduler.mjs` | PI trước; slack của deadline; bỏ item không kịp; ngưỡng cuối trận |
 | `redact.mjs` | Secret không bao giờ xuất hiện trong kết quả tool, lỗi, log |
 
@@ -143,6 +143,19 @@ Violations) và `/spectator/<match-id>`. Không gửi Chat trừ khi đang thử
 | Suspected Violations | |
 | Số lần restart root | |
 | Sự cố và việc cần sửa | |
+| Gate / reviewer so với judge offline (false green, false red) | |
+
+**Chấm lại offline** (mục 12, ý tưởng `judge-phase` + `quality_matrix` của harness mẫu): trong Claude Code chạy
+`/judge-practice D:\mtm\BUN\matches\<matchId>` (skill `.claude/skills/judge-practice/`). Không tốn hạn mức Codex.
+1. `node tools/judge/collect.mjs <checkout>` gom mỗi item đã Start Work vào `runs/judge/<matchId>/<ID>/`: đề, MVS,
+   template, bài nộp, diff code (commit `<ID>:` trên checkout chính, hoặc worktree nếu chưa tích hợp), evidence,
+   fix-result. Phán quyết gate / reviewer / grader để riêng ở `_verdicts/`.
+2. Claude chấm từng item theo `tools/judge/rubric.md` (J1–J10, mức H/M, `pass`/`fail`/`unjudgeable`, mỗi `fail`
+   có vị trí) **trước khi** đọc `_verdicts/`, ghi `judge.json`.
+3. `node tools/judge/score.mjs runs/judge/<matchId>` so với gate và reviewer, ghi `report.md`: gate pass mà judge thấy
+   lỗi H là false green, gate fail mà judge thấy đạt là false red. Mỗi false green là một luật gate/reviewer cần thêm.
+
+Checkout của trận chỉ được đọc. Test: `tests/pack/judge.test.mjs`.
 
 ## 9. Kiểm thử hồi phục trên môi trường thật (giới hạn)
 

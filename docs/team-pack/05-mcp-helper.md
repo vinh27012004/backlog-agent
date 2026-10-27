@@ -39,10 +39,13 @@ không tự `git push`.
   đang chờ (`wait_for_update`).
 - `tools/list` → mỗi tool có `name`, `description` (ngắn, tiếng Anh), `inputSchema` (object,
   `additionalProperties: false`), `annotations` (`readOnlyHint` cho tool chỉ đọc; xem Spike S3).
+  Tool có `readOnlyHint` thì Codex không gửi cho `auto_review`; tool không có thì mỗi lời gọi tốn một lượt
+  guardian (Practice #2: 88 lượt cho root, khoảng 17% token cả trận). Chỉ đọc: `match_state`, `read_item`,
+  `wait_for_update`, `job_status`, `detect_profile`, `decide` (chỉ ghi sổ nội bộ), `company_tools`.
 - `tools/call` → `{content: [{type: "text", text: "<JSON gọn>"}], structuredContent: {...kết quả..., networkActivity?: [...]}, isError}`.
 - Method lạ → lỗi `-32601`; JSON hỏng → `-32700`; tham số sai → `-32602`.
-- Giới hạn: request ≤ 1 MB; text kết quả ≤ 64 KB (cắt và trỏ tới file nếu dài); **mỗi lời gọi ≤ 55 s**.
-  Việc lâu hơn chạy thành **job** (§5.15).
+- Giới hạn: request ≤ 1 MB; text kết quả ≤ 64 KB (cắt và trỏ tới file nếu dài); **mỗi lời gọi ≤ 55 s**,
+  trừ `job_status` (≤ 110 s, dưới `tool_timeout_sec = 120`). Việc lâu hơn chạy thành **job** (§5.15).
 - `structuredContent.networkActivity`: liệt kê mọi request HTTP helper đã gửi kể từ lần trả kết quả
   trước, tối đa 100 mục, dạng `{url, method, httpStatus}` (url không có query). Player dùng mục này cho
   bảng Network & API ([02 §9](02-hop-dong-player.md#9-quan-sát-của-player-đội-cần-biết-để-không-bị-gắn-cờ)).
@@ -63,18 +66,24 @@ không tự `git push`.
 ```jsonc
 {
   "version": 1, "matchId": "ABCD1234", "playerSessionId": "...",
-  "preparation": {"revision": "<sha>", "profile": {...}, "baselineFailing": ["test id", "..."]},
+  "preparation": {"revision": "<sha>", "profile": {...}, "baselineFailing": ["test id", "..."],
+    "jobs": [{"id": "job-1-setup_environment", "kind": "setup_environment", "state": "done", "startedAt": "...", "ms": 84000}]},
   "items": {
     "BUG-01": {
       "startedAt": "...", "materials": ".team-work/items/BUG-01/",
       "attempts": 1, "lastSignature": "NullPointerException@OrderService.total",
       "worktree": ".team-work/wt/BUG-01", "publishedRevision": "<sha>",
       "submitIntent": {"n": 0, "clientSubmissionId": "<uuid>", "gitRevision": "<sha>", "body": "<chuỗi JSON đã gửi>"},
-      "receipt": {"id": "<submission.id>", "receivedAt": "..."}
+      "receipt": {"id": "<submission.id>", "receivedAt": "..."},
+      "jobs": [{"id": "job-4-run_gate", "kind": "run_gate", "state": "done", "startedAt": "...", "ms": 155000}],
+      "endedAt": "...", "outcome": "SUBMITTED"
     }
   }
 }
 ```
+- `jobs` (30 job gần nhất) và `endedAt` + `outcome` chỉ để đo sau trận (`tools/judge/usage.mjs`). `outcome`
+  ghi lần đầu item kết thúc: `SUBMITTED`, `ALREADY_SUBMITTED`, `FAILED` (root ghi `BACKLOG_STATUS FAILED`, tức bỏ
+  item) hoặc `CLOSED` (item bị đóng trước khi nộp).
 - `checkoutRoot/.team-work/` gồm `journal.json`, `items/<ID>/` (vật liệu Start Work), `wt/<ID>/`
   (worktree), `results/` (kết quả subagent), `logs/` (log lệnh của gate). Helper thêm `.team-work/` vào
   `checkoutRoot/.git/info/exclude` lúc chuẩn bị. **Không** đặt tên `.mtm` (T11).
@@ -88,7 +97,19 @@ không tự `git push`.
 > `tests-guard`, kiểm `submit.json` theo `submit.schema.json`, `baselineFailures`, `allowTestChange`), `record_verification`,
 > `commit_and_push`, `submit_work`, `report_progress`, `wait_for_update`, `job_status`, `detect_profile` (A),
 > `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9).
-> `decide` (Jev, mới: `pack/src/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log`. Code: `pack/src/tools.mjs`.
+> `decide` (Jev, mới: `pack/src/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log` (chữ ký lỗi và rút log đã có
+> bên trong gate, `pack/src/logs.mjs`). Code: `pack/src/tools.mjs`.
+>
+> **27/10 (ý tưởng từ harness mẫu, mục 1–3):** hard gate (integrate và `commit_and_push` chỉ nhận đúng nội dung gate
+> đã kiểm, §5.9, §5.12), gate kiểm `testResults` theo template/MVS/status (§5.10), `record_verification` đếm từ
+> `submit.json` (§5.11), gate trả `signature` + `repeat`, lần 3 thì `next_action` thôi đề xuất retry.
+> **Cùng ngày, mục 5–7, 9, 10:** check `test-quality` (`weak_test`), kết quả test máy đọc theo id, chạy lại test
+> flaky, `tests-kept`, `fail-before` trên worktree probe (§5.10).
+> **Mục 13:** `capture_evidence` có bước `route` / `unroute` (CDP `Fetch`): trình duyệt tự trả lời request khớp `url`
+> (chuỗi con hoặc mẫu `*`, lọc `method`) bằng `status` + `body`, `abort` (`TimedOut`, `Failed`, `InternetDisconnected`…)
+> hoặc làm chậm `delayMs` rồi cho đi tiếp; `times` giới hạn số lần, luật mới nhất thắng. Dùng cho MVS kiểu "khi API lỗi
+> / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
+> `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
 
 Ký hiệu: **R** = chỉ root (cần đã configure); **A** = mọi agent. "Job" = trả `jobId` ngay nếu chưa xong
 trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) hoặc `job_status`.
@@ -112,6 +133,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.15 | `wait_for_update` | R | mọi | Chặn ≤ 55 s tới khi có thay đổi |
 | 5.16 | `job_status` | R | mọi | Kết quả job |
 | 5.17 | `detect_profile` | A | mọi | Nhận diện stack và lệnh build/test cho một path |
+| 5.20 | `app_data` | A | mọi | Khoá database dùng chung của app khi seed / tạo dữ liệu kịch bản (mục 8) |
 | 5.18 | `condense_log` | A | mọi | Rút gọn log lỗi, trả chữ ký |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 
@@ -208,6 +230,10 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
   `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
   `{integrated, headRevision, baseChanged}`.
+  - **Hard gate:** trước khi commit, helper tính tree của `<folder>/` trong worktree (trừ `answers/<ID>/`) và so
+    với `journal.items[ID].lastGate.tree`. Chưa có gate nào build + test pass → `GATE_REQUIRED`; nội dung khác
+    → `GATE_STALE` kèm danh sách file khác. Chặn trường hợp code sửa sau gate (fixer chạy tiếp, reviewer lỡ ghi,
+    root vá) lọt vào bản nộp mà không ai kiểm.
 - `remove {backlogItemKey}`: `git worktree remove --force` + xoá branch cục bộ `team/<ID>`.
 - Branch `team/<ID>` **chỉ** tồn tại cục bộ, không bao giờ push.
 
@@ -226,31 +252,84 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
   5. `test_all`, so với `baselineFailing` (chỉ tính lỗi **mới**) → `regression`.
   6. Lệnh MVS nếu có → `mvs_fail`.
   7. Kiểm answer: `submit.json` là JSON hợp lệ, giữ đủ key của template, mọi chuỗi `evidence/<file>` đều
-     tồn tại.
-- Hết giờ → `timeout`. Log lệnh: `.team-work/logs/<ID>-gate-<n>-<check>.log`. Lỗi được chạy qua
-  `condense_log` để có `signature`.
-- **Output** (`GateReport`): `{passed, failKind, signature, checks: [{name, status, ms, log, condensed}], regression: {executed, passed, failed, skipped}}`.
+     tồn tại. **Bản đã dựng thêm** (rubric T1/T5 của harness mẫu, Practice #2 L19): mỗi kịch bản trong
+     `testResults` của template có đúng một kết quả; kịch bản `PASS` phải liệt kê đủ file mà MVS ghi ở dòng
+     "Required evidence" của mục `## <ID>`; `DONE` mà có kịch bản không `PASS` → lỗi; mọi kịch bản `PASS` mà
+     `PARTIAL` → cảnh báo (check `answer` ở trạng thái `warn`, không chặn).
+- **Thứ tự check của bản đã dựng** (27/10, mục 5–10 lấy từ harness mẫu; tên check trong `checks[]`):
+  `diff` → `forbidden` → `tests-guard` → `test-quality` → `code-scan` → `typecheck`/`build` → `tests-added` →
+  `regression` → `tests-kept` → (tính `tree`) → `fail-before` → `answer`. MVS chưa có lệnh chạy nên không có `mvs_fail`.
+  - `code-scan` (mục 4, rubric dev V2/V3 và `security_rules_core.py` của harness; chỉ cảnh báo, chỉ dòng thêm, tối đa
+    15): `TODO`/`FIXME` viết hoa, hàm "not implemented", debug output (`console.log`, `debugger`,
+    `System.out.println`; bỏ qua test và thư mục `prisma/`, `scripts/`, `seeds/`, `migrations/`…), SQL viết hoa ghép
+    bằng `+`/`${}` hay `$queryRawUnsafe` (template có tag như `` $queryRaw`...` `` thì bỏ qua), credential viết cứng (trừ
+    dòng đọc env hay placeholder), chuỗi trông như key thật (`sk-`, `AKIA`, `ghp_`, private key), file rác mới trong
+    thư mục trận (`*.bak`, `*-backup`, `*.orig`, `capture-*.mjs`, `scratch-*.ts`…). Chạy trên diff thật của Practice
+    #2: không cảnh báo gì cho ba item đã nộp, bắt đúng hai file rác ở worktree CR-01.
+  - `test-quality` (rubric Q2/T4 và `validate_test_blackbox.py` của harness): trên dòng thêm của file test. Chặn
+    (`weak_test`): test mới không có assertion, assertion không thể fail (`expect(x).toBe(x)`, `assertEquals(a, a)`,
+    `assertTrue(true)`...). Cảnh báo: `vi.mock`/`jest.mock` đúng file sản phẩm đang sửa, `catch {}` hay
+    `except: pass` trong test, assertion cụ thể bị thay bằng `toBeDefined`/`toBeTruthy`/`assertNotNull`, thêm
+    retry hoặc timeout dài hơn (cả trong `vitest/jest/playwright.config`). Chạy trên 6 file test thật của Solova:
+    không báo nhầm.
+  - Kết quả test máy đọc (`pack/src/testreport.mjs`): vitest `--reporter=default --reporter=json
+    --outputFile.json=<log>.json`, jest `--json --outputFile`, pytest `--junitxml`, phpunit `--log-junit`,
+    maven/gradle đọc JUnit XML mới ghi trong `target/surefire-reports` / `build/test-results/test`. Với
+    `test_all` của node chỉ thêm reporter khi script `test` kết thúc bằng chính runner (`vitest run`, `dotenv ...
+    -- jest`); script ghép kiểu `vitest run && node x.js` thì đọc log như cũ. Id test =
+    `<file> > <suite> > <test>` (giống dòng FAIL của vitest), pytest dùng node id, java `<pkg>/<Class>.java > <test>`.
+    Baseline lúc PREPARE lưu cả trạng thái từng test (`baseline.tests`, tối đa 3000). Đã chạy thật trên Solova
+    (`pnpm test` chuyển reporter tới vitest 3.2): 12 test, id đúng cả ký tự `§` mà log console làm vỡ.
+  - `tests-added` và `regression`: test fail được chạy lại một lần qua `test_one` (node theo file, python theo node
+    id, java `Class#method`); lần hai pass thì là flaky, check ở `warn`, không thành `original_still_failing` /
+    `regression`.
+  - `tests-kept` (`test_case_disappeared` của harness): test chạy ở baseline mà nay không còn hoặc bị skip →
+    `forbidden_change` (chữ ký `tests-removed:<id>`), trừ khi có `allowTestChange`; không có id thì so tổng số test.
+    Test đã được bỏ có lý do ở item trước nằm trong `journal.preparation.acceptedRemovals`, gate sau không tính lại.
+  - `fail-before` (chỉ gate ở worktree, cần `testsAdded`): chép file test của item vào worktree **probe**
+    (`.team-work/wt/_probe`, detached ở base của item, cài dependency một lần, chuẩn bị nền khi tạo worktree item đầu
+    tiên, dùng tuần tự, dọn bằng `reset --hard` + `clean -fd`) và chạy `test_one` trên code chưa sửa. Test mới (có
+    trong lần chạy với bản sửa, không có trong baseline) mà vẫn pass → `warn`. Probe chưa sẵn sàng sau 90 s thì
+    `skipped`. Không chặn: root gửi lại cho fixer (BUG/PI), reviewer nhận trong `<gate_findings>`.
+  - Mọi check `warn` gom vào `findings` của kết quả để root đưa cho reviewer.
+- Build và test pass (kể cả khi chỉ answer sai) thì `codePassed: true` và `tree` = SHA tree của `<folder>/` trừ
+  `answers/<ID>/` (index tạm `GIT_INDEX_FILE`, `git add -A` + `git write-tree`), tính sau khi lệnh của gate chạy
+  xong. Đây là nội dung mà integrate và `commit_and_push` đòi khớp.
+- Hết giờ → `timeout`. Log lệnh: `.team-work/logs/<ID>-gate-<n>-<check>.log`. Check fail có `tail` là log đã rút
+  gọn (`condense`, ≤ 15–20 dòng đáng chú ý thay cho đuôi log).
+- **Chữ ký lỗi** (port `orchestrator/logs.py` sang `pack/src/logs.mjs`): `compile:<file>:<msg>`,
+  `<Exception>@<frame dự án>` hoặc `<Exception>@test:<tên>`, không số dòng, không path worktree; regression
+  dùng tên các test mới fail (`regression:<a> | <b>`), thay đổi cấm dùng `forbidden:<path>`, hết giờ
+  `timeout:<check>`; `answer_invalid` không có chữ ký (sửa answer không cần lượt fixer). Helper giữ
+  `gateHistory` 12 lần gần nhất trong journal và trả `repeat` = số lần item fail với đúng chữ ký đó, kèm `hint`
+  khi lặp lần 2 (đổi giả thuyết) và lần 3 (bỏ item; `decide next_action` không còn `retry`).
+- **Output** (bản đã dựng): `{passed, failKind, signature, repeat?, hint?, codePassed?, tree?, detail?, findings?, removedTests?, checks: [{name, status, …, source?, tail?, problems?, warnings?}], regression: {total, passed, failed, skipped}, baselineFailures, testsAdded, where}`.
 
 ### 5.11 `record_verification`
 
-- **Input** (bản đã dựng): `{backlogItemKey, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped}`.
-  Root báo số kịch bản đã thật sự chạy (từ evidence của fixer và tự kiểm). `required` = số kịch bản bắt buộc
+- **Input** (bản đã dựng): `{backlogItemKey, gateJobId, scenariosPassed?, scenariosFailed?, scenariosSkipped?}`.
+  Số kịch bản lấy từ `testResults` của `answers/<ID>/submit.json` ở nơi gate đó chạy (worktree hoặc checkout
+  chính): `PASS` = đạt, `FAIL` = fail, còn lại = chưa chạy. Ba tham số đếm chỉ dùng khi answer không có
+  `testResults`; truyền mà khác số trong file thì kết quả có `note`. `required` = số kịch bản bắt buộc
   khai ở `start_work` + 1 (gate). `PASSED` chỉ khi mọi kịch bản bắt buộc pass **và** gate pass; kịch bản chưa chạy
   không bao giờ được tính là đạt (Practice #1, L4).
 - Root **không** tự ghi `BACKLOG_TESTS` bằng `report_progress`; đây là chỗ duy nhất, để số luôn là số thật.
 
 ### 5.12 `commit_and_push`
 
-1. Kiểm trên checkout chính: `answers/<ID>/submit.json` hợp lệ; evidence tham chiếu đều có; mọi file thay
-   đổi nằm dưới `<folder>/`; không có `<folder>/evidence/`, `<folder>/challenge/evidence/`; không file
-   > 5 MB; không có file trông như secret (`.env`, `*.pem`, token).
+1. Kiểm trên checkout chính: `answers/<ID>/submit.json` hợp lệ (cùng bộ kiểm answer của gate, §5.10); evidence
+   tham chiếu đều có; mọi file thay đổi nằm dưới `<folder>/`; không có `<folder>/evidence/`,
+   `<folder>/challenge/evidence/`; không file > 5 MB; không có file trông như secret (`.env`, `*.pem`, token).
+   **Hard gate** như integrate (§5.9): tree hiện tại của checkout chính phải bằng `lastGate.tree`. Base không đổi
+   thì cherry-pick cho đúng nội dung worktree đã gate; main đã có item khác thì tree khác → `GATE_STALE`, phải
+   `run_gate` với `where: main`. Gọi lại khi HEAD vẫn là `publishedRevision` và không có gì mới thì bỏ qua bước này.
 2. `git add -- <folder>` → `git commit -m "<ID>: <tóm tắt>"`.
 3. `git push origin HEAD:refs/heads/<branch>` (không `--force`, env §8). Bị từ chối non-fast-forward thì
    `git fetch origin <branch>` + `git rebase origin/<branch>` (cục bộ) + build nhanh + push lại, tối đa 2
    lần.
 4. Xác minh `git ls-remote origin refs/heads/<branch>` == `HEAD` → ghi `journal.publishedRevision` →
    (tuỳ chọn) `BACKLOG_STATUS COMPLETED`.
-- **Output**: `{revision}` (SHA đầy đủ). Lỗi xác thực → blocker `GIT_AUTHENTICATION_REQUIRED`.
+- **Output**: `{revision, branch, answerWarnings?}` (SHA đầy đủ). Lỗi xác thực → blocker `GIT_AUTHENTICATION_REQUIRED`.
 
 ### 5.13 `submit_work`
 
@@ -285,7 +364,8 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
 
 ### 5.16 `job_status`
 
-`{jobId}` → `{state: running|done|failed, result?}`.
+`{jobId, waitSeconds ≤ 110}` → `{state: running|done|failed, result?}`. Root chờ cả job trong một `exec`
+(pragma `yield_time_ms`, vòng `job_status`), không gọi lại từng 30 s (skill `team-orchestrator`, mục Waiting).
 
 ### 5.17 `detect_profile` (A)
 
@@ -295,7 +375,8 @@ Không trạng thái, không mạng.
 ### 5.18 `condense_log` (A)
 
 Port `orchestrator/logs.py`: `{path | text, maxLines}` → `{signature, lines}`. Chữ ký không chứa số dòng
-và path worktree, nên giữ nguyên qua các lần thử.
+và path worktree, nên giữ nguyên qua các lần thử. Bản đã dựng: phần port nằm ở `pack/src/logs.mjs` và chỉ gate
+dùng (§5.10); chưa mở thành tool riêng vì chưa agent nào cần.
 
 ## 6. Poller nền
 
@@ -327,7 +408,8 @@ và path worktree, nên giữ nguyên qua các lần thử.
   Xác thực dùng Git Credential Manager mà operator đã đăng nhập sẵn.
 - Danh sách lệnh helper dùng: `ls-remote`, `clone`, `fetch`, `rev-parse`, `status`, `diff`, `add`,
   `commit`, `cherry-pick`, `rebase`, `worktree`, `push` (không force), `show`, `cat-file`,
-  `config --local user.*`. Mọi lệnh khác bị từ chối.
+  `config --local user.*`, `write-tree` (tree của hard gate, chỉ chạy trên index tạm `GIT_INDEX_FILE`), `clean`
+  (chỉ trong worktree probe, sau khi kiểm thư mục có file `.git` riêng). Mọi lệnh khác bị từ chối.
 - Trước mỗi `push`: remote `origin` vẫn trỏ đúng `repository.url`; ref đích đúng `refs/heads/<branch>`.
 
 ## 9. Dữ liệu từ item là untrusted
@@ -362,7 +444,9 @@ pack/src/
   git.mjs                       # wrapper git an toàn, worktree, commit, push, verify
   profile.mjs                   # port profile.py
   gate.mjs                      # port gate.py
-  log-condenser.mjs             # port logs.py
+  logs.mjs                      # port logs.py (chữ ký lỗi, rút log)
+  testreport.mjs                # chạy test với reporter JSON/JUnit, id từng test, baseline, test cần chạy lại
+  probe.mjs                     # worktree probe ở base cho check fail-before
   jev.mjs decisions.mjs         # port jev.py + decisions.py (D9)
   jobs.mjs                      # job nền (spawn, timeout, kill cây tiến trình con)
   scheduler.mjs                 # thứ tự gợi ý (07 §4)
@@ -376,17 +460,43 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 `NOT_CONFIGURED`, `INVALID_FRAME`, `NEEDS_PREPARATION_FRAME`, `SESSION_MISMATCH`, `PATH_OUTSIDE_WORKSPACE`,
 `API_KEY_INTEGRITY_MISMATCH`, `ORIGIN_NOT_ALLOWED`, `MATCH_IDENTITY_MISMATCH`, `MATCH_UUID_NOT_FOUND`,
 `LOGIN_FAILED`, `GIT_AUTH_FAILED`, `CHECKOUT_MISMATCH`, `ITEM_NOT_OPEN`, `TOO_LATE`, `WORKTREE_CONFLICT`,
-`GATE_FAILED`, `ANSWER_INVALID`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
+`GATE_FAILED`, `GATE_REQUIRED`, `GATE_STALE`, `ANSWER_INVALID`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
 `SUBMIT_REJECTED`, `ALREADY_SUBMITTED_NO_RECEIPT`, `EVENT_INVALID`, `LOG_BUDGET_EXCEEDED`,
 `ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`.
 
+### 5.20 `app_data` (A, mới, mục 8)
+
+- Mọi worktree chạy app trên cùng một database dev (chỉ `TEST_DATABASE_URL` có hậu tố riêng theo item), mà seed của
+  BTC xoá rồi tạo lại dữ liệu (seed CR-01 "deletes every invoice"): hai item cùng seed hay tạo dữ liệu qua app thì
+  làm hỏng evidence của nhau.
+- `{action: "lock"|"unlock"|"status", backlogItemKey, minutes? (1–30, mặc định 15), waitSeconds? (≤ 50)}`. Khoá là file
+  `team-sdlc-pack/local/app-data.lock.json` tạo độc quyền (subagent có thể gọi helper ở tiến trình khác), tự hết
+  hạn, chủ khoá gọi lại để gia hạn. Đang có item khác giữ thì trả `{locked: false, heldBy, until, hint}`.
+- `readOnlyHint` (như `decide`): chỉ ghi file khoá nội bộ; agent gọi lặp khi chờ, qua `auto_review` mỗi lần thì tốn token.
+- Luật đi kèm (luật chung của subagent, skill root): giữ khoá từ lúc seed tới khi ghi xong report/evidence đọc dữ
+  liệu đó; seed rồi chạy các kịch bản dữ liệu **theo thứ tự MVS trong một lượt** (BUG-02: TC-02 thanh toán cho hoá
+  đơn của TC-01, report đọc hoá đơn mới nhất sau cả ba case, nên **không** seed lại trước từng kịch bản); dữ liệu
+  hỏng giữa chừng (bấm nhầm, giá trị sai, bản ghi VOID) thì dừng, seed lại nếu script ghi là chạy lại an toàn, và làm
+  lại từ kịch bản dữ liệu đầu tiên.
+
 ### 5.19 `decide` (R, mới, D9)
 
-- **Input**: `{point: "triage"|"route"|"claims_supported"|"root_cause_confirmed"|"next_action", backlogItemKey, context?}`.
-  Helper tự lấy dữ liệu cần thiết (đề, kết quả worker, báo cáo gate, số lần thử) rồi dựng câu hỏi
-  (`noul` / `choice` / `score`) như `orchestrator/decisions.py`.
-- **Hành vi**: gọi Jev (`src/jev.mjs`, `fetch`, timeout 5 s, thử lại 1 lần). Lỗi hoặc dưới ngưỡng
-  (`config/jev.json`) thì dùng luật code. Giới hạn cứng nằm trong code ([08 §8](08-guardrails.md#8-jev-typesafe)).
-- **Output**: `{point, answer, source: "jev"|"rule", confidence?, reason}`; ghi vào `.team-work/decisions.ndjson`.
+- **Input**: `{point: "triage"|"route"|"root_cause_confirmed"|"next_action", backlogItemKey, context?}`.
+  Helper tự lấy dữ liệu cần thiết (đề, kết quả worker, số lần thử) rồi dựng câu hỏi
+  (`noul` / `choice` / `score`) như `orchestrator/decisions.py`. `start_work` đã chạy triage + route trong một
+  request (`Decider.intake`), root không gọi lại.
+- **Hành vi**: gọi Jev (`src/jev.mjs`, `fetch`, timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút,
+  trong lúc nghỉ dùng luật code ngay). Lỗi hoặc dưới ngưỡng (`config/jev.json`) thì dùng luật code.
+- **Luật cứng là sàn hoặc điều kiện AND**, Jev không ghi đè được ([08 §8](08-guardrails.md#8-jev-typesafe)): PI luôn
+  `critical`; PI, CR và item `hard` luôn `strong`; chỉ PI (luôn) và item `easy` (khi Jev nói không cần) mới bỏ reviewer;
+  `root_cause_confirmed` cần `root_cause`, `confidence` ≥ 0.7 và một verification pass, Jev chỉ phủ quyết;
+  `next_action` chỉ đưa lựa chọn hợp lệ; regex injection chạy trên toàn bộ đề và thắng câu "không" của Jev.
+- Jev nhận đề cắt đầu + cuối (mô tả 1.400 + 600 ký tự, hướng dẫn Start Work 600 + 400), để câu lệnh cài ở cuối đề
+  vẫn tới được Jev.
+- **Output**: `{point, backlogItemKey, jev: status, decisions}`; mỗi quyết định có `value`, `source: "jev"|"rule"`,
+  `confidence`, `rule` (câu trả lời của luật code, luôn tính), `jev` (câu trả lời thô của Jev, kể cả khi dưới ngưỡng),
+  `reason`. Ghi vào `.team-work/decisions.ndjson` để đo tỉ lệ bất đồng và chỉnh ngưỡng sau trận.
 - `enabled = false` hoặc thiếu key → luôn `source: "rule"`.
+- `claims_supported` đã bỏ (27/10): gate tự chạy build, typecheck, `tests_added` và regression nên kết quả gate là
+  đáp án; Jev ở đó chỉ thêm rủi ro (L17).
 - Tool này làm `suggestedOrder` và `match_state` tốt hơn (độ khó, mức độ) nhưng root vẫn quyết định cuối.

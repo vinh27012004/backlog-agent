@@ -124,3 +124,57 @@ test('capture_evidence is callable through MCP without configure_session', { ski
     server.close();
   }
 });
+
+// Mục 13: server luôn trả 200, nhưng MVS đòi ảnh màn hình khi API xuất lỗi / quá hạn. route để trình duyệt tự trả lời.
+const EXPORT = page(`<button id="export">Export CSV</button><div id="out"></div>
+<script>
+document.getElementById('export').addEventListener('click', async () => {
+  const out = document.getElementById('out');
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 4000);
+    const r = await fetch('/api/invoices/export', { method: 'POST', signal: ctrl.signal }); clearTimeout(t);
+    out.textContent = r.ok ? 'Exported ' + (await r.text()) : 'Export failed (' + r.status + '), please retry';
+  } catch (e) { out.textContent = 'Network problem, please retry'; }
+});
+</script>`);
+
+test('capture_evidence route simulates a failing or slow server without touching it', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  let hits = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/export') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(EXPORT); }
+    if (req.url === '/api/invoices/export') { hits++; res.writeHead(200); return res.end('3 rows'); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const shot = join(tw, 'matches', 'M1', 'M1', 'answers', 'CR-01', 'evidence', 'tc-03-export-error.png');
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'goto', url: `${url}/export` },
+      { action: 'route', url: '/api/invoices/export', method: 'POST', status: 500, body: { error: 'boom' }, times: 1 },
+      { action: 'click', text: 'Export CSV' },
+      { action: 'waitFor', text: 'Export failed (500)' },
+      { action: 'screenshot', path: shot },
+      // times: 1 đã dùng hết: lần bấm sau tới server thật.
+      { action: 'click', text: 'Export CSV' },
+      { action: 'waitFor', text: 'Exported 3 rows' },
+      { action: 'route', url: '*/api/invoices/*', abort: 'TimedOut' },
+      { action: 'click', text: 'Export CSV' },
+      { action: 'waitFor', text: 'Network problem' },
+      { action: 'unroute' },
+      { action: 'route', url: '/api/invoices/export', delayMs: 8000 },
+      { action: 'click', text: 'Export CSV' },
+      { action: 'waitFor', text: 'Network problem' }
+    ] });
+    assert.equal(res.screenshots[0].path, shot);
+    assert.deepEqual(res.routed.map(r => [r.step, r.status ?? r.abort ?? `delay ${r.delayMs}`]), [[2, 500], [8, 'TimedOut'], [12, 'delay 8000']]);
+    assert.match(res.note, /simulated by the browser/);
+    // Server chỉ thấy lần bấm thật: 500 và TimedOut do trình duyệt trả, request bị làm chậm thì trang tự huỷ ở 4 s.
+    assert.equal(hits, 1);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'route', url: '/api', status: 700 }] }), /status must be 100-599/);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'route', url: '/api' }] }), /give status, abort or delayMs/);
+  } finally {
+    server.close();
+  }
+});

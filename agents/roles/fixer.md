@@ -24,6 +24,10 @@ then the tests of the modules you touched. In a monorepo, work only in the stack
 List each new or changed test in `tests_added` exactly as you would substitute it for `{target}` in
 `test_one` (the orchestrator runs that command with it): a dotted module path for unittest, a file path
 for pytest/jest, `Class#method` for Maven. Run that exact command once yourself before reporting.
+The gate also runs those tests on the unfixed code: a new test that passes there does not reproduce the
+problem and is reported back. A new test without an assertion, or with one that cannot fail
+(`expect(x).toBe(x)`), fails the gate as `weak_test`. Never rename or drop an existing test: a test that ran
+at baseline and no longer runs fails the gate like a deleted one.
 
 Write `summary` for the grader: what was wrong or requested, what you changed (files, behaviour),
 how it was verified. Three to six sentences, no marketing language.

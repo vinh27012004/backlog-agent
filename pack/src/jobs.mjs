@@ -66,9 +66,10 @@ export class Jobs {
     this.onDone = onDone;
   }
 
-  start(kind, fn) {
+  // meta.key: item của job (gate, chuẩn bị worktree), để onDone ghi thời gian chạy vào đúng item.
+  start(kind, fn, meta = {}) {
     const id = `job-${++this.seq}-${kind}`;
-    const job = { id, kind, state: 'running', startedAt: Date.now(), result: null, error: null, progress: [] };
+    const job = { id, kind, ...meta, state: 'running', startedAt: Date.now(), result: null, error: null, progress: [] };
     this.jobs.set(id, job);
     job.promise = (async () => {
       try {

@@ -1,12 +1,10 @@
 """Kết nối Game Master: một interface, nhiều bản cài đặt (docs/legacy/ARCHITECTURE.md mục 4.7).
 
-    gm = FakeGameMaster.from_file("samples/scenarios/practice.json", speed=20)   # trận giả, gói fake_gamemaster/
     match = gm.get_match()                       # trạng thái trận + item (VISIBLE / OPEN / CLOSED)
     item = gm.get_item("BUG-07")                 # nội dung item
     gm.start_item("BUG-07")                      # báo "bắt đầu làm" (bắt buộc trước khi nộp)
     out = safe_submit(gm, store, "BUG-07", payload, evidence)   # nộp 1 lần, an toàn khi lỗi mạng
 
-- `FakeGameMaster` (trận giả theo kịch bản) nằm ngoài orchestrator, ở gói `fake_gamemaster/`.
 - `HttpGameMaster` (API thật) viết khi BTC công bố tài liệu ở Training Camp.
 - Chỉ tin đồng hồ server: deadline lấy từ `minutes_left` server trả về, không tự tính bằng giờ máy.
 - Đọc thì gọi lại có giãn cách (`with_retry`); `submit` không bao giờ tự gọi lại.

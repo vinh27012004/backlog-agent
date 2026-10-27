@@ -114,7 +114,7 @@ Chi tiết hợp đồng: [02](02-hop-dong-player.md). Kịch bản chi tiết: 
 | `agents.py`, `events.py`, `prompt.py`, `config.py`, `config/agents.toml`, `config/codex-home/` | **Bỏ** | — | Chỉ phục vụ `codex exec` |
 | `jev.py`, `decisions.py`, `config/jev.toml` | **Port** | `pack/src/jev.mjs`, `pack/src/decisions.mjs`, `pack/config/jev.json` | D9. Giữ ngưỡng, luật dự phòng, `mock_transport`; gọi bằng `fetch`, timeout 5 s; ghi quyết định vào `.team-work/decisions.ndjson` |
 | `monitor.py`, `monitor/` | **Bỏ** | Dashboard của Player | Có thể giữ làm công cụ dev nếu cần |
-| `fake_gamemaster/` | **Viết lại** | `tools/mock-gm/` (Node, có đăng nhập + trang + API thật) | Tái dùng `samples/scenarios/*.json` |
+| `fake_gamemaster/` | **Đã xoá** | Server self practice của BTC; fake trong `tests/pack/support.mjs` cho test | Bản Python cũ ở commit `994d1de` |
 | `samples/repo-template`, `samples/items`, `samples/scenarios` | **Giữ** | Fixture cho test | — |
 | `agents/rules`, `roles`, `skills`, `references` | **Port** | `pack/skills/backlog-*`, `pack/agents/*.toml` | Bỏ các tag mà orchestrator Python từng chèn (`<triage>`…), thay bằng brief của root |
 | `agents/schemas/*.schema.json` | **Chỉnh** | `pack/contracts/worker-result.schema.json`, `checker-result.schema.json` | Kết quả subagent ghi ra file |
@@ -140,7 +140,7 @@ backlog-agent/
 │   └── build-pack.mjs             # gắn identity theo đội, đóng ZIP + SHA256SUMS
 ├── tests/pack/                    # node:test (unit + contract với source Player)
 ├── docs/team-pack/                # bộ tài liệu này
-├── orchestrator/ fake_gamemaster/ monitor/ tests/*.py   # legacy, chỉ tham chiếu
+├── orchestrator/ monitor/ tests/*.py                   # legacy, chỉ tham chiếu
 └── vendor/                        # của BTC, chỉ đọc: mtm-player-0.9.33/, team-orchestrator-pack-0.5.1/
 ```
 

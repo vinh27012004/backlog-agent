@@ -117,7 +117,7 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 ## 8. Jev (TypeSafe)
 
 > **Đã dựng (26/10, pack 0.1.0):** `pack/src/jev.mjs`, `pack/src/decisions.mjs`, tool `decide`
-> (`triage`, `route`, `next_action`, `claims_supported`, `root_cause_confirmed`); cấu hình `pack/config/jev.json`
+> (`triage`, `route`, `next_action`, `root_cause_confirmed`; `claims_supported` bỏ ngày 27/10); cấu hình `pack/config/jev.json`
 > (bật mặc định), ghi đè trên máy ở `team-sdlc-pack/local/jev.json`. Key: biến môi trường `TYPESAFE_API_KEY` trong
 > **môi trường của Player** (đặt biến User của Windows rồi khởi động lại Player; Codex chuyển cho helper qua `env_vars`),
 > hoặc file ngoài TeamWorkspace (`apiKeyFile`, trên máy dev là `D:mtmsecrets	ypesafe.key`). Không có key thì
@@ -125,8 +125,8 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 >
 > **Cách dùng (26/10, sau lần gọi thật đầu tiên):** root là LLM nên gọi `decide` thường xuyên chỉ cộng thêm token
 > Codex. Vì vậy `triage` + `route` chạy **trong helper** lúc `start_work` (kết quả gọn trong field `triage`, lưu journal,
-> không hỏi lại khi replay); root chỉ gọi `decide` cho `claims_supported` (thay việc tự đọc fix-result và báo cáo gate)
-> và `root_cause_confirmed` của PI. Lần gọi thật đầu tiên (5 request, `jev-1.14.0`, ~0,6 s, ~1.000 token vào): injection
+> không hỏi lại khi replay); root chỉ gọi `decide` cho `root_cause_confirmed` của PI, và `next_action` khi thật sự
+> phân vân. Lần gọi thật đầu tiên (5 request, `jev-1.14.0`, ~0,6 s, ~1.000 token vào): injection
 > đúng trên 2 đề; `difficulty` thường dưới ngưỡng 0.7 nên rơi về luật; `score` là số thực và được làm tròn. Cần đo thêm
 > (credit Codex bật/tắt Jev, `decisions.ndjson` so với kết quả chấm) trước khi tin hơn.
 >
@@ -143,13 +143,13 @@ Jev không tạo ra vi phạm hay làm lộ dữ liệu:
 | Chỉ **helper** gọi Jev; agent không bao giờ cầm key | Key đọc từ biến môi trường `TYPESAFE_API_KEY` của helper. Khai `env_vars = ["TYPESAFE_API_KEY"]` trong `[mcp_servers.team_runtime]` (cần xác minh, Spike S11). Biến này **không** được lọt vào shell của model: thêm `shell_environment_policy.exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]` vào `config/codex.toml` |
 | Key không nằm trong pack, ZIP, git, log, prompt | Không có `.env` trong pack; `redact.mjs` che giá trị key trong mọi output; checker quét pack tìm chuỗi giống key |
 | Origin cố định | `jev.json` ghim `https://api.typesafe.ai`; helper chỉ gọi origin này cho Jev, không redirect. Request Jev **được khai** vào `structuredContent.networkActivity` như mọi request khác, không giấu |
-| Chỉ gửi thứ cần cho quyết định | Tiêu đề, loại, mô tả đã cắt (≤ 2 KB), tóm tắt kết quả gate. **Không** gửi code nguồn, diff, credential, hay dữ liệu đội khác. Nội dung item vẫn là dữ liệu untrusted, bọc trong câu hỏi |
-| Lỗi không làm hỏng trận | Timeout 5 s, thử lại 1 lần; lỗi, quá hạn, dưới ngưỡng → **luật code dự phòng**. Jev không bao giờ là điều kiện để nộp |
-| Quyết định cứng ở trong code | Không `submit` khi gate fail; PI không qua reviewer; cờ chặn bẫy tính là "có" nếu regex khớp dù Jev nói không (giữ nguyên từ `decisions.py`) |
+| Chỉ gửi thứ cần cho quyết định | Tiêu đề, loại, mô tả cắt đầu + cuối (~2 KB, để câu lệnh cài ở cuối đề vẫn tới Jev), hướng dẫn Start Work cắt tương tự, fix-result của PI. **Không** gửi code nguồn, diff, credential, hay dữ liệu đội khác. Nội dung item vẫn là dữ liệu untrusted, bọc trong câu hỏi |
+| Lỗi không làm hỏng trận | Timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút; lỗi, quá hạn, dưới ngưỡng → **luật code dự phòng**. Triage + route gộp một request lúc `start_work`. Jev không bao giờ là điều kiện để nộp |
+| Quyết định cứng ở trong code: sàn hoặc điều kiện AND | Không `submit` khi gate fail; PI không qua reviewer; PI luôn `critical`; PI, CR và item `hard` luôn model `strong`; Jev chỉ bỏ được reviewer cho item `easy`; `root_cause_confirmed` cần đủ điều kiện code, Jev chỉ phủ quyết; cờ chặn bẫy tính là "có" nếu regex (chạy trên toàn bộ đề) khớp dù Jev nói không |
 | Có thể tắt ngay | `config/jev.json` → `"enabled": false`, hoặc không đặt biến môi trường: helper tự chạy bằng luật code |
-| Ghi vết | Mỗi quyết định ghi vào `.team-work/decisions.ndjson` (không có key, không có nội dung dài) để xem lại sau Practice |
+| Ghi vết | Mỗi quyết định ghi vào `.team-work/decisions.ndjson` (không có key, không có nội dung dài) kèm câu trả lời của luật code (`rule`) và câu trả lời thô của Jev (`jev`), để sau Practice đo tỉ lệ bất đồng từng điểm, tắt Jev ở điểm không hơn luật code và chỉnh ngưỡng |
 | Hỏi BTC | Q13 ở [12](12-rui-ro-va-cau-hoi.md). Nếu BTC không đồng ý thì tắt cờ; kiến trúc không phụ thuộc Jev |
 
 Điểm quyết định dùng Jev (port từ `Decider`): `triage` (mức độ, độ khó, nghi bẫy injection, module),
-`route` (model mạnh hay nhẹ cho worker, có cần checker không), `claims_supported`, `root_cause_confirmed`,
+`route` (model mạnh hay nhẹ cho worker, có cần checker không), `root_cause_confirmed`,
 `next_action` (nộp / thử lại / bỏ). Expose cho root bằng tool `decide` ([05 §5.19](05-mcp-helper.md)).
