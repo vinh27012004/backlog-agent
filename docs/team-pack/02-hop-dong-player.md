@@ -1,6 +1,6 @@
 # 02 · Hợp đồng với MTM Player
 
-Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (`vendor/mtm-player-0.9.33/app/`),
+Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35, xem §12) (`vendor/mtm-player-0.9.35/app/`),
 trừ chỗ ghi *chưa xác minh*. Đường dẫn `src/...` bên dưới tính từ thư mục `app/`.
 
 ## 1. Player làm gì, không làm gì
@@ -260,3 +260,16 @@ thước), `src/cli-supervisor.mjs` (`protocolPrompt`), `src/codex-app-server.mj
 `src/local-app-lifecycle.mjs`, `src/submission-policy.mjs`, `src/model-policy.mjs`,
 `src/workspace-paths.mjs`, `src/workspace-instructions.mjs`, `src/preparation.mjs`, và
 `contracts/progress-event.schema.json` trong sample pack mới.
+
+### 0.9.35 (27/10/2026)
+
+Không file nào trong danh sách trên đổi; contract test chạy lại trên source 0.9.35. Thay đổi:
+
+- `src/match-status.mjs`: `matchStatus` ký bằng **Team API Key** của đội (`session.gameMasterPlayerSecret`),
+  bỏ key Game Master gắn sẵn. Với 0.9.33, từ 27/10 server trả 401/403 cho key cũ nên Player báo
+  `MATCH_STATUS_POLL_FAILED: MATCH_STATUS_AUTH_REJECTED`, không bao giờ dispatch Codex (match 8TUM8N5W).
+- `src/dashboard-streaming.mjs`: snapshot dashboard chỉ đẩy lên Game Master tối đa 1 lần / 10 s.
+- `src/workspace-picker.mjs`, `docs/installation.md`: hỗ trợ macOS. Trên Mac, `Install Team Pack.command`
+  của Player chạy thẳng `scripts/install.mjs --team-workspace <ws>` rồi `scripts/check-distribution.mjs`,
+  nên `install.mjs` không được phụ thuộc PowerShell hay đường dẫn Windows.
+- Không còn kèm `node.exe`: copy `node.exe` (Node 20+, khuyên 24 LTS) vào cạnh `mtm-player.exe`.

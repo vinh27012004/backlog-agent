@@ -96,3 +96,13 @@ không kể guardian (`codex-auto-review` không có trong price card); guardian
 | L20 | Jev: `difficulty` lần nào cũng dưới ngưỡng 0,7; `injection` TASK-01 = true ở 0,55 (ngưỡng 0,5), nhiều khả năng báo nhầm | Phần lớn triage rơi về luật code | **Một phần** (27/10): `decisions.ndjson` ghi thêm `rule` và câu trả lời thô `jev` (cả khi dưới ngưỡng) để chỉnh ngưỡng hoặc tắt điểm này sau trận tập tới; câu hỏi và ngưỡng chưa đổi |
 | L21 | Reviewer xếp `high` cho việc đòi thêm test signed-out và ảnh "before" ở CR-01 (300 điểm), ngoài MVS | Thêm một lượt fixer, hết hạn mức trước khi nộp | **Đã** sửa (27/10): reviewer chấm theo checklist R1–R9; `high` chỉ khi phá một kịch bản MVS/tiêu chí cụ thể hoặc vi phạm R2/R6/R7/R8, đòi thêm test/evidence ngoài MVS tối đa `medium`; mọi issue phải có vị trí |
 | L22 | BUG-02: bấm nhầm làm VOID hoá đơn, TC-01/TC-03 chạy tiếp trên dữ liệu đã hỏng; các worktree còn dùng chung một database dev nên seed của item này (CR-01 xoá mọi hoá đơn) phá được evidence của item khác | BUG-02 nộp PARTIAL | **Đã** sửa (27/10): tool `app_data` (khoá database dùng chung); luật: seed rồi chạy kịch bản dữ liệu theo thứ tự MVS trong một lượt, hỏng thì seed lại và làm lại từ đầu, không đi tiếp trên dữ liệu hỏng. Gate thêm `code-scan` (cảnh báo TODO, debug, SQL ghép chuỗi, secret, file rác như `*.cr01-backup` của CR-01) |
+
+## #3 · 27/10/2026 · tự luyện `8TUM8N5W` (không chạy được)
+
+Player 0.9.33 tạo round01 và round02 nhưng lần nào poll `matchStatus` cũng báo
+`MATCH_STATUS_POLL_FAILED: MATCH_STATUS_AUTH_REJECTED` (server trả 401/403 cho key Game Master gắn sẵn trong
+Player). Không biết trạng thái match nên Player không dispatch Codex: không có transcript, thư mục match trống,
+dashboard đứng ở "Waiting for data"; Resume báo `MATCH_STATUS_UNAVAILABLE`. Pack không liên quan. BTC phát hành
+0.9.35, ký `matchStatus` bằng Team API Key ([02 §12](02-hop-dong-player.md#12-khi-player-ra-bản-mới)).
+Chẩn đoán lần sau: đọc `%LOCALAPPDATA%\MTM Player\applications\<id>\diagnostics.ndjson` (chỉ để debug sau trận,
+không phải việc của đội trong trận).
