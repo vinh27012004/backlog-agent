@@ -12,7 +12,8 @@ test('a plain item starts cheap and moves to the strong tier on retries', () => 
   const plan = modelPlan({ type: 'TASK', modelTier: 'small', deadline: false, allowed: ENTERPRISE });
   assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
   assert.deepEqual(plan.reviewer, { model: 'gpt-6.1-sol', reasoning_effort: 'medium', tier: 'review' });
-  assert.equal(plan.piHypothesis.model, 'gpt-6.1-terra');
+  // Checker giả thuyết chỉ chạy khi PI đã kẹt: dùng tier strong.
+  assert.deepEqual(plan.piHypothesis, { model: 'gpt-6.1-sol', reasoning_effort: 'high', tier: 'strong' });
 });
 
 test('a deadline item starts strong and gets the top model on its last try', () => {

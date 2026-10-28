@@ -96,6 +96,37 @@ test('regression by test id: a flaky failure is rerun once, a test that no longe
   assert.deepEqual(ok.regression, { total: 3, passed: 3, failed: 0, skipped: 0 });
 });
 
+// Practice #6 (HIET12OA): một test fail sẵn trái ý định hiện tại của app làm mọi item có "pnpm test exits 0" mất điểm.
+test('a baseline-failing test that now passes is reported in fixesBaseline', async () => {
+  const r = appRepo();
+  writeFileSync(join(r.root, '.runs'), '5');   // flaky test đã "ấm"
+  writeFileSync(join(r.app, 'lib.js'), "exports.vnd = n => n * 10000;\nexports.deleteMode = 'cascade';\n");
+  writeFileSync(join(r.app, 'tests', 'stale.test.js'), "const lib = require('../lib.js');\nit('company delete', () => { expect(lib.deleteMode).toBe('restrict'); });\n");
+  sh('git', ['add', '-A'], r.root, env);
+  sh('git', ['commit', '-q', '-m', 'stale test'], r.root, env);
+  const at = { ...r, base: sh('git', ['rev-parse', 'HEAD'], r.root) };
+  const id = 'tests/stale.test.js > company delete';
+  const baseline = { ...BASELINE, failing: [id], tests: { ...BASELINE.tests, [id]: 'failed' } };
+  writeFileSync(join(r.root, 'M1', 'answers', 'BUG-09', 'submit.json'), '{"status":"DONE"}');
+
+  // Bản sửa khác không đụng test đó: vẫn fail như baseline, không tính là đã sửa.
+  writeFileSync(join(r.app, 'lib.js'), "exports.vnd = n => n * 100;\nexports.deleteMode = 'cascade';\n");
+  const other = await gate(at, { baseline });
+  assert.equal(other.passed, true, JSON.stringify(other.checks));
+  assert.deepEqual(other.baselineFailures, [id]);
+  assert.deepEqual(other.fixesBaseline, []);
+
+  // Test cũ trái ý định hiện tại: sửa nó (cùng tên, chặt như cũ) cần allowTestChange; khi đó gate báo đã sửa.
+  writeFileSync(join(r.app, 'tests', 'stale.test.js'), "const lib = require('../lib.js');\nit('company delete', () => { expect(lib.deleteMode).toBe('cascade'); });\n");
+  const blocked = await gate(at, { baseline });
+  assert.equal(blocked.failKind, 'forbidden_change');
+  assert.match(blocked.detail, /contradicts the intended behaviour/);
+  const fixed = await gate(at, { baseline, allowTestChange: { reason: 'owner asked for cascade', source: 'prisma/migrations/x/migration.sql:11' } });
+  assert.equal(fixed.passed, true, JSON.stringify(fixed.checks));
+  assert.deepEqual(fixed.fixesBaseline, [id]);
+  assert.deepEqual(fixed.baselineFailures, []);
+});
+
 test('test quality blocks a new test without an assertion or with one that cannot fail', async () => {
   const r = appRepo();
   writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
@@ -134,4 +165,39 @@ test('fail-before runs the new tests on the unfixed code in the probe worktree',
   // Probe được dọn về base sau khi chạy.
   assert.equal(readFileSync(join(probe.matchRoot, 'src', 'lib.js'), 'utf8').replace(/\r\n/g, '\n'), 'exports.vnd = n => n * 10000;\n');
   assert.doesNotMatch(readFileSync(join(probe.matchRoot, 'src', 'tests', 'money.test.js'), 'utf8'), /zero again/);
+});
+
+test('a PI needs a new test that fails on the unfixed code; without one the gate keeps the tree for the last chance', { timeout: 180_000 }, async () => {
+  const r = appRepo();
+  writeFileSync(join(r.root, '.runs'), '5');   // flaky test đã "ấm", không làm nhiễu
+  writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
+  writeFileSync(join(r.root, 'M1', 'answers', 'BUG-09', 'submit.json'), '{"status":"DONE"}');
+  const probe = new Probe({ checkoutRoot: r.root, teamWork: join(r.root, '.team-work'), folder: 'M1', mainMatchRoot: join(r.root, 'M1'),
+    logDir: join(r.root, '.logs') });
+  assert.equal(await probe.prepare(), true, probe.error);
+  const pi = extra => gate(r, { probe, requireReproduction: true, ...extra });
+
+  const none = await pi({});
+  assert.equal(none.failKind, 'not_reproduced', JSON.stringify(none.checks));
+  assert.equal(none.signature, 'not_reproduced:none');
+  assert.equal(none.codePassed, true);
+  assert.ok(none.tree, 'build and regression passed: integrate may still take this content');
+
+  const testFile = join(r.app, 'tests', 'money.test.js');
+  const original = readFileSync(testFile, 'utf8');
+  writeFileSync(testFile, `${original}it('zero again', () => { expect(vnd(0)).toBe(0); });\n`);
+  const weak = await pi({ testsAdded: ['tests/money.test.js'] });
+  assert.equal(weak.failKind, 'not_reproduced', JSON.stringify(weak.checks));
+  assert.equal(weak.signature, 'not_reproduced:passes-before');
+  assert.match(weak.detail, /zero again/);
+
+  writeFileSync(testFile, `${original}it('zero again', () => { expect(vnd(0)).toBe(0); });\nit('one dong is 100 xu', () => { expect(vnd(1)).toBe(100); });\n`);
+  const ok = await pi({ testsAdded: ['tests/money.test.js'] });
+  assert.equal(ok.passed, true, JSON.stringify(ok.checks));
+  assert.equal(ok.checks.find(c => c.name === 'reproduction').status, 'ok');
+  assert.equal(ok.checks.find(c => c.name === 'fail-before').status, 'warn', 'the edge-case test that also passes before stays a warning');
+
+  // Không phải PI: không có check reproduction.
+  const bug = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });
+  assert.equal(bug.checks.some(c => c.name === 'reproduction'), false);
 });

@@ -28,5 +28,5 @@
       { "model": "gpt-6-luna", "effort": "medium" }
     ]
   },
-  "roles": { "reviewer": "review", "piHypothesis": "small" }
+  "roles": { "reviewer": "review", "piHypothesis": "strong" }
 }

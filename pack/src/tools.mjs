@@ -27,14 +27,42 @@ const PREPARE_BUDGET_MS = 8 * 60_000;
 const GATE_LIMITS = { maxFiles: 25, buildMs: 300_000, testMs: 300_000 };
 // Phút để dành cho gate + integrate + push + submit sau khi fixer trả kết quả (CV8WV1JM: gate ~1 phút, root vài lượt).
 const PUBLISH_RESERVE_MIN = 5;
+// PI là cuộc đua (Game Rules §6: 100/90/75/60% theo thứ hạng, bấm giờ từ lúc đề hiện): mỗi lượt fixer tối đa
+// PI_ATTEMPT_MIN thay vì tới giờ hết trận; tới PI_CHECKPOINT_MIN mà chưa xác nhận được giả thuyết nào thì fixer trả
+// partial kèm danh sách giả thuyết để root cho kiểm song song (SRE: định kỳ xét lại hướng đi). Chỉnh sau diễn tập.
+const PI_ATTEMPT_MIN = 12;
+const PI_CHECKPOINT_MIN = 6;
 const TERMINAL = new Set(['FINISHED', 'CANCELLED']);
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
+// Đề / MVS đòi chạy cả bộ test hiện có (Practice #6: BUG-02-TC-04 "pnpm test exits 0 with no failed test").
+const NEEDS_SUITE = /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test\b|existing tests?\b|test suite|full suite|all tests|\bmvn\b[^\n"]*\btest\b|gradlew?\b[^\n"]*\btest\b|\bpytest\b|\bgo test\b|\bdotnet test\b|phpunit/i;
 const typeOf = key => String(key).split('-')[0].toUpperCase();
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const str = description => ({ type: 'string', description });
 const num = description => ({ type: 'number', description });
 const bool = description => ({ type: 'boolean', description });
+
+// Mốc ra đề ghi trong README của thư mục trận (Practice HIET12OA: "Game Master releases briefs at minutes 0, 14 and 29").
+export function parseReleaseMinutes(text) {
+  const s = String(text ?? '');
+  const m = s.match(/\b(?:releases?|reveals?|publish(?:es)?|opens?)\b[^.\n]{0,60}?\bat minutes?\s+(\d+(?:\s*(?:,|and|&)\s*\d+)*)/i)
+    ?? s.match(/(?:đề|item|brief)[^.\n]{0,40}?(?:mở|ra|hiện)[^.\n]{0,20}?phút\s+(\d+(?:\s*(?:,|và)\s*\d+)*)/i);
+  if (!m) return null;
+  const minutes = [...new Set([...m[1].matchAll(/\d+/g)].map(x => Number(x[0])).filter(n => n < 600))].sort((a, b) => a - b);
+  return minutes.length ? minutes : null;
+}
+
+// git log gọn: {sha, author, date, subject, files?}.
+async function commitList(cwd, args, withFiles = false) {
+  const res = await git(['log', '--format=%x1e%h%x09%an%x09%aI%x09%s', ...(withFiles ? ['--name-only'] : []), ...args], { cwd, allowFail: true });
+  if (res.code !== 0) return [];
+  return res.out.split('\x1e').map(b => b.trim()).filter(Boolean).map(block => {
+    const [head, ...rest] = block.split(/\r?\n/);
+    const [sha, author, date, subject] = head.split('\t');
+    return { sha, author, date, subject, ...(withFiles ? { files: rest.filter(Boolean).slice(0, 20) } : {}) };
+  });
+}
 
 export class Runtime {
   constructor({ teamWorkspace = trustedTeamWorkspace() } = {}) {
@@ -128,17 +156,17 @@ export class Runtime {
         inputSchema: obj({}), handler: () => this.reportReady() },
       { name: 'refresh_match', description: 'GAME: read the match now. First call performs backlog sync (DISCOVERED for every visible item) and starts the background poller. Returns items with minutes left.',
         inputSchema: obj({}), handler: () => this.refreshMatch() },
-      { name: 'match_state', description: 'GAME: compact state of every item (page status, local progress, minutes left, points) and a suggested order. No network.',
+      { name: 'match_state', description: 'GAME: compact state of every item (page status, local progress, minutes left, points, returnBy and for a PI checkpointBy for a new attempt), a suggested order, and `releases` (release minutes from the match README and the next one, to time waits). No network.',
         inputSchema: obj({}), readOnly: true, handler: () => this.matchState() },
-      { name: 'read_item', description: 'GAME: full untrusted content of one backlog item as shown on the match page, plus saved Start Work materials if any.',
+      { name: 'read_item', description: 'GAME: full untrusted content of one backlog item as shown on the match page, plus saved Start Work materials if any and `relatedEvents` (match timeline events that name the item).',
         inputSchema: obj({ backlogItemKey: str('Item key, e.g. BUG-01.') }, ['backlogItemKey']), readOnly: true, handler: a => this.readItem(a) },
-      { name: 'start_work', description: 'GAME: call Start Work for an item, save template/MVS/files under .team-work/items/<ID>/, copy the template to answers/<ID>/submit.json and log IN_PROGRESS.',
+      { name: 'start_work', description: 'GAME: call Start Work for an item, save template/MVS/files under .team-work/items/<ID>/ and log IN_PROGRESS. Returns triage, models and timeBox (returnBy; a PI also checkpointBy, and each PI attempt is capped). A PI also fetches the remote first: `remote` lists commits pushed since main (fast-forwarded into main when it has no unpublished work) and the recent changes of the match folder.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start even if little time is left.'), requiredScenarios: num('Number of verification scenarios you will run (MVS count or acceptance criteria, min 1).') }, ['backlogItemKey']), handler: a => this.startWork(a) },
       { name: 'worktree', description: 'GAME: per-item git worktree. create: new worktree at the main HEAD (+ .env with a per-item test database, dependency install as a job, template copied to answers/<ID>/submit.json). integrate: commit the worktree and cherry-pick onto the main checkout; only the exact content of the last gate whose build and tests passed (answers/<ID>/ may still change), else GATE_REQUIRED / GATE_STALE. sync: move a worktree with no commit yet onto the main HEAD, keeping its uncommitted work (pulls in fixes other items already integrated, e.g. a shared layout bug; WORKTREE_CONFLICT leaves it unchanged; reinstall job when dependencies changed). remove: delete it. status: paths and state.',
         inputSchema: obj({ action: { type: 'string', enum: ['create', 'integrate', 'sync', 'remove', 'status'] }, backlogItemKey: str('Item key.'), message: str('integrate: one-line commit message.') }, ['action', 'backlogItemKey']), handler: a => this.worktree(a) },
-      { name: 'run_gate', description: 'GAME: background job that re-checks an item: diff, forbidden changes, test quality (new tests without assertions or with assertions that cannot fail → weak_test), code scan of the added lines (TODO, stubs, debug output, SQL built from strings, credentials, backup/helper files; warnings only), typecheck/build, declared tests, full regression vs baseline (failures rerun once to rule out flakiness; baseline tests that no longer run fail like a test change), the declared tests on the unfixed code (fail-before, worktree only), answer file (template scenarios, MVS-required evidence for PASS scenarios, status vs results). where=worktree (default when the item has one) or main. A failure has a stable `signature` and `repeat` (how often this item failed with it); warnings are collected in `findings` for the reviewer.',
+      { name: 'run_gate', description: 'GAME: background job that re-checks an item: diff, forbidden changes, test quality (new tests without assertions or with assertions that cannot fail → weak_test), code scan of the added lines (TODO, stubs, debug output, SQL built from strings, credentials, backup/helper files; warnings only), typecheck/build, declared tests, full regression vs baseline (failures rerun once to rule out flakiness; baseline tests that no longer run fail like a test change), the declared tests on the unfixed code (fail-before, worktree only; a PI fails as not_reproduced unless a new test fails there), answer file (template scenarios, MVS-required evidence for PASS scenarios, status vs results). where=worktree (default when the item has one) or main. A failure has a stable `signature` and `repeat` (how often this item failed with it); warnings are collected in `findings` for the reviewer.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), where: { type: 'string', enum: ['worktree', 'main'] }, needsDependency: bool('True only if the item requires changing dependency/build files.'), testsAdded: { type: 'array', items: { type: 'string' }, description: 'Test files or names added/changed for this item.' },
-          allowTestChange: { type: 'object', description: 'Only when an existing test is provably wrong: {reason, source} where source quotes the item text or a company standard (e.g. kb_search result id). Without it, editing a baseline-failing test or removing assertions fails the gate.' },
+          allowTestChange: { type: 'object', description: 'Only when an existing test contradicts the intended behaviour: the fixer\'s test_change {reason, source}; source quotes the item text, a company standard (e.g. kb_search result id) or repo evidence (file:line of a migration, code comment or organizer seed). Without it, editing a baseline-failing test or removing assertions fails the gate.' },
           waitSeconds: num('Seconds to wait in this call (max 45).') }, ['backlogItemKey']), handler: a => this.runGate(a) },
       { name: 'record_verification', description: 'GAME: log BACKLOG_TESTS from a finished gate job plus the verification scenarios. Counts come from testResults in answers/<ID>/submit.json (PASS / FAIL / anything else = not run) when it has them; the count arguments are only for items without testResults.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), gateJobId: str('Job id returned by run_gate.'), scenariosPassed: num('Scenarios executed and passed (only without testResults).'), scenariosFailed: num('Scenarios executed and failed (only without testResults).'), scenariosSkipped: num('Scenarios not executed (only without testResults).') }, ['backlogItemKey', 'gateJobId']), handler: a => this.recordVerification(a) },
@@ -150,7 +178,7 @@ export class Runtime {
         inputSchema: obj({ event: { type: 'object', description: 'Event without schemaVersion/playerSessionId.' } }, ['event']), handler: a => this.reportProgress(a) },
       { name: 'wait_for_update', description: 'Block up to timeoutMs (max 55000) for new events: ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, POLL_ERROR. Use instead of ending the turn.',
         inputSchema: obj({ timeoutMs: num('Max wait in ms, up to 55000.'), cursor: num('Last seq you have seen.') }), readOnly: true, handler: (a, ctx) => this.waitForUpdate(a, ctx) },
-      { name: 'job_status', description: 'State and result of a background job.',
+      { name: 'job_status', description: 'State and result of a background job. Returns early with `newPI` (keys) while a revealed PI has not been started: start it, then wait again.',
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
         inputSchema: obj({ path: str('Absolute folder; default matchRoot.') }), readOnly: true, handler: a => this.detectProfile(a) },
@@ -351,7 +379,7 @@ export class Runtime {
       mkdirSync(dir, { recursive: true });
       writeFileAtomic(join(dir, 'page.json'), `${JSON.stringify(item.raw, null, 2)}\n`);
       const old = before.get(item.key);
-      if (!old) this.events.push('ITEM_NEW', { key: item.key, type: item.type, title: item.title, minutesLeft: this.gm.itemMinutesLeft(item), points: item.points });
+      if (!old) this.events.push('ITEM_NEW', { key: item.key, itemType: item.type, title: item.title, minutesLeft: this.gm.itemMinutesLeft(item), points: item.points });
       else {
         if (old.status !== item.status) this.events.push(item.status === 'CLOSED' ? 'ITEM_CLOSED' : 'ITEM_STATUS', { key: item.key, status: item.status });
         if (old.status !== item.status && item.status === 'CLOSED') this.endItem(item.key, 'CLOSED');
@@ -400,19 +428,102 @@ export class Runtime {
   }
 
   itemRows() {
-    return (this.gm.view?.items ?? []).map(i => ({ key: i.key, type: i.type, title: i.title, status: i.status,
-      points: i.points, deadlineMinutes: i.deadlineMinutes, minutesLeft: this.gm.itemMinutesLeft(i), local: this.localState(i.key),
-      revisionNo: i.revisionNo, returnBy: i.status === 'CLOSED' ? null : this.timeBox(i)?.returnBy ?? null }));
+    return (this.gm.view?.items ?? []).map(i => {
+      const box = i.status === 'CLOSED' ? null : this.timeBox(i);
+      return { key: i.key, type: i.type, title: i.title, status: i.status,
+        points: i.points, deadlineMinutes: i.deadlineMinutes, minutesLeft: this.gm.itemMinutesLeft(i), local: this.localState(i.key),
+        revisionNo: i.revisionNo, returnBy: box?.returnBy ?? null, ...(box?.checkpointBy ? { checkpointBy: box.checkpointBy } : {}) };
+    });
   }
 
-  // Giờ fixer phải trả kết quả: trước khi item (hoặc trận) đóng, chừa PUBLISH_RESERVE_MIN cho gate và nộp.
-  // Giờ tuyệt đối theo đồng hồ máy; trận PAUSED thì hạn thật lùi lại, nên root đọc lại returnBy sau khi trận chạy tiếp.
+  // Giờ fixer phải trả kết quả: trước khi item (hoặc trận) đóng, chừa PUBLISH_RESERVE_MIN cho gate và nộp; PI thêm trần
+  // PI_ATTEMPT_MIN mỗi lượt và mốc checkpointBy. Giờ tuyệt đối theo đồng hồ máy, tính từ lúc gọi (lượt mới đọc lại từ
+  // match_state); trận PAUSED thì hạn thật lùi lại, nên root đọc lại returnBy sau khi trận chạy tiếp.
   timeBox(item) {
     const left = this.gm.itemMinutesLeft(item);
     if (left === null) return null;
-    const work = Math.max(1, left - PUBLISH_RESERVE_MIN);
+    const pi = typeOf(item.key) === 'PI';
+    const work = Math.min(Math.max(1, left - PUBLISH_RESERVE_MIN), pi ? PI_ATTEMPT_MIN : Infinity);
+    const at = minutes => new Date(Date.now() + minutes * 60_000).toISOString();
     return { minutesLeft: left, deadline: typeof item.deadlineMinutes === 'number', workMinutes: Math.round(work * 10) / 10,
-      returnBy: new Date(Date.now() + work * 60_000).toISOString() };
+      returnBy: at(work), ...(pi ? { checkpointBy: at(Math.min(PI_CHECKPOINT_MIN, work)) } : {}) };
+  }
+
+  // Mốc ra đề tiếp theo theo đồng hồ trận, để root canh lượt chờ (wait_agent) trả về ngay sau mốc đó.
+  releases() {
+    const file = join(this.session.paths.matchRoot, 'README.md');
+    if (this.releaseCache?.file !== file) {
+      let minutes = null;
+      try { minutes = existsSync(file) ? parseReleaseMinutes(readFileSync(file, 'utf8')) : null; } catch { /* không có mốc */ }
+      this.releaseCache = { file, minutes };
+    }
+    const { minutes } = this.releaseCache;
+    if (!minutes) return null;
+    const elapsed = this.gm.elapsedSec();
+    const next = elapsed === null ? undefined : minutes.find(m => m * 60 > elapsed);
+    return { minutes, next: next === undefined ? null : { minute: next, at: new Date(Date.now() + (next * 60 - elapsed) * 1000).toISOString() } };
+  }
+
+  // PI đã hiện mà chưa Start Work, còn đủ giờ để bắt đầu.
+  pendingPI() {
+    if (this.session.phase !== 'GAME' || !this.gm.view) return [];
+    return this.itemRows().filter(r => typeOf(r.key) === 'PI' && r.status !== 'CLOSED' && r.local === 'todo'
+      && (r.minutesLeft === null || r.minutesLeft >= 3)).map(r => r.key);
+  }
+
+  // Lượt chờ job của root (gate, chuẩn bị worktree) trả về sớm khi có PI chưa bắt đầu (`newPI`): điểm PI tính từ lúc đề
+  // hiện, mà root có thể đang chờ trong một exec tới vài phút (HIET12OA: đề hiện → start_work mất 56 s đến 1 phút 52).
+  async settleJob(id, waitMs) {
+    const job = this.jobs.jobs.get(id);
+    if (!job) return null;
+    let pi = this.pendingPI();
+    if (!pi.length && job.state === 'running' && waitMs > 0) {
+      const ac = new AbortController();
+      pi = await Promise.race([this.jobs.settle(id, waitMs).then(() => []), this.newPiWithin(waitMs, ac.signal)]);
+      ac.abort();
+    }
+    const view = this.jobs.view(job);
+    return pi.length ? { ...view, newPI: pi, hint: `New PI ${pi.join(', ')}: start it now (read_item, start_work, worktree create, fixer), then come back to ${id}.` } : view;
+  }
+
+  async newPiWithin(ms, signal) {
+    const end = Date.now() + ms;
+    let cursor = this.events.seq;
+    while (!signal.aborted && Date.now() < end) {
+      const events = await this.events.wait(cursor, end - Date.now(), signal);
+      if (events.some(e => e.type === 'ITEM_NEW' && typeOf(e.key) === 'PI')) return this.pendingPI();
+      if (events.length) cursor = events[events.length - 1].seq;
+    }
+    return [];
+  }
+
+  // PI: "cái gì vừa thay đổi" (SRE, PagerDuty). Helper chỉ fetch khi push bị từ chối, nên commit mà BTC có thể đẩy lúc
+  // đề PI hiện chưa nằm trong main. Fetch, fast-forward main khi được (không có commit chưa push hay thay đổi chưa commit),
+  // rồi trả các commit mới và lịch sử gần đây của thư mục trận để root đưa vào brief.
+  async catchUpRemote() {
+    const { checkoutRoot } = this.session.paths;
+    const branch = this.session.descriptor.repository?.branch ?? 'main';
+    const out = { fetched: false, newCommits: [], merged: false, recentChanges: [] };
+    try {
+      out.fetched = (await git(['fetch', 'origin', branch], { cwd: checkoutRoot, timeoutMs: 60_000, allowFail: true })).code === 0;
+      if (out.fetched) out.newCommits = await commitList(checkoutRoot, ['-n', '10', `HEAD..origin/${branch}`], true);
+      if (out.newCommits.length) {
+        const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`], { cwd: checkoutRoot })).out.trim() || 0);
+        const dirty = (await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out;
+        if (ahead || dirty) {
+          out.note = `main has ${ahead ? `${ahead} unpushed commit(s)` : 'uncommitted changes to tracked files'}, so the new commits are not in main yet; the fixer can read them with git show`;
+        } else {
+          const ff = await git(['merge', '--ff-only', `origin/${branch}`], { cwd: checkoutRoot, allowFail: true });
+          out.merged = ff.code === 0;
+          if (!out.merged) out.note = `fast-forward failed: ${oneLine(ff.tail, 160)}; the fixer can read the new commits with git show`;
+        }
+      }
+      out.recentChanges = (await commitList(checkoutRoot, ['-n', '8', 'HEAD', '--', this.session.descriptor.matchId]))
+        .map(x => `${x.sha} ${x.date} ${x.author}: ${x.subject}`);
+    } catch (error) {
+      out.error = oneLine(error.message, 160);
+    }
+    return out;
   }
 
   matchState() {
@@ -429,7 +540,7 @@ export class Runtime {
       return (typeRank[a.type] ?? 9) - (typeRank[b.type] ?? 9);
     }).map(r => r.key);
     return { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), items: rows, suggestedOrder,
-      logBytes: this.progress.state.bytes, openBlockers: Object.keys(this.progress.state.blockers) };
+      releases: this.releases(), logBytes: this.progress.state.bytes, openBlockers: Object.keys(this.progress.state.blockers) };
   }
 
   readItem({ backlogItemKey: key }) {
@@ -438,7 +549,11 @@ export class Runtime {
     const item = this.gm.view?.items.find(i => i.key === key);
     if (!item) fail('ITEM_NOT_FOUND', key);
     const read = name => (existsSync(join(dir, name)) ? JSON.parse(readFileSync(join(dir, name), 'utf8')) : null);
-    return { untrusted: true, item: item.raw, minutesLeft: this.gm.itemMinutesLeft(item), start: read('start.json'), materialsDir: dir };
+    // Sự kiện trận nhắc tới item (vd "INCIDENT: Cảnh báo production khẩn cấp"): PI ít thông tin, câu chữ ở đó cũng là manh mối.
+    const mention = new RegExp(`(^|[^A-Za-z0-9-])${key.replace(/\./g, '\\.')}([^A-Za-z0-9]|$)`);
+    const relatedEvents = (this.gm.view?.events ?? []).filter(e => mention.test(JSON.stringify(e))).slice(-5);
+    return { untrusted: true, item: item.raw, minutesLeft: this.gm.itemMinutesLeft(item), start: read('start.json'), materialsDir: dir,
+      ...(relatedEvents.length ? { relatedEvents } : {}) };
   }
 
   async startWork({ backlogItemKey: key, force = false, requiredScenarios = 1 }) {
@@ -477,12 +592,55 @@ export class Runtime {
       this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status: 'NOT_RUN', required: ji.requiredScenarios + 1,
         executed: 0, passed: 0, failed: 0, skipped: 0, summary: `${ji.requiredScenarios} scenario(s) plus regression.` });
     }
+    const pi = typeOf(key) === 'PI';
+    // Trước worktree create: commit mới (nếu có) phải vào main để worktree của PI có nó.
+    const remote = pi ? await this.catchUpRemote() : null;
     const triage = await this.autoTriage(key);
+    const baselineFailures = this.baselineBrief(key);
     return { untrusted: true, type: ji.type, replay: Boolean(data?.replay), startInstruction: data?.startInstruction ?? null,
       submitTemplate: data?.submitTemplate ?? null, minimumVerificationScenarios: data?.minimumVerificationScenarios ?? null,
-      files: saved, materialsDir: dir, minutesLeft: left, timeBox: this.timeBox(item), triage,
+      files: saved, materialsDir: dir, minutesLeft: left, timeBox: this.timeBox(item), triage, baselineFailures, ...(remote ? { remote } : {}),
       next: 'worktree create, then spawn_agent team_fixer with fork_turns "none", model/reasoning_effort from triage.models.fixer[0] '
-        + 'and the full brief (return_by = timeBox.returnBy in <item_meta>).' };
+        + 'and the full brief (return_by = timeBox.returnBy'
+        + (pi ? ', checkpoint_by = timeBox.checkpointBy in <item_meta>; <recent_changes> from remote' : ' in <item_meta>')
+        + (baselineFailures?.failing.length ? `; <baseline_failures> with youFix=${baselineFailures.youFix}` : '') + ').' };
+  }
+
+  // Test fail ở baseline (Practice #6, HIET12OA): mỗi item có MVS đòi "pnpm test exits 0" mất điểm khi còn một test
+  // fail sẵn. Một item duy nhất được giao xử lý (xác định test cũ hay sản phẩm sai, rồi sửa): item đầu tiên có đề/MVS
+  // đòi chạy cả bộ test. Hai fixer cùng sửa thì item integrate sau bị WORKTREE_CONFLICT. Chủ đã xong (nộp, bỏ hoặc
+  // integrate) mà test vẫn fail trên main thì giao cho item kế tiếp.
+  baselineBrief(key) {
+    const j = this.journal;
+    const prep = j.data.preparation;
+    const fixedBy = prep.baselineFixed ?? {};
+    const failing = (prep.baseline?.failing ?? []).filter(t => !fixedBy[t]);
+    if (!failing.length) return Object.keys(fixedBy).length ? { failing: [], fixedBy } : null;
+    const owner = prep.baselineOwner ? j.data.items[prep.baselineOwner] : null;
+    const ownerDone = owner && (owner.endedAt || owner.integratedRevision);
+    if ((!prep.baselineOwner || ownerDone) && prep.baselineOwner !== key) {
+      const dir = this.itemDir(key);
+      const text = ['start.json', 'page.json'].map(f => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : '')).join('\n');
+      if (NEEDS_SUITE.test(text)) { prep.baselineOwner = key; j.save(); }
+    }
+    return { failing: failing.slice(0, 20), owner: prep.baselineOwner ?? null, youFix: prep.baselineOwner === key,
+      ...(Object.keys(fixedBy).length ? { fixedBy } : {}) };
+  }
+
+  // Sau integrate: main giờ có bản sửa các test fail ở baseline mà gate cuối của item làm pass (ghi item sửa), và các
+  // worktree còn mở cần sync để bộ test của chúng cũng pass.
+  recordBaselineFix(key) {
+    const prep = this.journal.data.preparation;
+    const fixedBy = prep.baselineFixed ?? {};
+    const fixedNow = (this.journal.item(key).lastGate?.fixesBaseline ?? []).filter(t => !fixedBy[t]);
+    if (fixedNow.length) prep.baselineFixed = { ...fixedBy, ...Object.fromEntries(fixedNow.map(t => [t, key])) };
+    return { fixedNow, sync: fixedNow.length ? this.openWorktrees(key) : [] };
+  }
+
+  // Worktree còn mở của item chưa integrate (cần sync khi main có bản sửa dùng chung).
+  openWorktrees(except) {
+    return Object.entries(this.journal.data.items).filter(([k, v]) => k !== except && !v.integratedRevision
+      && existsSync(this.wtPaths(k).worktreeRoot)).map(([k]) => k);
   }
 
   profile() {
@@ -610,9 +768,13 @@ export class Runtime {
       }
       const headRevision = await revParse(checkoutRoot);
       ji.integratedRevision = headRevision;
+      const { fixedNow, sync } = this.recordBaselineFix(key);
       j.save();
+      const hint = mainBefore !== ji.worktreeBase ? 'Main moved since the worktree was created: run run_gate with where=main before commit_and_push.' : 'Run commit_and_push.';
       return { integrated: true, headRevision, commits: commits.length, baseChanged: mainBefore !== ji.worktreeBase,
-        hint: mainBefore !== ji.worktreeBase ? 'Main moved since the worktree was created: run run_gate with where=main before commit_and_push.' : 'Run commit_and_push.' };
+        ...(fixedNow.length ? { baselineFixed: fixedNow, syncWorktrees: sync } : {}),
+        hint: sync.length ? `${hint} This item fixed baseline-failing tests: right after it is submitted, run worktree sync for `
+          + `${sync.join(', ')} and tell their fixers (if still running) to re-run the test suite before writing results.` : hint };
     }
     fail('INVALID_ARGUMENT', 'action');
   }
@@ -679,7 +841,8 @@ export class Runtime {
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
         profile: detectProfile(matchRoot), base, baseline: j.data.preparation?.baseline, template, schema, mvs, needsDependency,
         testsAdded, allowTestChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
-        probe: inWorktree ? this.probe() : null, logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
+        probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && typeOf(key) === 'PI',
+        logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
       result.where = inWorktree ? 'worktree' : 'main';
       const ji = j.item(key);
       ji.attempts = (ji.attempts ?? 0) + 1;
@@ -701,6 +864,10 @@ export class Runtime {
         const n = ji.gateHistory.filter(h => h.where === 'worktree' && h.failKind !== 'answer_invalid').length + 1;
         result.next = `Retry = a new spawn_agent team_fixer (task_name ${key.toLowerCase().replace(/-/g, '')}_fix${n}, model/reasoning_effort `
           + `from triage.models.fixer[${n - 1}] or its last entry) with the full brief + <previous_attempt>; never send_message to the old fixer.`;
+        if (result.failKind === 'not_reproduced' && result.codePassed) {
+          result.next += ' Build and regression passed: the next fixer only adds a test that fails on the unfixed code (see detail). '
+            + 'No time for another attempt: this version may still be published under the last-chance rule.';
+        }
       }
       // Practice #5 (TASK-02): chỉ submit.json hỏng mà root chạy lại cả gate (~1 phút). Build/test đã pass và tree đã lưu;
       // integrate và commit_and_push tự kiểm lại answers/<ID>/.
@@ -708,12 +875,17 @@ export class Runtime {
         result.next = 'Only submit.json is wrong: fix it as `detail` says, then go on (record_verification, worktree integrate, commit_and_push). '
           + 'Do not run run_gate again: build and tests passed, and commit_and_push re-checks the answer.';
       }
+      // Test fail ở baseline mà bản này làm pass, trừ những cái main đã có bản sửa (worktree đã sync).
+      const fixedBy = j.data.preparation.baselineFixed ?? {};
+      result.fixesBaseline = result.codePassed ? (result.fixesBaseline ?? []).filter(t => !fixedBy[t]) : [];
+      if (!result.fixesBaseline.length) delete result.fixesBaseline;
       ji.lastGate = { jobId: job.id, where: result.where, passed: result.passed, failKind: result.failKind,
-        signature: result.signature, repeat: result.repeat ?? 0, tree: result.codePassed ? result.tree : null };
+        signature: result.signature, repeat: result.repeat ?? 0, tree: result.codePassed ? result.tree : null,
+        ...(result.fixesBaseline ? { fixesBaseline: result.fixesBaseline } : {}) };
       j.save();
       return result;
     }, { key });
-    return this.jobs.settle(job.id, Math.min(45, waitSeconds) * 1000);
+    return this.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
   }
 
   recordVerification({ backlogItemKey: key, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped }) {
@@ -903,7 +1075,7 @@ export class Runtime {
     const last = events.length ? events[events.length - 1].seq : cursor;
     const rows = this.gm.view ? this.itemRows() : [];
     return { cursor: last, events: events.slice(-50),
-      state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(),
+      state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), nextReleaseAt: this.gm.view ? this.releases()?.next?.at ?? null : null,
         open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
         working: rows.filter(r => ['started', 'published'].includes(r.local)).map(r => r.key),
         submitted: rows.filter(r => r.local === 'submitted').map(r => r.key),
@@ -912,7 +1084,7 @@ export class Runtime {
 
   jobStatus({ jobId, waitSeconds = 0 }) {
     // 110 s < tool_timeout_sec 120 (config/codex.toml): một lần gọi chờ hết một gate, root đỡ một lượt model.
-    return this.jobs.settle(jobId, Math.min(110, waitSeconds) * 1000).then(v => v ?? fail('JOB_NOT_FOUND', jobId));
+    return this.settleJob(jobId, Math.min(110, waitSeconds) * 1000).then(v => v ?? fail('JOB_NOT_FOUND', jobId));
   }
 
   detectProfile({ path } = {}) {

@@ -7,7 +7,7 @@
 | HTTP 4xx where it used to work | validation rule changed, auth/role check changed, route/path changed | recent commits on validation, security config, routes |
 | Slow / timeout | N+1 queries, missing index, unbounded query (no paging), external call without timeout, lock contention | count queries for one request; look for loops calling repository/HTTP |
 | Wrong numbers | calculation or rounding change, double counting, currency/units, time zone of aggregation | recompute one example by hand from the data |
-| "Since this morning / today" | recent deploy or config change, date boundary (new day/month/year), expired token/certificate, data that appeared today | `git log --since` on the path; what is special about today's date |
+| "Since this morning / today" | recent deploy or config change, date boundary (new day/month/year), expired token/certificate, data that appeared today | `<recent_changes>` and `git log -p` on the path; what is special about today's date |
 | Only some users / some data | data-dependent: null column, new enum value, special characters, large size, specific role/tenant | compare a failing and a working example |
 | Intermittent | race condition, cache, connection pool exhaustion, retries, load balancer with mixed versions | look for shared state and missing transactions |
 | Duplicates | missing unique constraint, retry without idempotency, double submit, JOIN fan-out | check constraints and the JOIN |

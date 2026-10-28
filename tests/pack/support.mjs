@@ -87,6 +87,7 @@ export function makeRemote(root, matchId) {
   mkdirSync(join(work, matchId, 'answers'), { recursive: true });
   writeFileSync(join(work, matchId, 'exam-info.json'), '{"immutable":true}\n');
   writeFileSync(join(work, matchId, 'answers', 'README.md'), 'answers\n');
+  writeFileSync(join(work, matchId, 'README.md'), 'Duration: 40 minutes. Game Master releases briefs at minutes 0, 14 and 29 and supplies submission templates when each backlog starts.\n');
   const app = join(work, matchId, 'src');
   writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'app', version: '1.0.0', private: true,
     scripts: { build: 'node build.js', test: 'node test.js' } }, null, 2));
@@ -115,7 +116,7 @@ export function makeRemote(root, matchId) {
 
 // Game Master giả, đủ cho luồng của helper (03 §2.4, §3, §4).
 export function fakeGameMaster({ matchId, matchUuid, repository, password = 'pw-123456', apiKey }) {
-  const state = { status: 'PREPARING', elapsedSec: 0, remainingSec: 2400, seq: 1, backlog: [], submissions: new Map(),
+  const state = { status: 'PREPARING', elapsedSec: 0, remainingSec: 2400, seq: 1, backlog: [], events: [], submissions: new Map(),
     started: new Set(), calls: [] };
   const sessions = new Set();
   const server = createServer(async (req, res) => {
@@ -144,7 +145,7 @@ export function fakeGameMaster({ matchId, matchUuid, repository, password = 'pw-
         team: { code: 'BUN' }, repository: { ...repository, folder: `${matchId}/` },
         api: { startEndpoint: `/api/v1/matches/${matchUuid}/backlogs/start`, submissionEndpoint: `/api/v1/matches/${matchUuid}/submissions`,
           feedEndpoint: `/api/v1/match/${matchId}/feed`, pollActiveMs: 2000, pollIdleMs: 10000 },
-        backlog: state.backlog, events: [] });
+        backlog: state.backlog, events: state.events });
     }
     if (req.method === 'GET' && url.pathname === `/api/v1/match/${matchId}/feed`) {
       return send(200, { items: Number(url.searchParams.get('afterSequence')) < state.seq ? [{ sequence: state.seq }] : [] });

@@ -1,6 +1,7 @@
 // Các điểm quyết định nhanh (port orchestrator/decisions.py): hỏi Jev trước, lỗi hoặc dưới ngưỡng thì luật code.
 // Luật cứng ở code là sàn hoặc điều kiện AND, Jev không ghi đè được: PI luôn critical; PI, CR và item hard luôn model
-// strong; chỉ PI và item easy mới bỏ reviewer; root_cause_confirmed cần đủ điều kiện code (Jev chỉ phủ quyết);
+// strong; PI luôn có reviewer (chạy song song với gate), chỉ item easy mới bỏ reviewer; root_cause_confirmed cần đủ điều
+// kiện code (Jev chỉ phủ quyết);
 // next_action chỉ đưa lựa chọn hợp lệ; regex bẫy injection (chạy trên toàn bộ đề) thắng câu "không" của Jev.
 // Mỗi quyết định ghi vào .team-work/decisions.ndjson kèm câu trả lời của luật code (rule) và câu trả lời thô của Jev
 // (jev) để sau trận đo tỉ lệ bất đồng và chỉnh ngưỡng.
@@ -142,8 +143,9 @@ export class Decider {
       model = { ...model, value: 'strong', source: 'rule', reason: `${type === 'PI' || type === 'CR' ? type : 'a hard item'} always gets the strong tier` };
     }
     let reviewer;
+    // PI sai = 0 điểm và không nộp lại được; reviewer chạy cùng lúc với gate (~1 phút) nên gần như không tốn thêm giờ.
     if (type === 'PI') {
-      reviewer = { name: 'reviewer', value: false, source: 'rule', confidence: null, rule: false, jev: a.reviewer?.pYes ?? null, reason: 'PI skips review' };
+      reviewer = { name: 'reviewer', value: true, source: 'rule', confidence: null, rule: true, jev: a.reviewer?.pYes ?? null, reason: 'PI: reviewer runs in parallel with the gate' };
     } else {
       reviewer = this.pickNoul('reviewer', a.reviewer, err, () => true);
       if (!reviewer.value && difficulty !== 'easy') {
@@ -187,10 +189,13 @@ export class Decider {
   // Jev không bao giờ đủ để publish.
   async rootCauseConfirmed(key, fixResult) {
     const ver = Array.isArray(fixResult?.verification) ? fixResult.verification : [];
-    const ok = Boolean(fixResult?.root_cause) && Number(fixResult?.confidence ?? 0) >= 0.7 && ver.some(v => v?.result === 'pass');
+    // Fixer có ghi danh sách giả thuyết (working record) thì phải có ít nhất một cái đã xác nhận.
+    const hyp = Array.isArray(fixResult?.hypotheses) ? fixResult.hypotheses : null;
+    const ok = Boolean(fixResult?.root_cause) && Number(fixResult?.confidence ?? 0) >= 0.7 && ver.some(v => v?.result === 'pass')
+      && (!hyp?.length || hyp.some(h => h?.verdict === 'confirmed'));
     if (!ok) {
       return this.record(key, { name: 'root_cause_confirmed', value: false, source: 'rule', confidence: null, rule: false, jev: null,
-        reason: 'needs root_cause, confidence >= 0.7 and one passing verification' }, 0);
+        reason: 'needs root_cause, confidence >= 0.7, one passing verification and, when hypotheses are listed, a confirmed one' }, 0);
     }
     const { answers, err, ms } = await this.ask({
       confirmed: noul('Does this incident report identify a specific root cause in the code or configuration AND give concrete evidence for it (file and line, request and response, log line or commit)?')

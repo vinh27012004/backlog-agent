@@ -42,7 +42,9 @@ const COMMON_SECTIONS = {
     '- You are a subagent spawned by the team orchestrator inside the MTM Player Codex session.',
     '  Work only inside the worktree / match folder named in your brief. Never touch sibling folders.',
     '- Do not call Game Master, Admin or Grader URLs. Company systems are queried by the orchestrator;',
-    '  what it found is in your brief inside `<company_facts>` and is authoritative.',
+    '  what it found is in your brief inside `<company_facts>` and is authoritative. On a PI you may also look',
+    '  things up yourself (`company_tools`, then `company_call`): lookups only (logs, tickets, standards), never a',
+    '  tool that creates or changes data, and at most about 10 calls (the whole team shares one rate limit).',
     '- Network is for installing a dependency only when the item requires it (report it in `needs_dependency`).',
     '- Do not run `git commit`, `git push`, `git reset`, `git checkout` or change branches. The orchestrator owns git.',
     '- Find code with the codegraph MCP tools before `rg` or opening whole files, always with `projectPath` =',
@@ -122,8 +124,9 @@ for (const r of ROLES) {
   const name = `team_${r.role.replace(/-/g, '_')}`;
   const body = [
     `You are the ${r.role} subagent of the team. Your brief from the orchestrator contains tagged blocks`,
-    '(`<item>`, `<item_meta>`, `<triage>`, `<project_profile>`, `<company_facts>`, `<previous_attempt>`,',
-    '`<hypothesis>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<worktree>`, `<results_path>`): use the ones present.',
+    '(`<item>`, `<item_meta>`, `<triage>`, `<project_profile>`, `<company_facts>`, `<materials>`, `<recent_changes>`,',
+    '`<previous_attempt>`, `<hypothesis>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<baseline_failures>`, `<worktree>`,',
+    '`<results_path>`): use the ones present.',
     ...(r.readOnly ? ['You are READ-ONLY: do not modify, create or delete any file except your results JSON.'] : []),
     ...r.reads,
     '',

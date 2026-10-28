@@ -7,7 +7,8 @@ export class EventQueue {
   }
 
   push(type, data = {}) {
-    const event = { seq: ++this.seq, type, at: new Date().toISOString(), ...data };
+    // seq/type/at đặt sau data: data không được ghi đè loại sự kiện (ITEM_NEW từng mang `type` của item).
+    const event = { ...data, seq: ++this.seq, type, at: new Date().toISOString() };
     this.events.push(event);
     if (this.events.length > 500) this.events.splice(0, this.events.length - 500);
     for (const wake of this.waiters) wake();

@@ -149,13 +149,14 @@ async function fileDiff(checkoutRoot, base, f) {
 }
 
 // Bảo vệ test hiện có (Practice #1, L2): sửa file test chứa test fail sẵn, hoặc làm giảm số assertion
-// trong file test đã có, là thay đổi cấm trừ khi root khai allowTestChange kèm lý do từ đề/chuẩn công ty.
+// trong file test đã có, là thay đổi cấm trừ khi root khai allowTestChange kèm lý do và nguồn. Practice #6
+// (HIET12OA): test fail sẵn cũng có thể là test cũ trái với ý định hiện tại của app (đề TASK-02 cho sửa loại này).
 async function testGuard(checkoutRoot, base, files, baseline) {
   const problems = [];
   const failingFiles = baselineTestFiles(baseline?.failing);
   for (const f of files.filter(x => x.status === 'M' && TEST_FILE.test(x.path))) {
     const hit = failingFiles.find(t => f.path === t || f.path.endsWith(`/${t}`));
-    if (hit) problems.push(`${f.path}: modifies a test file whose test already failed at baseline (${hit}); fix the product instead`);
+    if (hit) problems.push(`${f.path}: modifies a test file whose test already failed at baseline (${hit}); fix the product unless the test contradicts the intended behaviour`);
     const { added, removed } = await fileDiff(checkoutRoot, base, f);
     const before = removed.reduce((n, l) => n + countAssertions(l), 0);
     const after = [...added.values()].reduce((n, l) => n + countAssertions(l), 0);
@@ -326,7 +327,9 @@ async function failBefore(probe, { base, files, folder, checkoutRoot, matchRoot,
       'test_one', { targets, logFile, timeoutMs }));
     const passed = fresh && run.report ? fresh.filter(id => run.report.tests.get(id) === 'passed')
       : run.res.code === 0 ? ['every declared test'] : [];
-    return { ...check, status: passed.length ? 'warn' : 'ok', source: run.source, ...(fresh ? { newTests: fresh.length } : {}),
+    // reproduced: ít nhất một test mới fail trên code chưa sửa (PI bắt buộc, xem requireReproduction).
+    const reproduced = fresh && run.report ? passed.length < fresh.length : run.res.code !== 0;
+    return { ...check, status: passed.length ? 'warn' : 'ok', reproduced, source: run.source, ...(fresh ? { newTests: fresh.length } : {}),
       ...(passed.length ? { warnings: [`passes on the unfixed code, so it does not reproduce the problem: ${passed.slice(0, 5).join('; ')}`] } : {}) };
   } catch (error) {
     return { ...check, status: 'skipped', reason: String(error?.message ?? error).slice(0, 160) };
@@ -339,8 +342,11 @@ const fallbackSignature = (kind, text, root) => {
   return first ? `${kind}:${first}` : kind;
 };
 
+// requireReproduction (PI, gate trên worktree): bằng chứng nguyên nhân gốc là một test mới fail trên code chưa sửa và pass
+// sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
+// root còn publish được theo luật cơ hội cuối.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, logDir, limits }) {
+  needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -361,7 +367,8 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   const excerpt = (text, maxLines = 15) => condense(text, { maxLines, maxChars: 2000, root: profile.root });
   const pathOf = problem => problem.split(': ')[0];
   const justified = Boolean(allowTestChange?.reason && allowTestChange?.source);
-  const testChangeHint = 'If the item text or a company standard says the old test is wrong, rerun with allowTestChange {reason, source} and quote it in the answer.';
+  const testChangeHint = 'If the old test contradicts the intended behaviour (item text, a company standard, or repo evidence such as a migration, '
+    + 'a code comment or an organizer-supplied seed), rerun with allowTestChange {reason, source} and explain it in the answer.';
 
   job.progress.push('diff');
   const files = await changedFiles(checkoutRoot, base);
@@ -478,6 +485,10 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     if (gone.length && !justified) {
       return done('forbidden_change', `tests that ran at baseline no longer run: ${gone.slice(0, 5).join('; ')}. ${testChangeHint}`, `tests-removed:${gone[0]}`);
     }
+    // Test fail ở baseline mà nay pass (không phải vì bị bỏ): item này sửa được chúng. tools.mjs ghi lại khi integrate
+    // để gợi ý sync các worktree khác (Practice #6: một test fail sẵn làm ba item mất điểm "existing tests").
+    const passedNow = id => (run.report ? run.report.tests.get(id) === 'passed' : res.code === 0);
+    result.fixesBaseline = (baseline?.failing ?? []).filter(t => !run.failing.includes(t) && !gone.includes(t) && passedNow(t));
   }
 
   // Build và test đã pass: lưu tree của đúng nội dung vừa kiểm (trừ answers/<ID>/, còn được sửa tiếp). worktree
@@ -490,6 +501,21 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     job.progress.push('fail-before');
     checks.push(await failBefore(probe, { base, files, folder, checkoutRoot, matchRoot, profile, addedRun, baseline, targets,
       logFile: log('fail-before'), timeoutMs: limits.testMs }));
+  }
+
+  // Trước check answer: answer_invalid bảo root khỏi gate lại, nên lỗi tái hiện phải báo trước.
+  if (requireReproduction) {
+    const fb = checks.find(x => x.name === 'fail-before');
+    let problem = null;
+    let warning = null;
+    if (!c.test_one) warning = 'no test_one command for this stack: reproduction not checked';
+    else if (!targets.length) problem = ['none', 'no test declared in tests_added: a PI needs a new test that fails on the unfixed code and passes with the fix'];
+    else if (fb?.status === 'skipped' && /no new test/.test(fb.reason ?? '')) problem = ['existing-only', 'only existing tests were declared: add a new test that fails on the unfixed code'];
+    else if (fb?.status === 'skipped') warning = `fail-before could not run (${fb.reason}): reproduction not checked`;
+    else if (fb?.reproduced === false) problem = ['passes-before', `every new test also passes on the unfixed code, so none reproduces the incident: ${(fb.warnings ?? []).join('; ')}`];
+    checks.push({ name: 'reproduction', status: problem ? 'fail' : warning ? 'warn' : 'ok', ...(problem ? { problems: [problem[1]] } : {}),
+      ...(warning ? { warnings: [warning] } : {}) });
+    if (problem) return done('not_reproduced', problem[1], `not_reproduced:${problem[0]}`);
   }
 
   const { problems, warnings } = answerCheck(matchRoot, key, template, schema, mvs);

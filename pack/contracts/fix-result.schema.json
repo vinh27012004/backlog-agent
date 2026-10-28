@@ -57,6 +57,44 @@
       ],
       "description": "BUG/PI: the cause; null for TASK/CR"
     },
+    "hypotheses": {
+      "type": "array",
+      "description": "BUG/PI: every cause you considered, most likely first, with the check that decides it and what it showed; [] for TASK/CR. The next attempt and the parallel checkers start from this list",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "check": {
+            "type": "string",
+            "description": "the test, request or reading whose outcome confirms or refutes it"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "refuted",
+              "open"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "what the check showed (file:line, command output, response); null while open"
+          }
+        },
+        "required": [
+          "cause",
+          "check",
+          "verdict",
+          "evidence"
+        ]
+      }
+    },
     "changed_files": {
       "type": "array",
       "items": {
@@ -115,6 +153,32 @@
       },
       "description": "groupId:artifactId:version the orchestrator must download"
     },
+    "test_change": {
+      "description": "Only when you changed an existing test because it contradicts the intended behaviour (e.g. a baseline-failing test): why, and where that behaviour is stated. null otherwise",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "which test, what it asserted, what the intended behaviour is"
+            },
+            "source": {
+              "type": "string",
+              "description": "item text quote, company standard id, or repo file:line (migration, code comment, organizer seed)"
+            }
+          },
+          "required": [
+            "reason",
+            "source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "risks": {
       "type": "array",
       "items": {
@@ -133,10 +197,12 @@
     "criteria",
     "suspects",
     "root_cause",
+    "hypotheses",
     "changed_files",
     "tests_added",
     "verification",
     "needs_dependency",
+    "test_change",
     "risks",
     "confidence"
   ]

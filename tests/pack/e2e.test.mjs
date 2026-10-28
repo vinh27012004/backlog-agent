@@ -2,7 +2,7 @@
 // repo git cục bộ. Chạy PREPARE → GAME một item → SUBMITTED, rồi đọc log bằng reducer của Player.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -103,6 +103,10 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const refreshed = await client.call('refresh_match');
     assert.equal(refreshed.items.length, 2);
     assert.equal(refreshed.items.find(i => i.key === 'TASK-01').minutesLeft, 20);
+    // Mốc ra đề lấy từ README của thư mục trận, để root canh lượt chờ.
+    const releases = (await client.call('match_state')).releases;
+    assert.deepEqual(releases.minutes, [0, 14, 29]);
+    assert.equal(releases.next.minute, 14);
     const work = await client.call('start_work', { backlogItemKey: 'TASK-01', requiredScenarios: 1 });
     assert.equal(work.submitTemplate.status, 'DRAFT');
     assert.deepEqual(work.files, ['challenge/TASK-01-submit.json', 'challenge/TASK-01-submit.schema.json']);
@@ -248,18 +252,61 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const mainCheckout = join(tw, 'matches', MATCH);
     writeFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hi" };\n');
     writeFileSync(join(mainCheckout, MATCH, 'src', 'lib.js'), 'module.exports = { greet: () => "hey" };\n');
-    sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-am', 'other item'], mainCheckout);
+    sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-am', 'other item'], mainCheckout, env);
     await assert.rejects(client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' }), /WORKTREE_CONFLICT.*lib\.js.*unchanged/);
     assert.match(readFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'utf8'), /"hi"/);
     assert.match(readFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'utf8'), /bye/);
     assert.equal(JSON.parse(readFileSync(wt2.answerFile, 'utf8')).status, 'DRAFT');
     assert.equal((await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).baseRevision, pushed.revision);
-    sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout);
+    sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout, env);   // cùng cấu hình git với helper (không autocrlf của hệ thống)
     // Root bỏ item (skill root, bước 9): BACKLOG_STATUS FAILED ghi mốc kết thúc.
     await client.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'Dropped: no time left.' } });
     const dropped = JSON.parse(readFileSync(join(tw, 'matches', MATCH, '.team-work', 'journal.json'), 'utf8')).items['TASK-02'];
     assert.equal(dropped.outcome, 'FAILED');
     assert.ok(dropped.endedAt);
+
+    // ---------------- PI (Game Rules §6: đua tốc độ, bấm giờ từ lúc đề hiện)
+    // Giả định để kiểm luồng fetch: một commit được đẩy lên remote lúc sự cố xảy ra.
+    const org = join(root, 'org');
+    const orgEnv = { ...env, GIT_AUTHOR_NAME: 'Game Master', GIT_AUTHOR_EMAIL: 'gm@x', GIT_COMMITTER_NAME: 'Game Master', GIT_COMMITTER_EMAIL: 'gm@x' };
+    sh('git', ['clone', '-q', remote.bare, org], root, orgEnv);
+    writeFileSync(join(org, MATCH, 'src', 'flags.js'), 'module.exports = { greeting: false };\n');
+    sh('git', ['add', '-A'], org, orgEnv);
+    sh('git', ['commit', '-q', '-m', 'Disable greeting flag'], org, orgEnv);
+    sh('git', ['push', '-q', 'origin', 'HEAD:main'], org, orgEnv);
+    gm.state.events = [{ id: 'ev-9', label: 'INCIDENT', title: 'Urgent production alert', items: ['PI-01'] }];
+    gm.state.backlog.push({ key: 'PI-01', type: 'PI', title: 'Greeting is empty', status: 'OPEN', points: 150,
+      deadlineMinutes: null, revealedElapsedSec: 0, revisionNo: 1, description: 'Since this morning customers see an empty greeting.' });
+    gm.state.seq += 1;
+    await client.call('refresh_match');
+    // Lượt chờ job của root trả về ngay khi có PI chưa Start Work.
+    const waitStart = Date.now();
+    const alerted = await client.call('job_status', { jobId: gate.jobId, waitSeconds: 60 });
+    assert.deepEqual(alerted.newPI, ['PI-01']);
+    assert.ok(Date.now() - waitStart < 10_000);
+    const piItem = await client.call('read_item', { backlogItemKey: 'PI-01' });
+    assert.equal(piItem.relatedEvents[0].label, 'INCIDENT');
+    const piWork = await client.call('start_work', { backlogItemKey: 'PI-01', requiredScenarios: 1 });
+    // Mỗi lượt PI tối đa 12 phút, checkpoint ở phút 6, không theo giờ hết trận.
+    assert.equal(piWork.timeBox.workMinutes, 12);
+    const toCheckpoint = Date.parse(piWork.timeBox.checkpointBy) - Date.now();
+    assert.ok(toCheckpoint > 5 * 60_000 && toCheckpoint < 6 * 60_000 + 1_000, String(toCheckpoint));
+    assert.match(piWork.next, /checkpoint_by/);
+    assert.equal(piWork.triage.reviewer, true);
+    assert.equal(piWork.triage.severity, 'critical');
+    assert.equal(piWork.triage.models.fixer.length, 4);
+    // Commit mới trên remote vào main trước khi tạo worktree, và vào brief.
+    assert.equal(piWork.remote.fetched, true, JSON.stringify(piWork.remote));
+    assert.equal(piWork.remote.merged, true, JSON.stringify(piWork.remote));
+    assert.equal(piWork.remote.newCommits[0].subject, 'Disable greeting flag');
+    assert.equal(piWork.remote.newCommits[0].author, 'Game Master');
+    assert.deepEqual(piWork.remote.newCommits[0].files, [`${MATCH}/src/flags.js`]);
+    assert.match(piWork.remote.recentChanges[0], /Game Master: Disable greeting flag/);
+    assert.ok(existsSync(join(mainCheckout, MATCH, 'src', 'flags.js')), 'main fast-forwarded');
+    const quiet = await client.call('job_status', { jobId: gate.jobId });
+    assert.equal(quiet.newPI, undefined, 'a started PI no longer interrupts waits');
+    const piRow = (await client.call('match_state')).items.find(i => i.key === 'PI-01');
+    assert.ok(Date.parse(piRow.checkpointBy) < Date.parse(piRow.returnBy));
 
     // Secret không bao giờ lọt ra kết quả tool
     const state = await client.call('match_state');

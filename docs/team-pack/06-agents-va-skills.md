@@ -37,8 +37,8 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 |---|---|---|---|---|
 | `team_orchestrator` | viết tay (`pack/agents/team-orchestrator.toml`) | Root, project manager. Theo 3 skill bắt buộc | Không (chỉ gọi tool) | progress log qua helper |
 | `team_fixer` | `agents/roles/fixer.md` | Phân tích và sửa **một** item trong worktree riêng; viết test; điền `answers/<ID>/`; chụp evidence bằng `capture_evidence` | Có, chỉ trong worktree được giao | `fix-result` |
-| `team_reviewer` | `agents/roles/reviewer.md` | Soát bản sửa (BUG, CR, TASK; bỏ qua với PI) tìm lỗi mà build/test/MVS không thấy | Không | `review` |
-| `team_pi_hypothesis` | `agents/roles/pi-hypothesis.md` | PI bị kẹt: kiểm **một** giả thuyết; 2–3 cái chạy song song | Không | `hypothesis` |
+| `team_reviewer` | `agents/roles/reviewer.md` | Soát bản sửa tìm lỗi mà build/test/MVS không thấy; với PI chạy cùng lúc với gate, xét R2/R4 trước | Không | `review` |
+| `team_pi_hypothesis` | `agents/roles/pi-hypothesis.md` | PI kẹt ở checkpoint: kiểm **một** giả thuyết `open` bằng cách đọc (không build, không chạy app/test vì fixer lượt sau có thể đang dùng worktree); 2–3 cái chạy song song | Không | `hypothesis` |
 
 Phân tích đề và kế hoạch evidence (vai của scout trong bản khung) là bước 1 của fixer (`criteria`,
 `suspects` trong `fix-result`). Kiểm MVS (vai của checker) do root làm từ evidence của fixer, cộng với gate
@@ -104,7 +104,7 @@ Subagent **ghi file** JSON vào `<results_path>` và trả lại đúng JSON đ�
 
 | Schema | Agent | Field chính |
 |---|---|---|
-| `fix-result` | `team_fixer` | `status` (`fixed`/`partial`/`cannot_fix`), `summary`, `criteria[]`, `suspects[]`, `root_cause`, `changed_files[]`, `tests_added[]` (đúng dạng `{target}` của `test_one`), `verification`, `needs_dependency`, `risks[]`, `confidence` |
+| `fix-result` | `team_fixer` | `status` (`fixed`/`partial`/`cannot_fix`), `summary`, `criteria[]`, `suspects[]`, `root_cause`, `hypotheses[]` (BUG/PI: `cause`, `check`, `verdict` `confirmed`/`refuted`/`open`, `evidence`; bản ghi giả thuyết mà lượt sau và checker dùng tiếp), `changed_files[]`, `tests_added[]` (đúng dạng `{target}` của `test_one`), `verification`, `needs_dependency`, `test_change`, `risks[]`, `confidence` |
 | `review` | `team_reviewer` | `verdict` (`approve`/`request_changes`), `root_cause_addressed`, `issues[]` (`severity` high/medium/low, file, dòng, cách sửa), `summary` |
 | `hypothesis` | `team_pi_hypothesis` | `hypothesis`, `verdict` (`supported`/`refuted`/`inconclusive`), `evidence`, `fix_location`, `next_check` |
 
@@ -150,8 +150,8 @@ loopback, ảnh chỉ vào `answers/<ID>/evidence/`) và hướng dẫn trong sk
 
   | Tier | Thứ tự ưu tiên | Dùng cho |
   |---|---|---|
-  | `small` | 6.1-terra, 6-luna, 5.6-luna (medium) | Lần 1 của item không deadline, tier `small`; `team_pi_hypothesis` |
-  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Từ lần 2; lần 1 của item có deadline, PI, CR, item `hard` |
+  | `small` | 6.1-terra, 6-luna, 5.6-luna (medium) | Lần 1 của item không deadline, tier `small` |
+  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Từ lần 2; lần 1 của item có deadline, PI, CR, item `hard`; `team_pi_hypothesis` (chỉ chạy khi PI đã kẹt, từ 28/10) |
   | `top` | 6-astra, rồi như `strong` (high) | Lần cuối (3, PI 4) của item có deadline hoặc PI |
   | `review` | 6.1-sol, 6-sol, 5.6-terra, 6.1-terra, 6-luna (medium) | `team_reviewer` |
 

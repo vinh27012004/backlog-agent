@@ -84,10 +84,15 @@ test('PI, CR and hard items always get the strong tier; Jev skips review only fo
   assert.equal(easy.reviewer.source, 'jev');
 });
 
-test('PI never gets a reviewer and errors fall back to code rules', async () => {
+test('a PI always gets a reviewer (in parallel with its gate) and errors fall back to code rules', async () => {
   const d = new Decider(new JevClient(CONFIG));          // không key, không transport → JEV_ERROR → luật code
   const r = await d.route('PI-01', ITEM, { difficulty: 'medium' }, { minutesLeft: 20 });
-  assert.equal(r.reviewer.value, false);
+  assert.equal(r.reviewer.value, true);
+  assert.match(r.reviewer.reason, /parallel with the gate/);
+  const vetoed = await new Decider(new JevClient(CONFIG, { transport: mockTransport }))      // Jev nói "không" (0.1)
+    .route('PI-01', ITEM, { difficulty: 'easy' }, { minutesLeft: 20 });
+  assert.equal(vetoed.reviewer.jev, 0.1);
+  assert.equal(vetoed.reviewer.value, true, 'Jev cannot drop the reviewer of a PI');
   assert.equal(r.model.value, 'strong');
   assert.equal(r.model.source, 'rule');
   assert.match(r.model.reason, /API key missing/);
@@ -134,6 +139,18 @@ test('root_cause_confirmed needs the code conditions; Jev can only veto', async 
   const offline = await new Decider(new JevClient(CONFIG)).rootCauseConfirmed('PI-01', report);
   assert.equal(offline.value, true);
   assert.match(offline.reason, /API key missing/);
+  // Danh sách giả thuyết (working record) mà không cái nào được xác nhận: nguyên nhân chưa được chứng minh.
+  const calls0 = calls.length;
+  const open = await d.rootCauseConfirmed('PI-01', { ...report, hypotheses: [
+    { cause: 'rate divided twice', check: 'repro test', verdict: 'open', evidence: null },
+    { cause: 'stale cache', check: 'read cache config', verdict: 'refuted', evidence: 'no cache on this path' }] });
+  assert.equal(open.value, false);
+  assert.match(open.reason, /confirmed one/);
+  assert.equal(calls.length, calls0, 'the code rule answers without asking Jev');
+  pYes = 0.95;
+  const confirmed = await d.rootCauseConfirmed('PI-01', { ...report, hypotheses: [
+    { cause: 'rate divided twice', check: 'repro test', verdict: 'confirmed', evidence: 'src/rates.ts:42' }] });
+  assert.equal(confirmed.value, true);
 });
 
 test('next_action never offers submit when the gate failed', async () => {

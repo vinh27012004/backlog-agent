@@ -214,6 +214,11 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 
 Không gọi mạng. Trả bảng gọn từng item: `key, type, title, status (trang), local (todo|started|working|gate|published|submitted|failed), deadlineIn, maxPoints, attempts`
 và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-xếp-lịch)), cùng `lanes` đang bận.
+Mỗi item chưa đóng có `returnBy` (PI thêm `checkpointBy`) tính từ lúc gọi, để lần thử mới lấy hạn mới. `releases` =
+`{minutes, next: {minute, at}}`: mốc ra đề đọc từ `README.md` của thư mục trận (HIET12OA: "Game Master releases briefs
+at minutes 0, 14 and 29"; `parseReleaseMinutes` nhận cả câu tiếng Việt "đề mở ở phút …"), `null` khi README không ghi.
+Root canh `wait_agent` để trả về ngay sau mốc tiếp theo. `read_item` trả thêm `relatedEvents`: sự kiện trận nhắc tới
+item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin.
 
 ### 5.8 `start_work`
 
@@ -224,12 +229,25 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
   quy ước [04 §4](04-progress-log.md#4-luật-liên-field-player-kiểm-bằng-code)).
 - Replay (200) không ghi lại `IN_PROGRESS` nếu log đã có.
 - **Output**: `{type, replay, startInstruction, submitTemplate, minimumVerificationScenarios, files, materialsDir,
-  minutesLeft, timeBox, triage, next}`. `timeBox` = `{minutesLeft, deadline, workMinutes, returnBy}`: `returnBy` là giờ
-  UTC fixer phải trả kết quả, bằng lúc item (hoặc trận, cái nào đóng trước) đóng trừ 5 phút cho gate + nộp
-  (`PUBLISH_RESERVE_MIN`), tối thiểu 1 phút làm việc. `match_state` lặp lại `returnBy` cho mỗi item chưa đóng để lần thử
+  minutesLeft, timeBox, triage, remote?, next}`. `timeBox` = `{minutesLeft, deadline, workMinutes, returnBy, checkpointBy?}`:
+  `returnBy` là giờ UTC fixer phải trả kết quả, bằng lúc item (hoặc trận, cái nào đóng trước) đóng trừ 5 phút cho gate +
+  nộp (`PUBLISH_RESERVE_MIN`), tối thiểu 1 phút làm việc. PI (đua tốc độ, Game Rules §6) thêm trần `PI_ATTEMPT_MIN` = 12
+  phút mỗi lượt và `checkpointBy` = phút 6 (`PI_CHECKPOINT_MIN`): chưa xác nhận được giả thuyết nào thì fixer trả
+  `partial` kèm `hypotheses` để root cho kiểm song song. `match_state` lặp lại `returnBy` cho mỗi item chưa đóng để lần thử
   lại lấy hạn mới; trận PAUSED thì hạn thật lùi lại, root đọc lại sau khi trận chạy tiếp.
   `triage.models` = `{fixer: [lần 1, lần 2, …], reviewer, piHypothesis}`, mỗi phần tử
   `{model, reasoning_effort, tier}` hoặc `null` ([06 §9](06-agents-va-skills.md#9-chọn-model)).
+- PI: trước triage, `git fetch` nhánh được giao (helper vốn chỉ fetch khi push bị từ chối) rồi trả `remote` =
+  `{fetched, newCommits: [{sha, author, date, subject, files}], merged, recentChanges, note?}`. Có commit mới, main không
+  có commit chưa push và không có thay đổi chưa commit thì `merge --ff-only` để worktree của PI có commit đó; không thì
+  `note` nói lý do (fixer đọc bằng `git show`). Root đưa `remote` vào brief làm `<recent_changes>` ("cái gì vừa thay đổi"
+  là nghi phạm số một, SRE / PagerDuty).
+- **Test fail ở baseline** (Practice #6 HIET12OA: một test cũ trái ý định của app, `cascade.test.ts`, làm CR-01, TASK-02,
+  BUG-02 mất 80 điểm "existing tests"): `baselineFailures` = `{failing, owner, youFix, fixedBy?}` hoặc `null`. `failing` là
+  test fail ở baseline mà main chưa có bản sửa. Chỉ **một** item chủ (`baselineOwner` trong journal) được giao xử lý:
+  item đầu tiên có `start.json`/`page.json` đòi chạy cả bộ test (`pnpm test`, "existing tests", `mvn test`…); hai fixer
+  cùng sửa một test thì item integrate sau bị `WORKTREE_CONFLICT`. Chủ đã nộp, bỏ hoặc integrate mà test vẫn fail thì
+  item kế tiếp có MVS như vậy nhận việc. Root đưa nguyên khối vào brief (`<baseline_failures>`).
 
 ### 5.9 `worktree`
 
@@ -239,7 +257,9 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
   `{worktreeRoot, matchRoot, baseRevision, setupJobId?}`.
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
   `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
-  `{integrated, headRevision, baseChanged}`.
+  `{integrated, headRevision, baseChanged, baselineFixed?, syncWorktrees?, hint}`. Gate cuối của item làm pass test fail ở
+  baseline (`lastGate.fixesBaseline`) thì helper ghi `preparation.baselineFixed[test] = ID` và trả các item còn worktree mở,
+  chưa integrate (`syncWorktrees`): root nộp item này rồi `worktree sync` từng item đó (Practice #6).
   - **Hard gate:** trước khi commit, helper tính tree của `<folder>/` trong worktree (trừ `answers/<ID>/`) và so
     với `journal.items[ID].lastGate.tree`. Chưa có gate nào build + test pass → `GATE_REQUIRED`; nội dung khác
     → `GATE_STALE` kèm danh sách file khác. Chặn trường hợp code sửa sau gate (fixer chạy tiếp, reviewer lỡ ghi,
@@ -307,7 +327,13 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
     (`.team-work/wt/_probe`, detached ở base của item, cài dependency một lần, chuẩn bị nền khi tạo worktree item đầu
     tiên, dùng tuần tự, dọn bằng `reset --hard` + `clean -fd`) và chạy `test_one` trên code chưa sửa. Test mới (có
     trong lần chạy với bản sửa, không có trong baseline) mà vẫn pass → `warn`. Probe chưa sẵn sàng sau 90 s thì
-    `skipped`. Không chặn: root gửi lại cho fixer (BUG/PI), reviewer nhận trong `<gate_findings>`.
+    `skipped`. Không chặn: root gửi lại cho fixer (BUG), reviewer nhận trong `<gate_findings>`. Kết quả có
+    `reproduced` (ít nhất một test mới fail trên code chưa sửa).
+  - `reproduction` (chỉ PI, gate ở worktree, `requireReproduction`): bằng chứng nguyên nhân gốc là test mới fail trên
+    code chưa sửa (cách Agentless kiểm patch). Không khai test (`not_reproduced:none`), chỉ khai test cũ
+    (`not_reproduced:existing-only`) hoặc mọi test mới đều pass trên code chưa sửa (`not_reproduced:passes-before`) →
+    fail `not_reproduced`, chạy trước check answer. Stack không có `test_one` hoặc probe không chạy được thì chỉ `warn`.
+    Đã qua build và regression nên `tree` vẫn được lưu: hết giờ thì root vẫn publish được theo luật cơ hội cuối.
   - Mọi check `warn` gom vào `findings` của kết quả để root đưa cho reviewer.
 - Build và test pass (kể cả khi chỉ answer sai) thì `codePassed: true` và `tree` = SHA tree của `<folder>/` trừ
   `answers/<ID>/` (index tạm `GIT_INDEX_FILE`, `git add -A` + `git write-tree`), tính sau khi lệnh của gate chạy
@@ -320,7 +346,11 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
   `timeout:<check>`; `answer_invalid` không có chữ ký (sửa answer không cần lượt fixer). Helper giữ
   `gateHistory` 12 lần gần nhất trong journal và trả `repeat` = số lần item fail với đúng chữ ký đó, kèm `hint`
   khi lặp lần 2 (đổi giả thuyết) và lần 3 (bỏ item; `decide next_action` không còn `retry`).
-- **Output** (bản đã dựng): `{passed, failKind, signature, repeat?, hint?, codePassed?, tree?, detail?, findings?, removedTests?, checks: [{name, status, …, source?, tail?, problems?, warnings?}], regression: {total, passed, failed, skipped}, baselineFailures, testsAdded, where}`.
+- **Output** (bản đã dựng): `{passed, failKind, signature, repeat?, hint?, codePassed?, tree?, detail?, findings?, removedTests?, checks: [{name, status, …, source?, tail?, problems?, warnings?}], regression: {total, passed, failed, skipped}, baselineFailures, fixesBaseline?, testsAdded, where}`.
+  `fixesBaseline`: test fail ở baseline mà lần chạy này pass (không phải vì bị bỏ), trừ những cái main đã có bản sửa.
+  `allowTestChange {reason, source}` lấy từ `test_change` trong fix-result của fixer; `source` là câu trích đề, mã chuẩn
+  công ty, hoặc `file:line` trong repo (migration, comment, seed của BTC) cho thấy test cũ trái ý định hiện tại (Practice #6:
+  đề BUG-02, CR-01, TASK-02 đều ghi "If an existing test contradicts the application's intended behavior, fix the test").
 
 ### 5.11 `record_verification`
 
@@ -376,13 +406,18 @@ và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-x
 - Sự kiện: `ITEM_NEW`, `ITEM_CLOSING` (còn ≤ 5 phút tới deadline mà chưa
   nộp), `ITEM_CLOSED`, `MATCH_STATUS` (`PAUSED`, `FINISHED`, `TIME_OVER`, `CANCELLED`), `JOB_DONE`,
   `RESULT_FILE` (file mới trong `.team-work/results/`, tức subagent xong), `AUTH_EXPIRED`, `LOG_BUDGET`.
-- **Output**: `{cursor, events: [...], state: {status, minutesLeft, open, working, submitted}}`.
+- **Output**: `{cursor, events: [...], state: {status, minutesLeft, nextReleaseAt, open, working, submitted}}`. Sự kiện
+  có dạng `{seq, type, at, ...dữ liệu}`; `ITEM_NEW` mang loại item ở `itemType` (trước 28/10 field `type` của item ghi
+  đè loại sự kiện, nên root chưa từng thấy `type: "ITEM_NEW"`).
 - Trận kết thúc thì trả ngay `MATCH_STATUS`; poller dừng.
 
 ### 5.16 `job_status`
 
 `{jobId, waitSeconds ≤ 110}` → `{state: running|done|failed, result?}`. Root chờ cả job trong một `exec`
 (pragma `yield_time_ms`, vòng `job_status`), không gọi lại từng 30 s (skill `team-orchestrator`, mục Waiting).
+Có PI đã hiện mà chưa Start Work (còn ≥ 3 phút) thì `job_status` và lượt chờ của `run_gate` trả về ngay, hoặc ngay khi
+PI hiện giữa lượt chờ, kèm `newPI` và `hint`: root giao PI trước rồi chờ job tiếp (HIET12OA: đề hiện → `start_work`
+mất 56 s đến 1 phút 52 vì root đang chờ).
 
 ### 5.17 `detect_profile` (A)
 
@@ -541,8 +576,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - **Hành vi**: gọi Jev (`src/jev.mjs`, `fetch`, timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút,
   trong lúc nghỉ dùng luật code ngay). Lỗi hoặc dưới ngưỡng (`config/jev.json`) thì dùng luật code.
 - **Luật cứng là sàn hoặc điều kiện AND**, Jev không ghi đè được ([08 §8](08-guardrails.md#8-jev-typesafe)): PI luôn
-  `critical`; PI, CR và item `hard` luôn `strong`; chỉ PI (luôn) và item `easy` (khi Jev nói không cần) mới bỏ reviewer;
-  `root_cause_confirmed` cần `root_cause`, `confidence` ≥ 0.7 và một verification pass, Jev chỉ phủ quyết;
+  `critical`; PI, CR và item `hard` luôn `strong`; PI luôn có reviewer (chạy song song với gate), chỉ item `easy`
+  (khi Jev nói không cần) mới bỏ reviewer; `root_cause_confirmed` cần `root_cause`, `confidence` ≥ 0.7, một verification
+  pass và, khi fix-result có `hypotheses`, ít nhất một cái `confirmed`; Jev chỉ phủ quyết;
   `next_action` chỉ đưa lựa chọn hợp lệ; regex injection chạy trên toàn bộ đề và thắng câu "không" của Jev.
 - Jev nhận đề cắt đầu + cuối (mô tả 1.400 + 600 ký tự, hướng dẫn Start Work 600 + 400), để câu lệnh cài ở cuối đề
   vẫn tới được Jev.

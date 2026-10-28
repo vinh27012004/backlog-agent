@@ -47,8 +47,8 @@ Mỗi lane là một item đang được một worker xử lý trong worktree ri
 push → submit) chạy **tuần tự** qua một khoá chung.
 
 **Thứ tự ưu tiên** (helper tính `suggestedOrder`, root quyết định cuối):
-1. **PI** theo `revealedAt` tăng dần. Có PI mới thì vào lane PI ngay; lane PI đang bận với PI khác thì
-   lấy một lane thường nếu PI đó còn trong thời gian vàng (mới hiện ≤ 5 phút).
+1. **PI** theo `revealedAt` tăng dần, không bao giờ chờ lane trống (skill root: tối đa 3 item cùng lúc, không tính
+   PI).
 2. Item **có deadline**, theo độ dư `slack = (deadlineAt − now) − estimate` tăng dần. Bỏ item có
    `slack < −0.4 × estimate` (không kịp).
 3. Item **không deadline**, theo mật độ giá trị `maxPoints / estimate` giảm dần.
@@ -104,17 +104,36 @@ start_work ─► company_call (test data, chuẩn công ty…) ─► worktree 
 
 ## 6. Luồng PI
 
-PI ít thông tin, không có MVS, Grader có tiêu chí riêng, và xếp hạng theo `receivedAt` của bài
-**PASSED**. Sai = 0, nên đúng quan trọng hơn nhanh, nhưng mỗi phút đều tính.
+Cập nhật 28/10. PI ít thông tin, không có MVS, Grader có tiêu chí riêng, xếp hạng theo `receivedAt` của bài
+**PASSED** (100 / 90 / 75 / 60 %), bấm giờ từ lúc đề hiện. Sai = 0 và không nộp lại được, còn nộp đúng mà chậm nhất vẫn
+được 60%: đúng trước, rồi bỏ mọi phút chờ vô ích, không bỏ bước kiểm. Các bước theo quy trình xử lý sự cố của Google SRE
+(problem report → examine → diagnose → test and treat → cure, ghi lại giả thuyết đã loại), PagerDuty ("recent
+deployment" là nghi phạm đầu tiên) và cách kiểm patch của Agentless / SWE-bench (test tái hiện phải fail trên code cũ).
 
-1. Có PI mới → `start_work` ngay (vật liệu có thể có gợi ý) → worktree.
-2. Spawn 1 `team_fixer` (model mạnh, skill `backlog-pi`): tái hiện, tìm nguyên nhân, sửa nhỏ nhất, thêm test tái hiện.
-3. Gate đầu tiên fail hoặc fixer kẹt: lấy 2–3 giả thuyết từ `root_cause`/`suspects` của fixer, spawn một
-   `team_pi_hypothesis` cho mỗi giả thuyết (chỉ đọc, song song). Verdict `supported`/`refuted` đi vào brief của
-   lượt fixer kế tiếp dưới thẻ `<hypothesis>` (hoặc `send_message` cho fixer đang chạy).
-4. Gate: build + test tái hiện + regression. PI không qua reviewer.
-5. Publish ngay khi gate pass. PI chiếm khoá publish trước các item khác.
-6. Cần chạy app (`run_app` của profile) để tái hiện: chạy trên cổng riêng, ghi PID, **luôn tắt** sau khi xong.
+1. **Nhận ngay**: PI không chờ lane trống. Root biết có PI qua `ITEM_NEW`, `newPI` khi đang chờ job (helper trả về sớm),
+   hoặc `match_state`; `wait_agent` được canh trả về ngay sau mốc ra đề (`releases`, đọc từ README trận).
+   `read_item` (kèm `relatedEvents`) → `start_work` (helper `git fetch`, fast-forward main nếu có commit mới, trả
+   `remote`) → Company Tools có log/ticket/chuẩn → `worktree create` → spawn `team_fixer` (model mạnh, skill
+   `backlog-pi`), brief có `checkpoint_by` và `<recent_changes>`.
+2. **Fixer điều tra theo checklist** của skill: báo cáo sự cố (triệu chứng, hành vi đúng, hợp đồng answer) → bằng
+   chứng rẻ trước (vật liệu, company facts, tự tra Company Tools tối đa ~10 lần, thay đổi gần đây, cấu hình, dữ liệu)
+   → khoanh vùng bằng codegraph → 2–4 giả thuyết có phép thử phân định → test tái hiện → sửa nguyên nhân gốc, đúng cho
+   mọi người dùng → xác minh. Mọi giả thuyết ghi vào `hypotheses` của fix-result.
+3. **Checkpoint** (`checkpointBy`, phút 6 của lượt): chưa xác nhận được giả thuyết nào thì fixer trả `partial`. Root,
+   trong cùng một bước, spawn một `team_pi_hypothesis` (tier `strong`, chỉ đọc) cho mỗi giả thuyết `open` (tối đa 3) và
+   fixer lượt sau với cả danh sách; verdict của checker tới đâu `send_message` cho fixer tới đó. Gate
+   `original_still_failing` cũng đi nhánh này. Mỗi lượt fixer PI tối đa 12 phút (`returnBy`), 4 lượt, lượt cuối model `top`.
+4. **Fixer xong**: `run_gate` và `team_reviewer` chạy **cùng lúc** (reviewer xét R2/R4: nguyên nhân có bằng chứng, bản
+   sửa đúng cho mọi trường hợp). Gate đòi test mới fail trên code chưa sửa (`not_reproduced`), cộng build + regression
+   như mọi item. Rồi `decide root_cause_confirmed` (cần một giả thuyết `confirmed` khi có danh sách).
+5. **Publish ngay** khi gate pass và reviewer không có `high`; PI đứng đầu hàng publish. Hết thời gian cho lượt nữa thì
+   build + regression pass là đủ (luật cơ hội cuối), kể cả khi `not_reproduced` hay reviewer `high`.
+6. Cần chạy app để tái hiện: chạy trên cổng riêng, ghi PID, **luôn tắt** sau khi xong. Checker giả thuyết không chạy
+   app, test hay seed.
+
+Chưa biết (hỏi BTC, không đoán): template/schema của PI, PI có `deadlineMinutes` không, lỗi của PI nằm trong code seed,
+commit BTC đẩy lúc sự kiện INCIDENT hay dữ liệu/cấu hình, Company Tools có log/monitoring cho PI không, Grader chấm PI
+bằng gì. Các con số 6/12 phút là điểm khởi đầu, chỉnh sau khi diễn tập.
 
 ## 7. Tích hợp và publish
 
