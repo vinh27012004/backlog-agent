@@ -61,8 +61,9 @@ async function freePort(teamWorkspace) {
 }
 
 // Lệnh build + start cho stack node. `next start` nhận -p (PORT trong .env của app có thể đè biến môi trường); app khác
-// đọc PORT. Không có script start thì chạy dev (vẫn có PORT).
-export function appCommand(matchRoot, port) {
+// đọc PORT. Không có script start thì chạy dev (vẫn có PORT). mode "dev" chạy script dev, không build, cho MVS ghi
+// "development app running" (Practice NO5X6J0K: BUG-01-TC-01 phải NOT_RUN vì tool chỉ chạy production, mất 67 điểm).
+export function appCommand(matchRoot, port, mode = 'production') {
   const profile = detectProfile(matchRoot);
   if (profile.stack !== 'node') return { profile, error: `stack ${profile.stack}: start the app by hand (evidence playbook §1)` };
   let pkg = {};
@@ -70,7 +71,9 @@ export function appCommand(matchRoot, port) {
   const scripts = pkg.scripts ?? {};
   const pm = profile.packageManager;
   const viaNext = script => (/^next (start|dev)\b/.test(script ?? '') ? `${pm} exec ${script} -p ${port}` : null);
-  const start = scripts.start ? viaNext(scripts.start) ?? `${pm} run start` : scripts.dev ? viaNext(scripts.dev) ?? `${pm} run dev` : null;
+  const dev = scripts.dev ? viaNext(scripts.dev) ?? `${pm} run dev` : null;
+  if (mode === 'dev') return dev ? { profile, build: null, start: dev, mode: 'dev' } : { profile, error: 'package.json has no dev script' };
+  const start = scripts.start ? viaNext(scripts.start) ?? `${pm} run start` : dev;
   if (!start) return { profile, error: 'package.json has no start or dev script' };
   return { profile, build: scripts.start && profile.commands.build ? profile.commands.build : null, start, mode: scripts.start ? 'production' : 'dev' };
 }
@@ -120,17 +123,19 @@ export function stopApp(teamWorkspace, key) {
   return { stopped: true, pid: s.pid, port: s.port };
 }
 
-export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoot, build = true, waitSeconds = MAX_WAIT_SECONDS }) {
+export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoot, mode = 'production', build = true,
+  waitSeconds = MAX_WAIT_SECONDS }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   if (action === 'stop') return stopApp(teamWorkspace, key);
   if (action === 'status') return settle(teamWorkspace, key, waitSeconds);
   if (action !== 'start') fail('INVALID_ARGUMENT', 'action');
+  if (!['production', 'dev'].includes(mode)) fail('INVALID_ARGUMENT', 'mode');
 
   const where = locate(teamWorkspace, matchRoot);
   stopApp(teamWorkspace, key);   // start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là bản mới
   const port = await freePort(teamWorkspace);
-  const cmd = appCommand(where.matchRoot, port);
+  const cmd = appCommand(where.matchRoot, port, mode);
   if (cmd.error) fail('UNSUPPORTED_APP', cmd.error);
   const steps = [build && cmd.build, cmd.start].filter(Boolean);
   // Build rồi start trong một tiến trình tách rời, sống tiếp khi helper của subagent kết thúc. Vỏ là node: trên Windows

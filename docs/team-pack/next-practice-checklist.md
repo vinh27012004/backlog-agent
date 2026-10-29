@@ -60,6 +60,16 @@ nhưng chuẩn CSV của CR-01 không lưu ở đâu nên không đối chiếu 
       `results/TASK-01-solver-1.json` với `answer_values`. Hai đáp án khớp thì publish không qua checker; lệch thì
       `ANSWER_DISPUTED` rồi một checker. Ghi credit và thời gian của solver.
 
+## 3c. Sửa sau NO5X6J0K (L56–L59)
+
+- [ ] Trang Init của Player: ô bật streaming được tích. Sau trận, dashboard Game Master không còn "Submitted without
+      observed work" (L57). Còn thì hỏi BTC.
+- [ ] BUG-01-TC-01 (cần bản dev): fixer gọi `app start {mode: "dev"}`, có `tc-01-desktop-dashboard.png` chụp trên bản dev, TC-01
+      `PASS`; app dev sẵn sàng trong bao lâu (L56).
+- [ ] CSV evidence của CR-01 trong commit đã đẩy giữ CRLF: `git show <sha>:<folder>/answers/CR-01/evidence/tc-03-special-company.csv | od -c`
+      có `\r\n` cuối dòng và `\n` trong tên công ty (L58).
+- [ ] TASK-01: reviewer không cho `high` chỉ vì thiếu commit `571c531`; tối đa 2 lượt fixer (L59).
+
 ## 4. Thang model (L44, sửa sau ZVUYZ41V)
 
 Mốc ZVUYZ41V: 30,29 credit; fixer 25,41, trong đó 17,8 là lượt 6.1-sol thứ 2–3. TASK-02 luna 15,6 phút rồi sol 3,8

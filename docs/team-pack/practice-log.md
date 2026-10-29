@@ -295,3 +295,43 @@ checker giải độc lập, `record_verification` chặn khi hai đáp án lệ
 | CR-01 | 300 | 04:27:41 → 04:44:53 (17m12s) | strong (Jev) | 2: 6.1-sol 6m38s (`partial`), 6.1-sol 3m20s | L50, L54, L55 |
 | TASK-02 | 250 | 04:27:44 → 04:39:02 (11m19s) | strong (Jev) | 1: 6.1-sol 6m23s | Gate main 70 s |
 | TASK-01 | 100 | 04:42:45 → 04:57:37 (14m52s) | small (luật) | 2: 6-sol medium 2m49s, 6.1-sol 4m35s | L51 |
+
+## #9 · 29/10/2026 · tự luyện `NO5X6J0K` (Player 0.9.39, cùng bộ item)
+
+Cả 5 item nộp, item cuối lúc 09:15:53Z (root chạy từ 08:29:34Z). Root `gpt-6.1-terra` medium. ≈114,43 credit theo
+price card (TOKXKPBV 176,81): root 19,20, fixer 74,54, reviewer 11,34, verifier 6,49, solver TASK-01 2,85; guardian
+(`codex-auto-review`, ngoài price card) 6,3M input, 20,2% tổng input. Hạn mức gói Plus 1% → 65% trong 50 phút. Điểm
+BTC đã biết: BUG-01 133/200 (TC-01 `NOT_RUN`). Dashboard Game Master có 5 cảnh báo "Submitted without observed work",
+mỗi item một cảnh báo (L57). Nguồn: `runs/judge/NO5X6J0K/` (`report.md`, `_usage/usage.md`), `.team-work/journal.json`,
+`results/`, `team-sdlc-pack/logs/NO5X6J0K.progress.ndjson`.
+
+### Chấm lại (`/judge-practice`, 29/10)
+
+Judge cho cả 5 item đạt mọi tiêu chí mức H; gate 5/5 và reviewer 5/5 khớp judge, không false green, không false red.
+
+| Item | Judge | Điểm nhỏ |
+|---|---|---|
+| BUG-01 | pass | Bản sửa `md:ms-60` đúng gốc lỗi; TC-01 `NOT_RUN` vì không chạy được bản dev (L56) |
+| BUG-02 | pass | Sửa luôn form Expense theo tiền tệ của client, trong khi `Expense` không có cột tiền tệ và `postExpense` ghi số minor thô: rủi ro nhỏ, chưa thấy lỗi |
+| CR-01 | pass | CSV đúng KB-EXP-01, nhưng blob đã commit có LF chứ không phải CRLF như file tải về (L58) |
+| TASK-01 | pass | 98304 khớp với lần lần lại độc lập trên source đã phát; commit `571c531` vẫn không có trong repo (L59) |
+| TASK-02 | pass | Zod 3 → 4 (bản major): `@hookform/resolvers` 5.4 hỗ trợ, code chỉ dùng API Zod 4 còn giữ |
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L56 | BUG-01-TC-01 có tiền điều kiện "development app running". Tool `app` (L49) chỉ chạy production khi có script `start`, còn playbook cấm tự chạy `pnpm dev`, nên fixer không có cách hợp lệ nào và ghi đúng sự thật là `NOT_RUN`. Lượt 2–3 của BUG-01 cũng không làm được | BUG-01 133/200 (mất 67 điểm) | **Đã** sửa: `app start {mode: "dev"}` chạy script `dev` (`next dev -p <port>`), không build; mặc định vẫn là production. Playbook §1: kịch bản cần bản dev thì dùng `mode: "dev"`. Test trong `app.test.mjs` |
+| L57 | Game Master báo "Submitted without observed work" cho cả 5 item. Câu này không có trong mã Player 0.9.39 nên do server tính. Progress log của team đủ START_WORK → IN_PROGRESS → BACKLOG_TESTS → SUBMITTED cho mọi item. Trạng thái Player của trận ghi `streamingEnabled: false`, mà Player chỉ đẩy dashboard snapshot (thời gian làm việc, hoạt động Codex) lên `/api/v1/game-player/dashboardSnapshot` khi streaming bật (`local-app.mjs:216`) | Chưa biết có trừ điểm không | Chưa sửa (không phải lỗi code): trận sau bật streaming ở trang Init (mặc định là bật). Nếu bật rồi mà vẫn bị cảnh báo thì hỏi BTC |
+| L58 | Máy để `core.autocrlf=true`: `git add` đổi CRLF của các CSV CR-01 tải về thành LF. MVS đòi "the file exactly as the browser downloaded it"; bản checkout lại thì CRLF ở khắp nơi, cả dấu xuống dòng trong tên công ty (`\n` thành `\r\n`) | Lần này không mất điểm (KB-EXP-01 chấp nhận LF); file có dấu xuống dòng trong dữ liệu thì có thể mất | **Đã** sửa: `prepare_checkout` ghi `<folder>/answers/*/evidence/** -text` vào `.git/info/attributes` (dùng chung cho mọi worktree, không vào diff nộp). Test trong `e2e.test.mjs` |
+| L59 | TASK-01: reviewer lượt 1 và 2 cho `high` vì commit chuẩn `571c531` không có trong repo, dù verifier `publish` và solver độc lập cũng ra 98304. Không agent nào lấy được commit đó, nên vòng mới không đổi được gì | 3 lượt fixer, 4 gate, 17 phút cho item 100 điểm; cả 3 lượt đều ra 98304 | **Đã** sửa: `reviewer.md`: một `not_met` mà không agent nào đáp ứng được trong trận (thiếu commit, file, tài khoản, dịch vụ và fix-result đã ghi) chỉ tối đa `medium`. Skill root: `high` kiểu đó coi như không có; lượt sau ra cùng đáp án và cùng `high` thì publish, không chạy lượt thứ ba |
+
+| Item | Điểm | `start_work` → nộp | Lượt fixer | Ghi chú |
+|---|---|---|---|---|
+| BUG-02 | 150, deadline 18' | 08:30:13 → 08:43:32 (13m19s) | 1: 6.1-sol high 10m15s | Nộp đầu tiên |
+| BUG-01 | 200 | 08:30:16 → 08:48:49 (18m33s) | 3: 6.1-terra medium 4m27s, 6.1-sol 1m59s, 6.1-sol 1m46s | L56; lượt 3 sau khi sync BUG-02 |
+| CR-01 | 300 | 08:43:55 → 09:08:38 (24m43s) | 2: 6.1-sol 12m27s, 6.1-sol 7m28s | Lượt 2 chỉ làm lại evidence; 3,4M input, nhiều nhất trận |
+| TASK-02 | 250 | 08:43:58 → 08:57:21 (13m23s) | 1: 6.1-sol 9m22s | 3 gate |
+| TASK-01 | 100 | 08:59:00 → 09:15:53 (16m53s) | 3: 6.1-sol 3m16s, 2m17s, 3m38s | L59; solver độc lập 1m31s đồng ý 98304 |
+
+Root: 38% input của root là lượt gọi model ngay sau `wait_agent` (48 lần), 24% sau `spawn_agent` (29 lần); context lớn
+nhất 116K. Guardian review root 56 lần (3,5M input); tool bị review nhiều nhất: `capture_evidence` 31, `run_gate` 27,
+`app` 26, `worktree` 17.

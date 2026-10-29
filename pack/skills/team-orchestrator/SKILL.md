@@ -110,6 +110,11 @@ not started while a slot is free); start them right away (**One item**, step 1) 
      (the gate still holds; pass `disputeChecked: true` to `record_verification`). `supported` or `inconclusive` → new fixer attempt (step 4) with the checker's value and evidence in
      `<previous_attempt>` (Practice TOKXKPBV: TASK-01's reviewer disputed 98304; a second round of fixer, verifier and
      reviewer took 7.5 minutes and the answer stood).
+   - Unreachable requirement: `recommendation: "publish"`, and every reviewer `high` asks for something no agent can
+     obtain in the match (a commit, file, account or service that the fix-result reports as absent from the
+     repository and the materials) → treat it as no `high`: step 7. Also when a retry returns the same answer value
+     and the same reviewer `high` as the attempt before: publish that attempt, never a third round (Practice
+     NO5X6J0K: TASK-01's canonical commit was missing; 3 fixer rounds, 4 gates and 17 minutes all gave 98304).
    - `"retry"` or a reviewer `high` → new fixer attempt (step 4) with `<previous_attempt>` = the verdict's
      `retry_brief` plus the reviewer's `high` issues, model from `gate.next`. Max 2 retries (PI 3), within the
      item's time. `gate.repeat: 2` → tell the fixer `sameSignatureAsBefore` and to change the hypothesis, not the

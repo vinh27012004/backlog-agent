@@ -2,7 +2,7 @@
 // repo git cục bộ. Chạy PREPARE → GAME một item → SUBMITTED, rồi đọc log bằng reducer của Player.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -64,6 +64,16 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(configured.models.orchestratorModel, 'gpt-test');
     const checkout = await client.call('prepare_checkout');
     assert.match(checkout.revision, /^[a-f0-9]{40}$/);
+    // Evidence giữ đúng byte cả khi core.autocrlf=true (NO5X6J0K: CSV tải về mất CRLF khi commit).
+    const checkoutDir = join(tw, 'matches', MATCH);
+    const csv = join(checkoutDir, MATCH, 'answers', 'CR-01', 'evidence', 'probe.csv');
+    mkdirSync(dirname(csv), { recursive: true });
+    writeFileSync(csv, 'a,b\r\n"x\r\ny",z\r\n');
+    assert.equal(sh('git', ['-c', 'core.autocrlf=true', 'check-attr', 'text', '--', `${MATCH}/answers/CR-01/evidence/probe.csv`], checkoutDir, env).trim(),
+      `${MATCH}/answers/CR-01/evidence/probe.csv: text: unset`);
+    const blob = sh('git', ['-c', 'core.autocrlf=true', 'hash-object', '--path', `${MATCH}/answers/CR-01/evidence/probe.csv`, csv], checkoutDir, env).trim();
+    assert.equal(sh('git', ['hash-object', '--no-filters', csv], checkoutDir, env).trim(), blob);
+    rmSync(join(checkoutDir, MATCH, 'answers', 'CR-01'), { recursive: true });
     writeFileSync(join(packWs, 'local', 'machine.json'), JSON.stringify({ databasePassword: 'db pass' }));
     writeFileSync(join(packWs, 'local', 'jev.json'), JSON.stringify({ baseUrl: `http://127.0.0.1:${jev.address().port}` }));
     let job = await client.call('setup_environment', { waitSeconds: 45 });

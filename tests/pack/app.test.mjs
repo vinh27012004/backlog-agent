@@ -76,15 +76,19 @@ test('a failing build returns failed with the log tail; paths outside the matche
   assert.equal(existsSync(join(appsDir(tw), 'BUG-02.json')), false);
   await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-02', matchRoot: join(tw, 'elsewhere') }), /PATH_NOT_ALLOWED/);
   await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: '../x', matchRoot: broken }), /INVALID_ARGUMENT/);
+  await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-02', matchRoot: broken, mode: 'staging' }), /INVALID_ARGUMENT/);
 });
 
-test('next apps get -p for the port; no start script falls back to dev; other stacks are unsupported', () => {
+test('next apps get -p for the port; mode dev and no start script run dev; other stacks are unsupported', () => {
   const dir = tempDir('mtm-app-cmd-');
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'next build', start: 'next start', dev: 'next dev' } }));
   writeFileSync(join(dir, 'pnpm-lock.yaml'), '');
   assert.deepEqual(['build', 'start', 'mode'].map(k => appCommand(dir, 3105)[k]), ['pnpm run build', 'pnpm exec next start -p 3105', 'production']);
+  assert.deepEqual(['build', 'start', 'mode'].map(k => appCommand(dir, 3105, 'dev')[k]), [null, 'pnpm exec next dev -p 3105', 'dev']);
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
   assert.deepEqual(['build', 'start', 'mode'].map(k => appCommand(dir, 3105)[k]), [null, 'pnpm run dev', 'dev']);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'next build', start: 'next start' } }));
+  assert.match(appCommand(dir, 3105, 'dev').error, /no dev script/);
   const java = tempDir('mtm-app-java-');
   writeFileSync(join(java, 'pom.xml'), '<project/>');
   assert.match(appCommand(java, 3105).error, /start the app by hand/);

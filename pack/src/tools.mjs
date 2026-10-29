@@ -198,9 +198,11 @@ export class Runtime {
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
         handler: a => this.captureEvidence(a) },
-      { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
+      { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version (mode "dev": runs the dev script instead, no build, only when a scenario needs the development app) and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
         inputSchema: obj({ action: { type: 'string', enum: ['start', 'status', 'stop'] }, backlogItemKey: str('Item key.'),
-          matchRoot: str('start: absolute matchRoot of the worktree (from the brief).'), build: bool('start: build first (default true).'),
+          matchRoot: str('start: absolute matchRoot of the worktree (from the brief).'),
+          mode: { type: 'string', enum: ['production', 'dev'], description: 'start: production (default) or dev.' },
+          build: bool('start: build first (default true; ignored for dev).'),
           waitSeconds: num('start/status: seconds to wait for the app to answer (max 50, default 50).') }, ['action', 'backlogItemKey']),
         handler: a => app({ teamWorkspace: this.teamWorkspace, ...a }) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
@@ -316,6 +318,13 @@ export class Runtime {
       const current = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
       const missing = ['.team-work/', '.codegraph/'].filter(p => !current.split(/\r?\n/).includes(p));
       if (missing.length) writeFileSync(exclude, `${current.trimEnd()}\n${missing.join('\n')}\n`, 'utf8');
+      // Evidence giữ đúng từng byte: với core.autocrlf=true, git add đổi CRLF của CSV tải về thành LF (Practice
+      // NO5X6J0K: CR-01). Chỉ thư mục trận này (chưa có evidence lúc clone nên không file nào thành "đã sửa");
+      // info/ dùng chung cho mọi worktree và không vào diff nộp.
+      const attributes = join(checkoutRoot, '.git', 'info', 'attributes');
+      const rule = `${repository.folder}/answers/*/evidence/** -text`;
+      const attrs = existsSync(attributes) ? readFileSync(attributes, 'utf8') : '';
+      if (!attrs.split(/\r?\n/).includes(rule)) writeFileSync(attributes, `${attrs.trimEnd()}\n${rule}\n`.trimStart(), 'utf8');
     } catch (error) {
       this.stage('REPOSITORY', 'FAILED', oneLine(`Checkout failed: ${error.code ?? 'error'}`, 200));
       throw error;

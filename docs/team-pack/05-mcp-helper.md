@@ -657,7 +657,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - **Vì sao**: fixer BUG-01 của TOKXKPBV mất khoảng 6 trong 11 phút để tự chạy `pnpm dev` 4 lần, `taskkill` theo port,
   và gỡ một dev server trả CSS cũ (class Tailwind mới không có), rồi mới build bản production. Các trận trước cũng tốn
   thời gian và token cho port bận, log khoá worktree (HIET12OA), app chưa chạy khi chụp (ZVUYZ41V `chrome-error`).
-- `{action: "start", backlogItemKey, matchRoot, build? (mặc định true), waitSeconds? (≤ 50, mặc định 50)}`:
+- `{action: "start", backlogItemKey, matchRoot, mode? ("production" mặc định | "dev"), build? (mặc định true), waitSeconds? (≤ 50, mặc định 50)}`:
   `matchRoot` tuyệt đối trong `TeamWorkspace/matches/` (helper của subagent chưa configure nên không tự biết worktree).
   Dừng app cũ của item, chọn port trống 3100–3199 (bỏ port của app item khác đang sống), rồi chạy build và start
   trong **một tiến trình tách rời**: vỏ `node` (detached) gọi `pwsh` với `stdio: inherit`, vì `pwsh` detached trên
@@ -669,6 +669,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Lệnh (chỉ stack node; stack khác trả `UNSUPPORTED_APP` và playbook giữ cách tự chạy): có script `start` thì build
   rồi start, `mode: production`; script là `next start` thì `<pm> exec next start -p <port>` (PORT trong `.env` của
   app có thể đè biến môi trường), còn lại `<pm> run start` với `PORT`. Không có `start` thì `dev`, không build.
+  `mode: "dev"` luôn chạy script `dev` (`next dev -p <port>` hoặc `<pm> run dev`), không build; không có script `dev`
+  thì `UNSUPPORTED_APP`. Dùng cho kịch bản MVS ghi "development app running" (NO5X6J0K: BUG-01-TC-01 phải `NOT_RUN`,
+  mất 67 điểm).
 - `status {backlogItemKey, waitSeconds?}`, `stop {backlogItemKey}` (`taskkill /T /F` theo pid trong file trạng
   thái). `worktree remove` của root gọi `stop` trước khi xoá và trả `stoppedApp`.
 - Không `readOnlyHint`: chạy tiến trình nên qua `auto_review`.

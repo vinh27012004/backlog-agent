@@ -22,6 +22,11 @@ in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
   starts it detached on a free port (3100+) with its log in `<checkoutRoot>/.team-work/logs/<ID>-app.log`, and waits
   until it answers. `state: "ready"` gives the `url` for `capture_evidence`; `"starting"`: call
   `app {action: "status", backlogItemKey, waitSeconds: 50}`; `"failed"`: read `tail`, fix the cause, start again.
+- A scenario whose precondition says the development app runs (`pnpm dev`, "development app running"): `app start`
+  with `mode: "dev"` (runs the dev script, no build; the first page load compiles, so `waitSeconds` may run out:
+  call `status` again). Every other scenario uses the default production mode; switch with `app start` again
+  (Practice NO5X6J0K: BUG-01-TC-01 needed the dev app, the tool only ran production, the scenario went `NOT_RUN`
+  and the item lost 67 of 200 points).
 - Never run `pnpm dev`, `next start` or `taskkill` yourself (Practice TOKXKPBV: BUG-01's fixer started the dev
   server 4 times, killed processes by port and lost 6 minutes to a dev server that served stale CSS).
 - Changed code since the last start: `app start` again; it stops the old app and rebuilds. Pass `build: false` only

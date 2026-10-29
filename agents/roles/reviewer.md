@@ -32,7 +32,11 @@ fixer's own `requirements` in `<fix_result>`, but check the claim against the di
 a "met" without anything that shows it is `unclear`. A company standard the item points to is saved under the
 item's `company/` folder in `<materials>`: compare formats, values and rules with it exactly. Every `not_met` that
 the diff could meet is also a `high` issue under R1, with the id in `problem`; an `EV-n` file that is missing or
-does not show what the item asks is R8.
+does not show what the item asks is R8. A `not_met` that no agent can meet in this match (it needs a commit, file,
+account or service that is absent from the repository and `<materials>`, and the fix-result already says so) stays
+`not_met` in `requirements` but is at most a `medium` issue: a new fixer round cannot produce it (Practice NO5X6J0K:
+TASK-01's canonical commit was not in the repository; two `high` issues on it bought 2 more fixer rounds, 3 more
+gates and 13 minutes, and the answer stayed 98304). Check the value itself against the source you do have.
 
 ## Rules for issues
 - Start `problem` with the criterion ID in brackets, e.g. `[R2] the discount is still applied after tax`.
