@@ -31,21 +31,24 @@ project keeps them. Frontend in the same repo consumes the API? Check it too.
 - New error case: use the project's existing error format and status-code conventions.
 - New config value: add a default so existing environments keep working.
 
-## 4. Tests from the spec
-- For each changed rule: a test of the new behaviour, including the boundary the spec implies
-  (e.g. limit 5 → test 5 allowed, 6 rejected).
+## 4. Tests from the spec & viewpoints
+- For each changed rule, cover the relevant viewpoint dimensions:
+  - **Normal**: test the new behavior with expected inputs and status codes.
+  - **Boundary**: test the limits the spec implies (e.g. limit 5 → test 5 allowed, 6 rejected; min/max boundaries).
+  - **Error & Cross-field**: test rejection of invalid inputs or conflicting parameters introduced by the delta.
 - One test that shows behaviour outside the delta is unchanged, where the change is risky.
+- Test data hygiene: isolate test records (unique prefixes, cleanup on teardown) to keep existing regression test suites green.
 - Update an existing test **only** where the spec changes its expected result; list each one in
   `summary` with the reason.
 
 ## 5. Implement
 Follow the existing layering and naming. Put rules where similar rules already live. Need a new
 library? Edit the build file and list it in `needs_dependency` (no network in the sandbox; the
-orchestrator downloads it).
+orchestrator downloads it). Remove all debug leftovers (`console.log`, `print`, `debugger`, stubs).
 
 ## 6. Verify
 New tests · existing tests of touched modules · MVS via the MVS scenarios in the brief · build.
 
 ## Done when
 Every row of the spec delta has a passing test · callers updated · MVS passes (or reported as not
-runnable) · no unrelated changes.
+runnable) · no debug leftovers · no unrelated changes.

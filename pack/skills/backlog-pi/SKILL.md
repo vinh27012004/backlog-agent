@@ -38,7 +38,8 @@ reproduction. Use `.agents/skills/backlog-references/pi-triage.md` to map sympto
 4. **Hypotheses**: 2–4 causes, most likely first, each with a check whose outcome differs depending on whether it
    is true. Keep them in your `hypotheses` list as you go: a refuted one stays there with its evidence.
 5. **Confirm with a reproduction test**: the smallest test that fails on the current code for the reported
-   reason, at the lowest layer that shows it, next to the existing tests. A local HTTP call to the app you started
+   reason, at the lowest layer that shows it, next to the existing tests. Isolate test data so shared state or
+   other worktrees are not corrupted. A local HTTP call to the app you started
    is extra evidence, not a substitute. **Stop investigating at the first hypothesis the test confirms.**
 6. **Fix the root cause** minimally, correct for every user and input, not only the reported case: the same
    pattern in the same function/class, and the neighbours of the failing input (null/empty, boundary, other time
@@ -62,4 +63,4 @@ was verified, written for the grader.
 
 ## Done when
 Root cause confirmed by a reproduction test that failed before and passes after · related tests pass · answer
-file filled.
+file filled · no debug leftovers.

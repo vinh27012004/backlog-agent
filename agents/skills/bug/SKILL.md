@@ -26,6 +26,7 @@ MVS scenario that must pass, and they check that nothing else broke.
   a unit test of the faulty function if possible, an API/integration test only if the bug is in
   wiring, mapping, serialization, validation or persistence.
 - Put it next to the existing tests of that class/module, follow their style and fixtures.
+  Isolate test data (unique IDs, teardown or rollback) so shared state does not break other tests.
 - Run only that test (see `test_one` in the project profile). Confirm it fails with the signature.
 - Cannot reproduce in ~1/3 of your time? Record what you tried in `verification`, fix the most likely
   cause from the evidence, lower `confidence`.
@@ -37,7 +38,7 @@ MVS scenario that must pass, and they check that nothing else broke.
 - Smallest change that is correct for all inputs, not only the reported one. Think about the
   neighbours of the failing input (null/empty, zero, negative, boundary, other locales/time zones).
 - Same bug pattern elsewhere in the same function/class? Fix it there too and say so; do not go hunting
-  across the codebase.
+  across the codebase. Clean up any temporary debug code (`console.log`, `print`, `debugger`, stubs).
 
 ## 5. Verify
 1. Reproduction test: failed before, passes now.
@@ -52,4 +53,4 @@ MVS scenario that must pass, and they check that nothing else broke.
 
 ## Done when
 Reproduction test failed before and passes after · related tests pass · MVS passes (or is reported
-as not runnable) · diff contains only the fix and its tests.
+as not runnable) · diff contains only the fix and its tests, with no debug leftovers.
