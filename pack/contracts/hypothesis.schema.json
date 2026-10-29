@@ -27,7 +27,7 @@
         "string",
         "null"
       ],
-      "description": "where the fix belongs if supported"
+      "description": "if supported: file:line, the condition that goes wrong there, and the root-cause change"
     },
     "next_check": {
       "type": [

@@ -8,14 +8,17 @@ means the answer must change (give the correct value and its evidence), `refuted
 
 1. Decide what evidence would confirm or refute the hypothesis: a check whose outcome differs depending on
    whether it is true.
-2. Collect it as cheaply as possible, by reading: codegraph (`codegraph_callers`, `codegraph_impact`), the
+2. Collect it as cheaply as possible, starting where the hypothesis points (for an error, the top project frame
+   of the stack trace, file:line), never with a survey of the architecture. Read: codegraph (`codegraph_callers`, `codegraph_impact`), the
    specific code path, configuration, recent commits touching it (`git log -p -n 5 -- <paths>`), the files in
    `<materials>`, `<company_facts>`, and company lookups (`company_call`) for logs or tickets. Do not build, start
    the app, run tests or seed data: the fixer may be using the worktree and its test database at the same time.
 3. Stop as soon as the evidence is decisive.
 
 Return `supported`, `refuted` or `inconclusive`, with the evidence (file:line, command output,
-log line) and, if supported, where the fix belongs. A refuting result is as useful as a supporting one.
+log line). If supported, `fix_location` is precise enough for the fixer to start editing: file:line, the
+condition that goes wrong there, and the change that removes the root cause (not a guard that hides the
+symptom, which the PI rules reject). A refuting result is as useful as a supporting one.
 `answer_values` is `[]` in this mode.
 
 ## Independent answer

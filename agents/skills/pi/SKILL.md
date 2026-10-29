@@ -27,7 +27,8 @@ reproduction. Use `<pi_triage>` below to map symptoms to likely causes.
 2. **Evidence, cheapest first**:
    - the files in `<materials>` (logs, data, scripts) and `<company_facts>`; for more logs, tickets or
      standards, query company systems yourself (`company_tools`, then `company_call`, lookups only);
-   - error text / stack trace → error signature;
+   - error text / stack trace → error signature; open the top project frame (file:line) before anything
+     broader;
    - what changed: `<recent_changes>` and `git log -p -n 5 -- <paths on the symptom's path>`; a change that
      matches the symptom is suspect number one;
    - configuration on the path (env files, application config, feature flags, time zone, limits);
