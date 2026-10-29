@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { answerCheck, baselineTestFiles, changedFiles, codeScan, itemEvidence, mvsEvidence, runGate, scenarioCounts } from '../../pack/src/gate.mjs';
+import { answerAgreement, answerCheck, answerFields, baselineTestFiles, changedFiles, codeScan, itemEvidence, itemRequirements, mvsEvidence,
+  requirementsCheck, runGate, scenarioCounts } from '../../pack/src/gate.mjs';
 import { contentTree, treeChanges } from '../../pack/src/git.mjs';
 import { validateSchema } from '../../pack/src/jsonschema.mjs';
 import { sh, tempDir } from './support.mjs';
@@ -173,6 +174,73 @@ test('evidence the item text requires: names in capture/evidence sentences, not 
   assert.deepEqual(itemEvidence('Add two screenshots: `a.png` and `b.png`. Export invoices.csv for finance.'),
     [{ file: 'a.png', beforeFix: false }, { file: 'b.png', beforeFix: false }]);
   assert.deepEqual(itemEvidence(null), []);
+});
+
+// Đề BUG-01 và TASK-01 thật (TOKXKPBV), rút gọn: BTC chấm theo cả đề nên yêu cầu ngoài MVS cũng vào danh sách.
+const ITEM_BUG01 = ['# Admin sidebar overlaps content', '', '## Context', 'After login, the left sidebar overlaps content.', '',
+  '## Expected outcome', 'On desktop, the main content and top bar sit beside the sidebar and remain fully readable.', '',
+  '## Requirements', 'Fix the shared administration layout in both development and production. Preserve mobile navigation and existing page controls. Maximum practice score: 200 points.', '',
+  'Desktop wireframe:', '', '```text', '| Sidebar | Top bar |', '```', '',
+  '## Acceptance criteria', '1. The sidebar does not cover main content or the top bar at desktop widths,', '   including 1024px and 1440px.',
+  '2. Existing pnpm test cases and pnpm typecheck pass.', '', '## Out of scope', 'Redesigning the navigation.', '',
+  ...BUG01.split('\n'), '', '### submit.json contract', '', '- Keep exactly these rows and these field names: `id`, `result`.'].join('\n');
+const ITEM_TASK01 = ['## Canonical scope', 'Use the issued source at commit 571c531. Exclude templates and imported cards.', '',
+  '## Canonical algorithm', 'Determine the positions assigned by normal creation.', '',
+  '## Normalization', 'The answer is one unsigned decimal integer string, without whitespace. Do not return a JSON number.'].join('\n');
+
+test('item requirements: acceptance criteria, requirements and submission rules with ids, boilerplate left out', () => {
+  assert.deepEqual(itemRequirements(ITEM_BUG01), [
+    { id: 'RQ-1', text: 'On desktop, the main content and top bar sit beside the sidebar and remain fully readable.' },
+    { id: 'RQ-2', text: 'Fix the shared administration layout in both development and production.' },
+    { id: 'RQ-3', text: 'Preserve mobile navigation and existing page controls.' },
+    { id: 'AC-1', text: 'The sidebar does not cover main content or the top bar at desktop widths, including 1024px and 1440px.' },
+    { id: 'AC-2', text: 'Existing pnpm test cases and pnpm typecheck pass.' },
+    { id: 'EV-1', text: 'Capture screenshot of Dashboard before fixing as dashboard_before_fixing.png and commit to `evidence/` folder.' }
+  ]);
+  assert.deepEqual(itemRequirements(ITEM_TASK01).map(r => r.id), ['RQ-1', 'RQ-2', 'RQ-3', 'RQ-4']);
+  assert.match(itemRequirements(ITEM_TASK01)[0].text, /commit 571c531/);
+  assert.deepEqual(itemRequirements('Change greet() to return "hello world".'), []);
+  assert.deepEqual(itemRequirements(null), []);
+});
+
+test('requirements ledger: DONE with a not_met requirement is an answer fix, gaps are warnings for the reviewer', async () => {
+  const reqs = itemRequirements(ITEM_BUG01);
+  assert.deepEqual(requirementsCheck(reqs, undefined, 'DONE'), { problems: [], warnings: [] }, 'main gate: no fix-result');
+  assert.match(requirementsCheck(reqs, null, 'DONE').warnings[0], /no requirements ledger: the reviewer must judge RQ-1, RQ-2/);
+  const ledger = reqs.map(r => ({ id: r.id, status: 'met', evidence: 'x' }));
+  assert.deepEqual(requirementsCheck(reqs, ledger, 'DONE'), { problems: [], warnings: [] });
+  const gap = requirementsCheck(reqs, ledger.slice(1), 'DONE');
+  assert.match(gap.warnings[0], /does not address: RQ-1$/);
+  const unmet = ledger.map(e => (e.id === 'AC-2' ? { ...e, status: 'not_met' } : e));
+  assert.match(requirementsCheck(reqs, unmet, 'DONE').problems[0], /status is DONE but the fix-result reports AC-2 not met: use PARTIAL/);
+  assert.match(requirementsCheck(reqs, unmet, 'PARTIAL').warnings[0], /requirements reported not met: AC-2/);
+
+  const r = repo();
+  writeFileSync(join(r.app, 'tests', 'money.test.ts'), 'it("vnd", () => { expect(vnd(1)).toBe(100); expect(vnd(2)).toBe(200); });\n');
+  writeAnswer(r, GOOD);
+  const overclaim = await gate(r, { requirements: reqs, ledger: unmet });
+  assert.equal(overclaim.failKind, 'answer_invalid');
+  assert.equal(overclaim.codePassed, true, 'only submit.json changes: no new fixer attempt');
+  writeAnswer(r, { ...GOOD, status: 'PARTIAL' });
+  const honest = await gate(r, { requirements: reqs, ledger: unmet });
+  assert.equal(honest.passed, true, JSON.stringify(honest.checks));
+  assert.ok(honest.findings.some(f => /answer: requirements reported not met: AC-2/.test(f)), 'the verifier and reviewer see it');
+});
+
+test('answer-only items: answer fields from the template, compared as trimmed strings with the independent solver', () => {
+  // Template TASK-01 thật (TOKXKPBV).
+  const template = { schemaVersion: 1, backlogId: 'TASK-01', status: 'NOT_STARTED', evidenceFiles: [], position: '' };
+  assert.deepEqual(answerFields(template), ['position']);
+  assert.deepEqual(answerFields(TEMPLATE), [], 'a template with testResults has no answer field');
+  assert.deepEqual(answerFields(null), []);
+  const answer = { ...template, status: 'DONE', position: '98304' };
+  assert.deepEqual(answerAgreement(answer, [{ field: 'position', value: ' 98304 ' }], ['position']),
+    { state: 'agree', fields: [{ field: 'position', answer: '98304', solver: ' 98304 ' }] });
+  assert.deepEqual(answerAgreement(answer, [{ field: 'position', value: '131072' }], ['position']),
+    { state: 'disagree', fields: [{ field: 'position', answer: '98304', solver: '131072' }] });
+  assert.equal(answerAgreement({ ...answer, position: 98304 }, [{ field: 'position', value: '98304' }], ['position']).state, 'agree');
+  assert.equal(answerAgreement(answer, [{ field: 'other', value: '1' }], ['position']).state, 'none');
+  assert.equal(answerAgreement(answer, null, ['position']).state, 'none');
 });
 
 test('a file the item text requires must be captured and listed; missing it fails the gate as evidence_missing', async () => {

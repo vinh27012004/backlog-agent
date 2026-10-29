@@ -37,9 +37,12 @@ not started while a slot is free); start them right away (**One item**, step 1) 
 ## One item
 1. `read_item`, then `start_work` (`requiredScenarios` = number of MVS scenarios, or acceptance
    criteria for TASK/PI, minimum 1). Read `startInstruction`, template, MVS, `files` and `triage`.
-2. Company systems: query the ones that hold facts for this item (`company_call`): official test
-   data, standards, tickets, logs. Save large results under `.team-work/items/<ID>/company/` and put the
-   key facts in the brief. Facts there override assumptions, including what existing code or tests imply.
+2. Company systems: query the ones that hold facts for this item (`company_call` with `backlogItemKey`): official
+   test data, standards, tickets, logs. The helper saves each result under `.team-work/items/<ID>/company/`
+   (`savedTo`), where the fixer and the reviewer read it in full; put the key facts and those paths in
+   `<company_facts>` (Practice TOKXKPBV: CR-01's export standard was only summarised in the brief, the fixer had to
+   ask for the fixture, and nobody could check the CSV against the standard afterwards). Facts there override
+   assumptions, including what existing code or tests imply.
 3. `worktree create` → wait for `setupJobId` with the job pattern in **Waiting**.
 4. Spawn `team_fixer` with this brief (fill every block you have; omit empty ones):
    ```
@@ -53,10 +56,19 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    <company_facts>…</company_facts>
    <baseline_failures>start_work.baselineFailures as given: failing tests, owner, youFix (omit when null)</baseline_failures>
    <required_evidence>start_work.requiredEvidence as given: files the item text requires outside the MVS; beforeFix ones are captured first, on the unfixed code</required_evidence>
-   <materials>.team-work/items/<ID>/ (start.json, template.json, mvs.json, files/): copy provided scripts where the MVS says</materials>
+   <requirements>.team-work/items/<ID>/requirements.json: every AC/RQ/EV id of the item text; report each one in the fix-result (omit when start_work returned no requirements)</requirements>
+   <materials>.team-work/items/<ID>/ (start.json, template.json, mvs.json, files/, company/): copy provided scripts where the MVS says</materials>
    <recent_changes>PI: start_work.remote as given (newCommits with files, merged, recentChanges)</recent_changes>
    <previous_attempt>failKind, signature, condensed log, reviewer high issues, the last fix-result's hypotheses (retries only)</previous_attempt>
    ```
+   Answer-only item (`start_work` returned `independentAnswer`): in the same step also spawn `team_pi_hypothesis`
+   (`task_name` `<id>_solve1`, model `piHypothesis`) with first line `Item <ID> (<TYPE>).`, then
+   `<independent_answer>fields=<independentAnswer.fields></independent_answer>`, `<item>`, `<company_facts>`,
+   `<materials>`, `<worktree>` and `<results_path>` = `independentAnswer.resultsFile`. Never give it the fixer's
+   result. A wrong answer scores 0 and cannot be resubmitted; two separate derivations that agree are the check
+   (Practice TOKXKPBV: the reviewer's doubt about TASK-01 cost a 7.5-minute second round). Publish such an item
+   only after the solver has finished (`wait_agent` on it, at most until `return_by` + 1 minute, then
+   `interrupt_agent` and publish without it).
    Put everything the fixer needs in this one brief, then leave it alone (see **Root budget**). Wait as in
    **Waiting** (it enforces `return_by`); when it finishes, read its fix-result JSON once.
    **Every new attempt is a new `spawn_agent`** (`task_name` `<id>_fix<n>`, model `fixer[n-1]`, results
@@ -78,7 +90,8 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    <results_path><checkoutRoot>/.team-work/results/<ID>-verifier-<n>.json</results_path>
    ```
    Reviewer brief: the same first line as the fixer (`Item <ID> (<TYPE>). Skill: … Stack notes: …`: the reviewer
-   judges against that skill's done-conditions), `<item>`, `<fix_result>`, `<diff>` and `<results_path>`. In
+   judges against that skill's done-conditions), `<item>`, `<fix_result>`, `<diff>`, `<requirements>` (same path
+   as the fixer's), `<materials>` (the item folder with `company/`) and `<results_path>`. In
    `<diff>` give the commands, not the text: `git -C <wt.matchRoot> diff HEAD` and `git -C <wt.matchRoot> status
    --short` (the reviewer runs them). The verifier runs the gate through `team_runtime` (build, typecheck, the
    fixer's tests, regression, tests-guard, answer): its result counts, not the fixer's claims, and you do not
@@ -87,11 +100,14 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    - `recommendation: "publish"` and no reviewer `high` → step 7. `answer_fixed: true` means the verifier fixed
      `submit.json` after an `answer_invalid` gate whose build and tests passed: no fixer, no new gate.
    - Disputed answer: `recommendation: "publish"`, and every reviewer `high` disputes only the value in
-     `submit.json` of an answer-only item (no code at stake) → no new fixer round. Spawn one `team_pi_hypothesis`
+     `submit.json` of an answer-only item (no code at stake), or the gate's `answerAgreement.state` is `disagree`
+     (the independent solver found another value; `record_verification` refuses with `ANSWER_DISPUTED` until it is
+     checked) → no new fixer round. Spawn one `team_pi_hypothesis`
      (`task_name` `<id>_check<n>`, model `piHypothesis`; first line `Item <ID> (<TYPE>).`, then `<hypothesis>` = the
      reviewer's claim with its evidence next to the fixer's trace from the fix-result, `<item>`, `<company_facts>`,
-     `<materials>`, `<worktree>`, `<results_path>` `<ID>-pi_hypothesis-<n>.json`). `refuted` → step 7 now (the gate
-     still holds). `supported` or `inconclusive` → new fixer attempt (step 4) with the checker's value and evidence in
+     `<materials>`, `<worktree>`, `<results_path>` `<ID>-pi_hypothesis-<n>.json`; for a solver disagreement the
+     hypothesis is the solver's value with its derivation from `answerAgreement.solverFile`). `refuted` → step 7 now
+     (the gate still holds; pass `disputeChecked: true` to `record_verification`). `supported` or `inconclusive` → new fixer attempt (step 4) with the checker's value and evidence in
      `<previous_attempt>` (Practice TOKXKPBV: TASK-01's reviewer disputed 98304; a second round of fixer, verifier and
      reviewer took 7.5 minutes and the answer stood).
    - `"retry"` or a reviewer `high` → new fixer attempt (step 4) with `<previous_attempt>` = the verdict's
@@ -109,7 +125,7 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    const key = "<ID>", msg = "<one-line commit message>", out = {};
    const step = async (name, n, a) => { const r = await call(n, a); out[name] = r; if (r.error) throw new Error(name); return r; };
    try {
-     await step("verification", "record_verification", { backlogItemKey: key, gateJobId: "<verdict gate.jobId>" });
+     await step("verification", "record_verification", { backlogItemKey: key, gateJobId: "<verdict gate.jobId>", disputeChecked: <true only after a checker refuted the solver's value> });
      const integrated = await step("integrate", "worktree", { action: "integrate", backlogItemKey: key, message: msg });
      if (integrated.baseChanged) {
        let g = await step("mainGate", "run_gate", { backlogItemKey: key, where: "main", waitSeconds: 45 });
@@ -122,7 +138,9 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    } catch (e) { out.stoppedAt = e.message; }
    text(out);
    ```
-   On `stoppedAt`, carry on from that step by hand; never repeat a step that succeeded. `mainGate` with `newPI`:
+   On `stoppedAt`, carry on from that step by hand; never repeat a step that succeeded. `verification` with
+   `ANSWER_DISPUTED` (the solver finished after the gate with another value): the disputed-answer path of step 6,
+   then publish again. `mainGate` with `newPI`:
    start the PI, then wait for that gate again and finish. Integrate and push accept only the exact content the
    last passing gate checked (`answers/<ID>/` excepted): `GATE_REQUIRED` = no passing gate, `GATE_STALE` = files
    changed after it (listed) or main moved; run `run_gate` again (where it says), never work around it.
@@ -285,13 +303,17 @@ yields after 30 s and every `wait` is one more model call over your whole contex
   A result with `newPI` means a PI was released and not started yet: start it (**PI**, step 1), then wait for the
   job again.
 - **Nothing workable** (no fixer, job or item left): wait in one `exec` until something happens, and say
-  nothing between waits:
+  nothing between waits. Copy it as it is: `cursor: -1` (only events from now on; items already out and not started
+  show in `state.open`), the wake list and 540000. Each return is one model call over your whole context (Practice
+  TOKXKPBV: cursor 0 returned 20 old events at once, then a hand-made 210 s loop woke root twice as often).
   ```
   // @exec: {"yield_time_ms": 600000, "max_output_tokens": 2000}
   const t = "mcp__team_runtime__", call = async (n, a) => JSON.parse((await tools[t + n](a)).content[0].text);
-  let cursor = <last cursor you saw>, r, start = Date.now();
+  const wake = ["ITEM_NEW", "ITEM_CHANGED", "ITEM_CLOSING", "MATCH_STATUS"];
+  let cursor = -1, r, start = Date.now();
   do { r = await call("wait_for_update", { timeoutMs: 55000, cursor }); cursor = r.cursor ?? cursor; }
-  while (!(r.events ?? []).length && Date.now() - start < 540000);
+  while (!(r.events ?? []).some(e => wake.includes(e.type)) && !(r.state?.open ?? []).length
+    && !["FINISHED", "CANCELLED"].includes(r.state?.status) && Date.now() - start < 540000);
   text(r);
   ```
 

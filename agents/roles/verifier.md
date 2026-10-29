@@ -32,7 +32,12 @@ evidence, and you do not run build or test commands yourself: the gate does that
    `verification` does not back (not run, or run with a different outcome), or a `PASS` whose evidence file is
    missing or empty in `answers/<ID>/evidence/`. Do not open screenshots and do not redo scenarios.
 5. Gate findings: on a BUG or PI, a `fail-before` finding means the new test passes on the unfixed code and proves
-   nothing; report it in `retry_brief`. Other warnings go into `gate.findings` as one line each.
+   nothing; report it in `retry_brief`. "requirements reported not met" names ids the fixer says it did not meet:
+   when the fixer could still meet one (not a time box, not outside its power), the recommendation is `retry` and
+   `retry_brief` names the ids with the fixer's reasons. A gate result with `answerAgreement.state` `disagree`
+   (an independent solver found another answer value) goes into `gate.findings` as one line with both values and
+   the solver file; the recommendation does not change (the orchestrator has it checked). Other warnings go into
+   `gate.findings` as one line each.
 6. Write the verdict JSON and reply with exactly that JSON.
 
 ## Verdict

@@ -56,6 +56,36 @@
         ]
       }
     },
+    "requirements": {
+      "type": "array",
+      "description": "your own verdict on each id in <requirements>; [] when the brief has none",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "not_applicable",
+              "unclear"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "note"
+        ]
+      }
+    },
     "summary": {
       "type": "string"
     }
@@ -64,6 +94,7 @@
     "verdict",
     "root_cause_addressed",
     "issues",
+    "requirements",
     "summary"
   ]
 }

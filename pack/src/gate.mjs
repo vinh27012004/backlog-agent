@@ -71,6 +71,101 @@ export function itemEvidence(description, challengeFiles = []) {
   return [...out.values()];
 }
 
+// Yêu cầu của đề ngoài MVS (HIET12OA: "pnpm test passes" chỉ có ở Acceptance criteria, 3 item false green; ZVUYZ41V:
+// ảnh "before fixing" chỉ có ở mục Submission, 0/200). BTC chấm theo cả đề, nên fixer và reviewer chấm từng yêu cầu.
+// Lấy theo mục: Acceptance criteria → AC-n (mỗi dòng danh sách), Expected outcome / Requirements / Canonical scope /
+// Normalization / Answer format → RQ-n, Submission / Evidence → EV-n (bỏ câu khuôn mẫu mà gate đã kiểm: copy template,
+// gitRevision, testResults, schema). Danh sách thì mỗi mục một yêu cầu, đoạn văn thì mỗi câu; bỏ bảng, code, điểm, hạn.
+const REQ_SECTIONS = [
+  [/^acceptance criteria$/i, 'AC'],
+  [/^(expected outcome|requirements?|canonical scope|normali[sz]ation|answer format)$/i, 'RQ'],
+  [/^(submission|evidence)$/i, 'EV']
+];
+const REQ_SKIP = /practice score|\bdeadline\b|\bpoints?\b\s*[.)]?$|^\s*(example row|desktop wireframe|screen flow)\b/i;
+const EV_BOILERPLATE = /^create\s+`?answers\/|copy\s+`?challenge\/|gitRevision|testResults|submit\.schema|every pass result|commit source|upper case|start from the template|top-level `?status|example row|evidence paths are|engineering record|record actual test results|follow the evidence rules/i;
+const REQ_MAX = 24;
+
+export function itemRequirements(description) {
+  if (typeof description !== 'string') return [];
+  const out = [];
+  const seen = new Set();
+  const count = {};
+  let prefix = null;
+  let fence = false;
+  let item = null;      // dòng danh sách đang gom (có thể kéo dài nhiều dòng)
+  const push = (text, p = prefix) => {
+    const t = text.replace(/\s+/g, ' ').trim();
+    if (!p || t.length < 12 || REQ_SKIP.test(t) || (p === 'EV' && EV_BOILERPLATE.test(t)) || seen.has(t.toLowerCase())) return;
+    seen.add(t.toLowerCase());
+    count[p] = (count[p] ?? 0) + 1;
+    out.push({ id: `${p}-${count[p]}`, text: t.length > 480 ? `${t.slice(0, 477)}...` : t });
+  };
+  const flush = () => { if (item !== null) push(item); item = null; };
+  const sentences = line => line.split(/(?<=[.!?])\s+(?=[A-Z`"(])/);
+  for (const raw of description.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) { flush(); fence = !fence; continue; }
+    if (fence) continue;
+    const heading = raw.match(/^#{1,6}\s+(.*?)\s*#*\s*$/);
+    if (heading) {
+      flush();
+      const title = heading[1].replace(/[`*_]/g, '').trim();
+      // Tiêu đề con (### submit.json contract) thuộc mục cha trừ khi chính nó là một mục được lấy.
+      const match = REQ_SECTIONS.find(([re]) => re.test(title));
+      prefix = match ? match[1] : /^#{3,}/.test(raw) && prefix === 'EV' && !/submit\.json|contract/i.test(title) ? 'EV' : null;
+      continue;
+    }
+    if (!prefix) continue;
+    if (/^\s*\|/.test(raw) || !raw.trim()) { flush(); continue; }
+    const li = raw.match(/^\s*(?:\d+[.)]|[-*+])\s+(.*)$/);
+    if (li) { flush(); item = li[1]; continue; }
+    if (item !== null && /^\s+\S/.test(raw)) { item += ` ${raw.trim()}`; continue; }
+    flush();
+    for (const s of sentences(raw.trim())) push(s);
+  }
+  flush();
+  return out.slice(0, REQ_MAX);
+}
+
+// Đối chiếu bảng yêu cầu của fix-result (`requirements: [{id, status, evidence}]`) với yêu cầu của đề. Yêu cầu bị bỏ sót
+// chỉ cảnh báo (reviewer chấm thay); status DONE trong khi fixer tự khai `not_met` là nói sai (J8), sửa submit.json
+// thành PARTIAL là đủ nên đó là lỗi answer.
+export function requirementsCheck(requirements = [], ledger = undefined, status = null) {
+  const problems = [];
+  const warnings = [];
+  if (!requirements.length || ledger === undefined) return { problems, warnings };
+  if (!Array.isArray(ledger)) {
+    warnings.push(`fix-result has no requirements ledger: the reviewer must judge ${requirements.map(r => r.id).join(', ')}`);
+    return { problems, warnings };
+  }
+  const byId = new Map(ledger.filter(e => e && typeof e.id === 'string').map(e => [e.id, e]));
+  const missing = requirements.filter(r => !byId.has(r.id)).map(r => r.id);
+  if (missing.length) warnings.push(`requirements the fix-result does not address: ${missing.join(', ')}`);
+  const notMet = requirements.filter(r => byId.get(r.id)?.status === 'not_met').map(r => r.id);
+  if (notMet.length && status === 'DONE') {
+    problems.push(`status is DONE but the fix-result reports ${notMet.join(', ')} not met: use PARTIAL and name them in engineeringRecord`);
+  } else if (notMet.length) warnings.push(`requirements reported not met: ${notMet.join(', ')}`);
+  return { problems, warnings };
+}
+
+// Item trả lời thuần (cờ answerOnly, vd TASK-01: một vị trí card so khớp từng ký tự): đáp án sai là 0 điểm và không
+// nộp lại được, nên một checker giải độc lập song song với fixer. Field đáp án = key của template có giá trị nguyên thuỷ,
+// trừ khung chung; so theo chuỗi đã trim, đúng như BTC so.
+const ANSWER_FRAME = new Set(['schemaVersion', 'backlogId', 'status']);
+export function answerFields(template) {
+  if (!template || typeof template !== 'object' || Array.isArray(template)) return [];
+  return Object.entries(template).filter(([k, v]) => !ANSWER_FRAME.has(k) && (v === null || ['string', 'number', 'boolean'].includes(typeof v)))
+    .map(([k]) => k);
+}
+
+export function answerAgreement(answer, solverValues, fields) {
+  const given = new Map((Array.isArray(solverValues) ? solverValues : []).filter(v => v && typeof v.field === 'string').map(v => [v.field, v.value]));
+  const norm = v => (v === null || v === undefined ? '' : String(v).trim());
+  const compared = fields.filter(f => given.has(f)).map(f => ({ field: f, answer: answer?.[f] ?? null, solver: given.get(f) }));
+  if (!compared.length) return { state: 'none', fields: [] };
+  const differ = compared.filter(c => norm(c.answer) !== norm(c.solver));
+  return { state: differ.length ? 'disagree' : 'agree', fields: differ.length ? differ : compared };
+}
+
 // Kiểm answers/<ID>/submit.json: JSON hợp lệ, giữ key của template, khớp submit.schema.json của item (nếu có),
 // status đã đổi khỏi giá trị ban đầu của template, mọi evidence/<file> tham chiếu đều tồn tại. Thêm (theo T1/T5 của
 // harness tham chiếu, Practice #2 L19): mỗi kịch bản của template có đúng một kết quả, kịch bản PASS tham chiếu đủ
@@ -380,7 +475,7 @@ const fallbackSignature = (kind, text, root) => {
 // sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
 // root còn publish được theo luật cơ hội cuối.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  requiredEvidence = [], needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
+  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -588,6 +683,12 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   }
 
   const { problems, warnings, missingEvidence } = answerCheck(matchRoot, key, template, schema, mvs, requiredEvidence);
+  // Bảng yêu cầu chỉ có khi gate chạy từ fix-result (verifier); gate main của root thì bỏ qua.
+  let status = null;
+  try { status = JSON.parse(readFileSync(join(matchRoot, 'answers', key, 'submit.json'), 'utf8'))?.status ?? null; } catch { /* answerCheck đã báo */ }
+  const req = requirementsCheck(requirements, ledger, status);
+  problems.push(...req.problems);
+  warnings.push(...req.warnings);
   checks.push({ name: 'answer', status: problems.length ? 'fail' : warnings.length ? 'warn' : 'ok', schema: Boolean(schema),
     ...(problems.length ? { problems } : {}), ...(warnings.length ? { warnings } : {}) });
   // File evidence đề đòi mà chưa có: sửa submit.json không đủ, phải một lượt fixer chụp nó (tree vẫn được lưu).

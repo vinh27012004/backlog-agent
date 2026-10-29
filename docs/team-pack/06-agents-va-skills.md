@@ -39,7 +39,7 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 | `team_fixer` | `agents/roles/fixer.md` | Phân tích và sửa **một** item trong worktree riêng; viết test; điền `answers/<ID>/`; chụp evidence bằng `capture_evidence` | Có, chỉ trong worktree được giao | `fix-result` |
 | `team_verifier` | `agents/roles/verifier.md` | Tester của guide (§2, mới 28/10): chạy gate cho một lượt fixer qua proxy tới helper của root (`run_gate {fixResultFile}`, [05 §5.22](05-mcp-helper.md)), chờ trong `exec` của nó, đối chiếu MVS với `verification` và evidence, trả `publish`/`retry` kèm `retry_brief` | Chỉ `answers/<ID>/submit.json` sau gate `answer_invalid` có `codePassed` | `verification` |
 | `team_reviewer` | `agents/roles/reviewer.md` | Soát bản sửa tìm lỗi mà build/test/MVS không thấy; chạy cùng lúc với verifier, nên không có `<gate_findings>` (verifier tự xét các cảnh báo của gate) | Không | `review` |
-| `team_pi_hypothesis` | `agents/roles/pi-hypothesis.md` | PI kẹt ở checkpoint: kiểm **một** giả thuyết `open` bằng cách đọc (không build, không chạy app/test vì fixer lượt sau có thể đang dùng worktree); 2–3 cái chạy song song | Không | `hypothesis` |
+| `team_pi_hypothesis` | `agents/roles/pi-hypothesis.md` | PI kẹt ở checkpoint: kiểm **một** giả thuyết `open` bằng cách đọc (không build, không chạy app/test vì fixer lượt sau có thể đang dùng worktree); 2–3 cái chạy song song. Item trả lời thuần: giải độc lập cùng lúc với fixer (`<independent_answer>`), helper so hai đáp án | Không | `hypothesis` |
 
 Phân tích đề và kế hoạch evidence (vai của scout trong bản khung) là bước 1 của fixer (`criteria`,
 `suspects` trong `fix-result`). Kiểm MVS (vai của checker) do `team_verifier` làm từ evidence của fixer, cộng với
@@ -106,10 +106,10 @@ Subagent **ghi file** JSON vào `<results_path>` và trả lại đúng JSON đ�
 
 | Schema | Agent | Field chính |
 |---|---|---|
-| `fix-result` | `team_fixer` | `status` (`fixed`/`partial`/`cannot_fix`), `summary`, `criteria[]`, `suspects[]`, `root_cause`, `hypotheses[]` (BUG/PI: `cause`, `check`, `verdict` `confirmed`/`refuted`/`open`, `evidence`; bản ghi giả thuyết mà lượt sau và checker dùng tiếp), `changed_files[]`, `tests_added[]` (đúng dạng `{target}` của `test_one`), `verification`, `needs_dependency`, `test_change`, `risks[]`, `confidence` |
-| `review` | `team_reviewer` | `verdict` (`approve`/`request_changes`), `root_cause_addressed`, `issues[]` (`severity` high/medium/low, file, dòng, cách sửa), `summary` |
+| `fix-result` | `team_fixer` | `status` (`fixed`/`partial`/`cannot_fix`), `summary`, `criteria[]`, `suspects[]`, `root_cause`, `hypotheses[]` (BUG/PI: `cause`, `check`, `verdict` `confirmed`/`refuted`/`open`, `evidence`; bản ghi giả thuyết mà lượt sau và checker dùng tiếp), `changed_files[]`, `tests_added[]` (đúng dạng `{target}` của `test_one`), `verification`, `needs_dependency`, `test_change`, `risks[]`, `confidence`, `requirements[]` (mỗi id của `requirements.json`: `met`/`not_met`/`not_applicable` + bằng chứng; gate chặn `DONE` khi có `not_met`) |
+| `review` | `team_reviewer` | `verdict` (`approve`/`request_changes`), `root_cause_addressed`, `issues[]` (`severity` high/medium/low, file, dòng, cách sửa), `requirements[]` (reviewer tự chấm từng id: `met`/`not_met`/`not_applicable`/`unclear`; `not_met` mà diff làm được là issue `high` R1), `summary` |
 | `verification` | `team_verifier` | `gate` (`jobId`, `passed`, `codePassed`, `failKind`, `signature`, `repeat`, `next`, `hint`, `tail` rút gọn, `findings[]`), `answer_fixed`, `mvs` (`total`, `passed`, `missing[]`), `recommendation` (`publish`/`retry`/`orchestrator_gate`), `retry_brief` (dán thẳng vào `<previous_attempt>`), `summary` |
-| `hypothesis` | `team_pi_hypothesis` | `hypothesis`, `verdict` (`supported`/`refuted`/`inconclusive`), `evidence`, `fix_location`, `next_check` |
+| `hypothesis` | `team_pi_hypothesis` | `hypothesis`, `verdict` (`supported`/`refuted`/`inconclusive`), `evidence`, `fix_location`, `next_check`, `answer_values[]` (`{field, value}`: chỉ khi giải độc lập item trả lời thuần, `[]` khi kiểm giả thuyết) |
 
 ## 7. Nội dung item là untrusted
 

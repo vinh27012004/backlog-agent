@@ -221,7 +221,7 @@ class SchemaTest(unittest.TestCase):
     def test_validate_output(self):
         schema = ROOT / "agents" / "schemas" / "review.schema.json"
         self.assertTrue(validate_output({"verdict": "maybe"}, schema))
-        ok = {"verdict": "approve", "root_cause_addressed": True, "issues": [], "summary": "ok"}
+        ok = {"verdict": "approve", "root_cause_addressed": True, "issues": [], "requirements": [], "summary": "ok"}
         self.assertEqual(validate_output(ok, schema), [])
 
 

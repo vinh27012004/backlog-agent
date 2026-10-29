@@ -239,3 +239,41 @@ ngoài BUG-01.
 | CR-01 | hard / hard (0,27) | strong (Jev 0,80) | 1: luna high, 14 phút | Nộp `DONE` |
 | TASK-02 | medium / hard (0,35) | strong (Jev 0,96) | 2: luna high, sol | Nộp `DONE` |
 | TASK-01 | medium / medium (0,48) | small (luật) | 3: luna medium, sol, sol | Nộp `PARTIAL` |
+
+## #8 · 29/10/2026 · tự luyện `TOKXKPBV` (Player 0.9.39, cùng bộ item)
+
+Cả 5 item nộp, item cuối lúc 04:57:37Z, tức phút 44 kể từ START_GAME (04:13:24Z). Đề ra ở phút 0, 14 và 29 (README),
+mỗi đợt 2 item (đợt 3 chỉ có TASK-01), nên lúc nào cũng chỉ có 2 item chạy và `MAX_ITEMS_IN_FLIGHT = 4` chưa lần nào
+được dùng tới; trận không thể xong dưới 30 phút vì item cuối ra ở phút 29. README ghi "Duration: 40 minutes" nhưng
+server báo 60 phút: với 40 phút thì TASK-01 đã trễ. ≈176,81 credit theo price card (ZVUYZ41V 30,29): root 56,35
+(`gpt-6-sol` medium), fixer 81,73, reviewer 22,64, verifier 16,08; guardian (`codex-auto-review`, ngoài price card) 6,1M
+input, 20% tổng input. `models.json` lúc đó đặt `gpt-6-sol` đầu tier `small` và `review`. Hạn mức gói Plus 23% → 98%.
+Nguồn: `runs/judge/TOKXKPBV/_usage/usage.md`, transcript root `…791f0581b9ca`, `.team-work/journal.json`, `results/`.
+Chưa chấm lại bằng `/judge-practice` và chưa có điểm BTC.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L49 | Fixer BUG-01 lần 1 (11m07s, 77 lượt, 4,1M input) tự chạy `pnpm dev` 4 lần, tìm và `taskkill` tiến trình theo port, rồi gỡ một dev server trả CSS thiếu class mới (`md:ms-60`) trước khi build bản production. Đã thử: scanner Tailwind 4.3.2 vẫn thấy class mới trong worktree nằm dưới `.team-work/` (bị exclude), nên lỗi là dev server, không phải gitignore | Khoảng 6 phút của item 17 phút | **Đã** sửa (`f26c8c4`): tool `app` của helper build bản production rồi start tách rời trên port riêng 3100+, log ở `.team-work/logs/<ID>-app.log`, chờ tới khi trả lời HTTP; `worktree remove` dừng app. Playbook §1 cấm tự chạy `pnpm dev`/`next start`/`taskkill`. Chạy thật trên app TOKXKPBV: sẵn sàng sau 33 s |
+| L50 | Fixer CR-01 lần 1 trả `partial`, 5 kịch bản `NOT_RUN`, để chờ bản sửa sidebar của BUG-01 vào main rồi mới chụp ảnh, dù playbook đã ghi "never pause to wait for a sync" | Lần 2 (3m20s) chỉ để chụp ảnh sau khi sync; CR-01 mất 17 phút | **Đã** sửa (`a10f71c`): `fixer.md` và playbook §4: chờ bản sửa của item khác không bao giờ là lý do trả `partial` hay `NOT_RUN`; chụp ngay, click xuyên qua bằng `force: true`, ghi chú trong kịch bản |
+| L51 | TASK-01 (cờ `data`, `tricky`, `answerOnly`) chạy tier `small` (`gpt-6-sol` medium). Verifier `publish` với 98304; reviewer `high` cho rằng rebalance đưa C về 131072 | Root chạy cả vòng mới (fixer `gpt-6.1-sol` 4m35s, verifier, reviewer), 7,5 phút, đáp án vẫn là 98304 | **Đã** sửa (`a10f71c`): `answerOnly` + `tricky` chạy tier `strong` ngay lần 1 (`routeFrom` nhận `signals`); reviewer `high` chỉ cãi đáp án của item trả lời thuần trong khi verifier nói `publish` thì root spawn một `team_pi_hypothesis` kiểm điểm bị cãi (`refuted` → publish luôn) |
+| L52 | Gate 50–76 s, trong đó `next build` 31–49 s (≈65%), `typecheck` 1–5 s, regression 14–19 s. Gate main sau `integrate` (`baseChanged`) nằm trên đường găng của publish ở CR-01, TASK-02, TASK-01 | Publish 70–82 s mỗi item | **Đã** sửa (`fad831c`): profile node có `parallelBuild` (có script `build`, không `pretest`, `test` không nhắc `build`/`dist`) thì build chạy song song với `tests-added` + `regression` + `tests-kept`; kết quả ráp theo thứ tự cũ nên `failKind`/`signature` không đổi |
+| L53 | Hết việc lúc 04:57:59, root chờ bằng `wait_for_update` với `cursor: 0`: nhận lại 20 sự kiện cũ và thức ngay; lần sau tự viết vòng 210 s thay vì 540 s | Thêm lượt model trên context 121K | **Đã** sửa: `wait_for_update {cursor: -1}` chỉ lấy sự kiện từ lúc gọi; mẫu "Nothing workable" của skill thức khi có `ITEM_NEW`/`ITEM_CHANGED`/`ITEM_CLOSING`/`MATCH_STATUS`, khi `state.open` có item, khi trận kết thúc, hoặc sau 9 phút |
+| L54 | Root lấy `get_test_data` của CR-01 lúc 04:27:46 nhưng chỉ đưa tóm tắt vào brief; fixer nhắn root (04:29:26), root mới ghi fixture ra file (04:29:49) và lấy `app_data` lock (04:30:02). Chấm lại sau trận: chuẩn xuất CSV (`kb_search`) cũng không được lưu ở đâu, nên không ai đối chiếu được file CSV với chuẩn | Khoảng 40 s chờ trong lượt fixer; reviewer và judge không kiểm được AC-2 của CR-01 | **Đã** sửa (29/10): `company_call {backlogItemKey}` tự lưu kết quả vào `.team-work/items/<ID>/company/` và trả `savedTo`; skill root đưa đường dẫn vào `<company_facts>`, `<materials>` của reviewer có `company/` |
+| L55 | Lúc 04:41:03, ngay sau một `wait_agent`, lượt GAME của root bị ngắt (`turn_aborted: interrupted`); Player gửi `RESUME_GAME` (`restartAttempt: 2`, `LOCAL_APP_RESUME`). Nhánh này của Player chạy khi trận `IN_PROGRESS` mà orchestrator đã dừng (`local-app-lifecycle.mjs:75-81`) | Root khôi phục mất 2,5 phút; CR-01 đã qua verifier và reviewer lúc 04:41 nhưng 04:43:35 mới publish | Chưa rõ nguyên nhân (app Player khởi động lại hay kết nối tới app-server). Theo dõi ở trận sau |
+
+Đối chiếu nhanh các sửa của #7:
+- **L45, L48**: không lần nào chạm `agent thread limit reached` (giới hạn 8, đã nâng lên 16 ở `fad831c` vì nặng nhất
+  cần 12); lớn nhất 4 subagent cùng lúc; root spawn 20 lần, không lỗi.
+- **L46**: lần này `integrate` BUG-02 trả `syncWorktrees`; root `worktree sync` BUG-01 rồi cho một lượt fixer ngắn chạy
+  lại bộ test (1m26s), đúng skill.
+- **Chờ**: 23 `wait_agent`, đa số 180000; root không đọc mã helper, không kill tiến trình.
+- **Giữa PREPARE và START_GAME** không có lượt model nào (PREPARE xong 04:13:09, START 04:13:24); Player ở
+  `PREPARED_WAITING`.
+
+| Item | Điểm | `start_work` → nộp | modelTier | Lượt fixer | Ghi chú |
+|---|---|---|---|---|---|
+| BUG-02 | 150, deadline 18' | 04:14:00 → 04:25:08 (11m07s) | strong (Jev) | 1: 6.1-sol high 7m19s | Chủ test fail sẵn; nộp đầu tiên |
+| BUG-01 | 200 | 04:14:03 → 04:31:17 (17m14s) | small (luật) | 2: 6-sol medium 11m07s, 6.1-sol 1m26s | L49; lần 2 sau sync baseline |
+| CR-01 | 300 | 04:27:41 → 04:44:53 (17m12s) | strong (Jev) | 2: 6.1-sol 6m38s (`partial`), 6.1-sol 3m20s | L50, L54, L55 |
+| TASK-02 | 250 | 04:27:44 → 04:39:02 (11m19s) | strong (Jev) | 1: 6.1-sol 6m23s | Gate main 70 s |
+| TASK-01 | 100 | 04:42:45 → 04:57:37 (14m52s) | small (luật) | 2: 6-sol medium 2m49s, 6.1-sol 4m35s | L51 |

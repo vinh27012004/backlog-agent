@@ -42,6 +42,24 @@ Mốc ZVUYZ41V: BUG-01 0/200 vì thiếu `dashboard_before_fixing.png`.
 - [ ] Thiếu file thì gate fail `evidence_missing`; lượt sau chỉ chụp bù (patch + `git apply -R`, không `stash`).
 - [ ] Không có tên file lạ trong `requiredEvidence` (đường dẫn, file submit, file đề).
 
+## 3b. Yêu cầu của cả đề và company facts (sửa sau TOKXKPBV)
+
+Mốc HIET12OA: gate và reviewer mỗi bên 3 false green (criterion "pnpm test passes" ngoài MVS). TOKXKPBV: 0 false green
+nhưng chuẩn CSV của CR-01 không lưu ở đâu nên không đối chiếu được.
+
+- [ ] `start_work` mỗi item trả `requirements` và ghi `.team-work/items/<ID>/requirements.json`; không có câu khuôn
+      mẫu (chép template, `gitRevision`, `testResults`) trong danh sách.
+- [ ] Brief fixer và reviewer có `<requirements>`; mọi fix-result có `requirements` đủ id; mọi review có `requirements`.
+- [ ] Không có fix-result nào ghi `met` mà không có bằng chứng; id `not_met` thì `submit.json` là `PARTIAL`.
+- [ ] Root gọi `company_call` với `backlogItemKey`; `.team-work/items/<ID>/company/` có kết quả `kb_search` và test data,
+      brief có đường dẫn `savedTo`. Fixer không phải nhắn root xin fixture (L54).
+- [ ] `/judge-practice` đọc được chuẩn công ty từ `company/` khi chấm CR-01.
+- [ ] Thời gian mỗi lượt fixer không tăng rõ so với TOKXKPBV vì phải khai bảng yêu cầu.
+- [ ] TASK-01 (answer-only): `start_work` trả `independentAnswer {fields: ["position"]}`; root spawn `task01_solve1`
+      cùng bước với fixer; solver không mở `answers/` hay `.team-work/results/` (xem transcript của nó); có
+      `results/TASK-01-solver-1.json` với `answer_values`. Hai đáp án khớp thì publish không qua checker; lệch thì
+      `ANSWER_DISPUTED` rồi một checker. Ghi credit và thời gian của solver.
+
 ## 4. Thang model (L44, sửa sau ZVUYZ41V)
 
 Mốc ZVUYZ41V: 30,29 credit; fixer 25,41, trong đó 17,8 là lượt 6.1-sol thứ 2–3. TASK-02 luna 15,6 phút rồi sol 3,8

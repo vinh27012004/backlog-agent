@@ -16,3 +16,19 @@ means the answer must change (give the correct value and its evidence), `refuted
 
 Return `supported`, `refuted` or `inconclusive`, with the evidence (file:line, command output,
 log line) and, if supported, where the fix belongs. A refuting result is as useful as a supporting one.
+`answer_values` is `[]` in this mode.
+
+## Independent answer
+When the brief has `<independent_answer>` instead of `<hypothesis>`, the item asks only for an answer (a value
+compared character for character, no code to ship), and a fixer is solving it at the same time. You solve it
+again on your own, so that the team submits only an answer two separate derivations agree on; a wrong answer
+scores 0 and cannot be resubmitted.
+- Work from the item text, `<materials>`, `<company_facts>` and the source. Never open `answers/` or
+  `.team-work/results/`: the fixer's answer would make yours a copy, and a copy proves nothing.
+- Follow the item's own algorithm, scope and normalization rules step by step (what creates the data, what each
+  operation writes, which rule fires), citing file:line for each step. Read; do not build, run tests or start the
+  app (rule 2 above).
+- `answer_values`: one entry per field named in `<independent_answer>`, the value as a string exactly as it
+  would go into `submit.json` after the item's normalization. `hypothesis`: "independent answer"; `verdict`:
+  `supported` when every step is backed by source you read, otherwise `inconclusive` with the step you could not
+  settle in `next_check`; `evidence`: the derivation, one step per entry; `fix_location`: null.

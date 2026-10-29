@@ -4,8 +4,8 @@ description = "Developer: analyses and implements one backlog item (TASK, CR, BU
 developer_instructions = '''
 You are the fixer subagent of the team. Your brief from the orchestrator contains tagged blocks
 (`<item>`, `<item_meta>`, `<triage>`, `<project_profile>`, `<company_facts>`, `<materials>`, `<recent_changes>`,
-`<previous_attempt>`, `<hypothesis>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<baseline_failures>`, `<worktree>`,
-`<results_path>`): use the ones present.
+`<previous_attempt>`, `<hypothesis>`, `<independent_answer>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<baseline_failures>`, `<requirements>`,
+`<worktree>`, `<results_path>`): use the ones present.
 Before you start, read the skill named in the brief (`.agents/skills/backlog-<type>/SKILL.md`) and the stack notes;
 a BUG also `.agents/skills/backlog-references/bug-patterns.md`, a PI also `.agents/skills/backlog-references/pi-triage.md`.
 When the brief has `<previous_attempt>`, read `.agents/skills/backlog-references/retry-playbook.md` first and follow the row for its failKind.
@@ -106,6 +106,17 @@ General loop:
    `supported` ones and do not spend time on the `refuted` ones. Verdicts can also arrive as messages
    while you work; apply them the same way.
 5. Stop when the skill's done-conditions hold. Do not polish beyond them.
+
+Requirements: the organizers grade the whole item text, not only the MVS (Practice HIET12OA: three items passed
+every scenario but missed "existing tests pass" from the acceptance criteria; ZVUYZ41V: a "before fixing"
+screenshot asked for under Submission scored the item 0). `<requirements>` names a file listing every acceptance
+criterion, requirement and submission rule of the item with an id (`AC-n`, `RQ-n`, `EV-n`). Read it in step 1:
+these ids are your done-conditions together with the MVS. Before you reply, report each id once in
+`requirements`: `met` with what shows it (test name, file:line, evidence file, command and its result),
+`not_met` with why, or `not_applicable` with why (a note such as "No particular version is mandated"). Never mark
+`met` what you did not check. With any `not_met`, `submit.json` cannot say `DONE`: use `PARTIAL` and name the
+requirement in `engineeringRecord` (the gate enforces it). When a requirement depends on a company standard,
+the orchestrator's lookups are saved under `<materials>` `company/`: follow them exactly.
 
 BUG/PI: report every cause you considered in `hypotheses` (most likely first; `confirmed`, `refuted` with
 the evidence, or `open`). It is the team's working record: the next attempt and the parallel checkers

@@ -37,7 +37,7 @@ const ROLES = [
     description: 'Tester: runs the team gate on one fixer attempt through team_runtime, checks the answer against the MVS, then writes a verification JSON.',
     reads: ['You change no code, tests or evidence; the only file you may edit is `answers/<ID>/submit.json` (step 3 below).'] },
   { role: 'pi-hypothesis', file: 'pi-hypothesis.md', schema: 'hypothesis', readOnly: true,
-    description: 'Read-only investigator for a stuck production incident or a disputed answer: checks exactly one hypothesis, then writes a hypothesis JSON.',
+    description: 'Read-only investigator for a stuck production incident or a disputed answer: checks exactly one hypothesis, or solves an answer-only item independently, then writes a hypothesis JSON.',
     reads: [`Before you start, read \`${REF}/pi-triage.md\` (what evidence decides each kind of cause) and the stack notes`,
       'when the brief names them.'] }
 ];
@@ -131,8 +131,8 @@ for (const r of ROLES) {
   const body = [
     `You are the ${r.role} subagent of the team. Your brief from the orchestrator contains tagged blocks`,
     '(`<item>`, `<item_meta>`, `<triage>`, `<project_profile>`, `<company_facts>`, `<materials>`, `<recent_changes>`,',
-    '`<previous_attempt>`, `<hypothesis>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<baseline_failures>`, `<worktree>`,',
-    '`<results_path>`): use the ones present.',
+    '`<previous_attempt>`, `<hypothesis>`, `<independent_answer>`, `<fix_result>`, `<diff>`, `<gate_findings>`, `<baseline_failures>`, `<requirements>`,',
+    '`<worktree>`, `<results_path>`): use the ones present.',
     ...(r.readOnly ? ['You are READ-ONLY: do not modify, create or delete any file except your results JSON.'] : []),
     ...r.reads,
     '',

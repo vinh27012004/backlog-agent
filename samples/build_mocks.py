@@ -65,7 +65,7 @@ class PercentCouponTest(unittest.TestCase):
             "tests_added": ["tests.test_coupon"],
             "verification": [{"check": "test tái hiện", "command": "python -m unittest tests.test_coupon",
                               "result": "pass", "note": None}],
-            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.9,
+            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.9, "requirements": [],
         },
     },
     "TASK-01": {
@@ -126,7 +126,7 @@ class ExportCsvTest(unittest.TestCase):
             "tests_added": ["tests.test_export"],
             "verification": [{"check": "test tiêu chí", "command": "python -m unittest tests.test_export",
                               "result": "pass", "note": None}],
-            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.85,
+            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.85, "requirements": [],
         },
     },
     "CR-02": {
@@ -187,7 +187,7 @@ class PasswordLimitTest(unittest.TestCase):
             "tests_added": ["tests.test_password_limit"],
             "verification": [{"check": "test theo spec", "command": "python -m unittest tests.test_password_limit",
                               "result": "pass", "note": None}],
-            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.85,
+            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.85, "requirements": [],
         },
     },
     "PI-03": {
@@ -236,7 +236,7 @@ class MonthlyReportTest(unittest.TestCase):
             "tests_added": ["tests.test_monthly_report"],
             "verification": [{"check": "test tái hiện", "command": "python -m unittest tests.test_monthly_report",
                               "result": "pass", "note": None}],
-            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.9,
+            "test_change": None, "needs_dependency": [], "risks": [], "confidence": 0.9, "requirements": [],
         },
     },
 }

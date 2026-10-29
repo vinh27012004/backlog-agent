@@ -189,6 +189,36 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1
+    },
+    "requirements": {
+      "type": "array",
+      "description": "one entry per id in <requirements> (the item's acceptance criteria, requirements and submission rules); [] when the brief has none",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "not_applicable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "what shows it: test name, file:line, evidence file, command and result; for not_met, why"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ]
+      }
     }
   },
   "required": [
@@ -204,6 +234,7 @@
     "needs_dependency",
     "test_change",
     "risks",
-    "confidence"
+    "confidence",
+    "requirements"
   ]
 }

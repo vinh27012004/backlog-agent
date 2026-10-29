@@ -35,6 +35,26 @@
         "null"
       ],
       "description": "if inconclusive: the single most useful next check"
+    },
+    "answer_values": {
+      "type": "array",
+      "description": "independent answer only: your value for each field in <independent_answer>, exactly as it would go into submit.json; [] otherwise",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "value"
+        ]
+      }
     }
   },
   "required": [
@@ -42,6 +62,7 @@
     "verdict",
     "evidence",
     "fix_location",
-    "next_check"
+    "next_check",
+    "answer_values"
   ]
 }

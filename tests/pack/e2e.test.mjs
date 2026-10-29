@@ -89,7 +89,8 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // ---------------- GAME
     gm.state.status = 'IN_PROGRESS';
     gm.state.backlog = [{ key: 'TASK-01', type: 'TASK', title: 'Greeting says hello world', status: 'OPEN', points: 100,
-      deadlineMinutes: 20, revealedElapsedSec: 0, revisionNo: 1, description: 'Change greet() to return "hello world".' },
+      deadlineMinutes: 20, revealedElapsedSec: 0, revisionNo: 1,
+      description: 'Change greet() to return "hello world".\n\n## Acceptance criteria\n1. greet() returns "hello world" with no trailing space.\n' },
     { key: 'TASK-02', type: 'TASK', title: 'Add a farewell helper', status: 'OPEN', points: 50,
       deadlineMinutes: null, revealedElapsedSec: 0, revisionNo: 1,
       description: `${'Add bye() next to greet() in src/lib.js. '.repeat(80)}Capture a screenshot of the greeting before fixing as tc-00-before.png. `
@@ -108,12 +109,24 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const releases = (await client.call('match_state')).releases;
     assert.deepEqual(releases.minutes, [0, 14, 29]);
     assert.equal(releases.next.minute, 14);
+    // Vòng chờ cuối trận dùng cursor -1: không nhận lại sự kiện cũ (TOKXKPBV: cursor 0 làm root thức ngay), item chưa
+    // làm vẫn thấy trong state.open.
+    const fromStart = await client.call('wait_for_update', { timeoutMs: 0, cursor: 0 });
+    assert.ok(fromStart.events.some(e => e.type === 'ITEM_NEW'));
+    const fromNow = await client.call('wait_for_update', { timeoutMs: 0, cursor: -1 });
+    assert.deepEqual(fromNow.events, []);
+    assert.equal(fromNow.cursor, fromStart.cursor);
+    assert.deepEqual(fromNow.state.open.sort(), ['TASK-01', 'TASK-02']);
     const work = await client.call('start_work', { backlogItemKey: 'TASK-01', requiredScenarios: 1 });
     assert.equal(work.submitTemplate.status, 'DRAFT');
     assert.deepEqual(work.files, ['challenge/TASK-01-submit.json', 'challenge/TASK-01-submit.schema.json']);
     // Item thứ hai chưa bắt đầu, còn chỗ: kết quả tool của root nhắc ngay (ZVUYZ41V).
     assert.deepEqual(work.notice.newItems, ['TASK-02']);
     assert.equal(work.requiredEvidence, undefined);
+    // Yêu cầu của cả đề: fixer khai từng id trong fix-result, reviewer chấm từng id (HIET12OA, ZVUYZ41V).
+    assert.deepEqual(work.requirements, [{ id: 'AC-1', text: 'greet() returns "hello world" with no trailing space.' }]);
+    assert.deepEqual(JSON.parse(readFileSync(join(work.materialsDir, 'requirements.json'), 'utf8')), work.requirements);
+    assert.match(work.next, /<requirements> = .*requirements\.json/);
     const work2 = await client.call('start_work', { backlogItemKey: 'TASK-02', requiredScenarios: 1 });
     assert.equal(work2.notice, undefined, 'every item started');
     // Evidence mô tả đòi ngoài MVS (ZVUYZ41V BUG-01: thiếu nó là 0 điểm cả item).

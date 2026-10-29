@@ -97,7 +97,9 @@ không tự `git push`.
 > `report_ready`, `refresh_match`, `match_state`, `read_item` (mới), `start_work`, `worktree`, `run_gate` (thêm
 > `tests-guard`, kiểm `submit.json` theo `submit.schema.json`, `baselineFailures`, `allowTestChange`), `record_verification`,
 > `commit_and_push`, `submit_work`, `report_progress`, `wait_for_update`, `job_status`, `detect_profile` (A),
-> `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9).
+> `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9;
+> từ 29/10 `company_call {backlogItemKey}` tự lưu kết quả vào `.team-work/items/<ID>/company/<nn>-<tool>.json` và trả
+> `savedTo`, vì ở TOKXKPBV chuẩn xuất CSV của CR-01 chỉ nằm trong brief, reviewer và người chấm không đối chiếu được).
 > `decide` (Jev, mới: `pack/src/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log` (chữ ký lỗi và rút log đã có
 > bên trong gate, `pack/src/logs.mjs`). Code: `pack/src/tools.mjs`.
 >
@@ -254,6 +256,19 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 - `requiredEvidence` = `[{file, beforeFix}]` (bỏ khi rỗng): evidence mà mô tả item đòi ngoài MVS (§5.10 bước 7).
   `beforeFix` = câu chứa "before" (vd "before fixing"): fixer chụp trước khi sửa code. Root đưa vào brief
   (`<required_evidence>`).
+- `requirements` = `[{id, text}]` (bỏ khi rỗng), cũng ghi ra `.team-work/items/<ID>/requirements.json`: yêu cầu của **cả
+  đề**, vì BTC chấm theo cả đề chứ không chỉ MVS (HIET12OA: "pnpm test passes" chỉ ở Acceptance criteria, gate và
+  reviewer cho qua 3 item hỏng; ZVUYZ41V: ảnh "before fixing" chỉ ở mục Submission). `itemRequirements` trong `gate.mjs`,
+  thuần code: mục Acceptance criteria → `AC-n` (mỗi dòng danh sách), Expected outcome / Requirements / Canonical scope /
+  Normalization / Answer format → `RQ-n` (danh sách thì mỗi dòng, đoạn văn thì mỗi câu), Submission / Evidence →
+  `EV-n` (bỏ câu khuôn mẫu gate đã kiểm: chép template, `gitRevision`, `testResults`, schema). Bỏ bảng, khối code, câu
+  điểm và hạn; tối đa 24. Root đưa đường dẫn vào brief fixer và reviewer (`<requirements>`); fixer khai từng id trong
+  `requirements` của fix-result (`met`/`not_met`/`not_applicable` + bằng chứng), reviewer chấm lại từng id trong
+  review. Gate từ fix-result đối chiếu bảng này (§5.10 bước 7).
+- `independentAnswer` = `{fields, resultsFile}` (chỉ item có cờ `answerOnly`): `fields` là key của template có giá trị
+  nguyên thuỷ trừ `schemaVersion`/`backlogId`/`status` (TASK-01: `position`). Root spawn cùng lúc với fixer một
+  `team_pi_hypothesis` giải độc lập (không đọc `answers/` hay `results/`), ghi `answer_values` ra `resultsFile`;
+  `record_verification` chặn khi hai đáp án khác nhau (§5.11). Đáp án sai là 0 điểm và không nộp lại được.
 
 ### 5.9 `worktree`
 
@@ -307,7 +322,12 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
      của `descriptionMd`, bỏ tên trong đường dẫn, file submit và file đề; ZVUYZ41V BUG-01 được 0/200 vì thiếu
      `dashboard_before_fixing.png` chỉ có ở mục Submission): file phải có trong `evidence/` và trong
      `evidenceFiles`. Thiếu file → `evidence_missing` (chữ ký `evidence_missing:<files>`, tree vẫn lưu, là một lượt
-     fixer chứ không phải sửa answer, không có luật cơ hội cuối); `commit_and_push` cũng kiểm.
+     fixer chứ không phải sửa answer, không có luật cơ hội cuối); `commit_and_push` cũng kiểm. Gate chạy từ file
+     fix-result (verifier) còn đối chiếu `requirements` của fix-result với `requirements` của `start_work`
+     (`requirementsCheck`): fix-result không có bảng hoặc bỏ sót id → cảnh báo (reviewer chấm thay); id `not_met` mà
+     `status` là `DONE` → `answer_invalid` (sửa thành `PARTIAL` là đủ, J8 của rubric judge); `not_met` với `PARTIAL` →
+     cảnh báo "requirements reported not met", verifier đề xuất `retry` nếu fixer còn làm được. Gate main của root (không
+     có fix-result) bỏ qua bước này.
 - **Thứ tự check của bản đã dựng** (27/10, mục 5–10 lấy từ harness mẫu; tên check trong `checks[]`):
   `diff` → `forbidden` → `tests-guard` → `test-quality` → `code-scan` → `typecheck`/`build` → `tests-added` →
   `regression` → `tests-kept` → (tính `tree`) → `fail-before` → `answer`. MVS chưa có lệnh chạy nên không có `mvs_fail`.
@@ -380,6 +400,10 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   `testResults`; truyền mà khác số trong file thì kết quả có `note`. `required` = số kịch bản bắt buộc
   khai ở `start_work` + 1 (gate). `PASSED` chỉ khi mọi kịch bản bắt buộc pass **và** gate pass; kịch bản chưa chạy
   không bao giờ được tính là đạt (Practice #1, L4).
+- Item trả lời thuần có checker giải độc lập (§5.8 `independentAnswer`): đáp án trong `submit.json` khác giá trị của
+  lần giải mới nhất (`results/<ID>-solver-<n>.json`, `answer_values`, so chuỗi đã trim) → `ANSWER_DISPUTED`, trừ khi
+  root truyền `disputeChecked: true` sau khi một checker `team_pi_hypothesis` bác giá trị của solver. Solver chưa xong
+  thì không chặn. Gate cũng trả `answerAgreement` `{state, fields, solverFile}` khi đã có lời giải để so.
 - Root **không** tự ghi `BACKLOG_TESTS` bằng `report_progress`; đây là chỗ duy nhất, để số luôn là số thật.
 
 ### 5.12 `commit_and_push`
@@ -422,7 +446,10 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 
 ### 5.15 `wait_for_update`
 
-- **Input**: `{timeoutMs ≤ 55000, cursor?}`. Có sự kiện chưa lấy thì trả ngay.
+- **Input**: `{timeoutMs ≤ 55000, cursor?}`. Có sự kiện chưa lấy thì trả ngay. `cursor: -1` (29/10) = chỉ sự kiện
+  từ lúc gọi: vòng chờ "Nothing workable" của skill root dùng nó, thức khi có `ITEM_NEW`/`ITEM_CHANGED`/`ITEM_CLOSING`/
+  `MATCH_STATUS`, khi `state.open` có item, khi trận kết thúc, hoặc sau 9 phút (TOKXKPBV: root truyền `cursor: 0`,
+  nhận lại 20 sự kiện cũ và thức ngay).
 - Sự kiện: `ITEM_NEW`, `ITEM_CLOSING` (còn ≤ 5 phút tới deadline mà chưa
   nộp), `ITEM_CLOSED`, `MATCH_STATUS` (`PAUSED`, `FINISHED`, `TIME_OVER`, `CANCELLED`), `JOB_DONE`,
   `RESULT_FILE` (file mới trong `.team-work/results/`, tức subagent xong), `AUTH_EXPIRED`, `LOG_BUDGET`.
