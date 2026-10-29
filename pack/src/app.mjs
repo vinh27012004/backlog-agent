@@ -33,7 +33,7 @@ function alive(pid) {
 
 
 // matchRoot phải là thư mục trận (chính hoặc worktree) trong TeamWorkspace/matches/<matchId>/; log nằm ở .team-work/logs.
-function locate(teamWorkspace, matchRoot) {
+export function locate(teamWorkspace, matchRoot) {
   if (typeof matchRoot !== 'string' || !isAbsolute(matchRoot)) fail('INVALID_ARGUMENT', 'matchRoot must be an absolute path');
   const abs = resolve(matchRoot);
   const rel = relative(join(teamWorkspace, 'matches'), abs);

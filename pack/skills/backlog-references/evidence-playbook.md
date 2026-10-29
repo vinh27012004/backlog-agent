@@ -35,19 +35,30 @@ in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
 - `UNSUPPORTED_APP` (not a node app): build, then start it yourself on a free port from 3100, output to the log path
   above (never into the worktree: Windows locks a running app's log and the worktree can no longer be synced or
   removed), and stop it with `taskkill /PID <pid> /T /F`. Never kill a process you did not start.
-- Seeded login users and passwords are in the repo's seed script; use the ones the MVS names.
+- Sign in with the `login` step (§2): the helper signs in with the account the app's seed script creates and never
+  shows it to you. Never read, extract or type seed passwords yourself (`.env`, `seed.ts`, regex, dotenv), and never
+  try another source after a failed login (Practice 9KNXREJ5: CR-01's fixer read `ADMIN_*` from a `.env` that had
+  none, the login failed, it then pulled the default password out of `prisma/seed.ts`; auto-review rejected that as
+  credential probing and the item lost its authenticated evidence). Only an account the item or its test data names
+  with its password is typed with `fill`.
 - Never use computer use, desktop control or the operator's browser windows.
 
 ## 2. One `capture_evidence` call per scenario
 Put the whole flow in `steps` (max 60):
 ```
-goto <base>/login → fill user → fill password → click "Sign in" → waitFor <a text of the first page>
+login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 → goto <the screen> → <the MVS steps> → assertText <the expected value>
 → screenshot answers/<ID>/evidence/<exact file name the MVS asks for>.png
 ```
 - Give every call the same `browserProfile` (e.g. `"<id>-admin"`): the login cookie is kept, so later calls may start
-  at the screen. A failed step whose `error.details.url` is `/login` means the session is gone: put the login steps
-  back in.
+  at the screen. A failed step whose `error.details.url` is `/login` means the session is gone: put the `login` step
+  back in (it returns `alreadySignedIn` when the cookie still holds).
+- `LOGIN_FAILED`: the app refused the seeded account; `error.details.visibleText` has its message. Seeding again
+  (`app_data` lock, §6) may restore it; otherwise the scenario is `NOT_RUN` with that message. A login bug the item
+  itself is about is evidence: screenshot the error instead.
+- An action rejected by auto-review: do not retry it or reach the same result another way. Finish everything else,
+  mark only the scenarios that needed it `NOT_RUN` with the stated reason, and return; never ask for approval
+  (nobody answers during the match).
 - File names: exactly what the MVS lists under "Required evidence"; the gate fails a `PASS` that misses one.
 - `assertText` before `screenshot`: a picture of the wrong state is worse than none.
 

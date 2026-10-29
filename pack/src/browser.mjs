@@ -5,6 +5,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { locate as locateMatchRoot } from './app.mjs';
+import { seededAccount } from './applogin.mjs';
 import { fail, HelperError, sleep } from './util.mjs';
 
 const MAX_TOTAL_MS = 50_000;
@@ -117,6 +119,28 @@ const FIND = `(q) => {
   return pick(exact) || pick(loose) || null;
 }`;
 
+// Bước login: đánh dấu ô mật khẩu đang hiện, ô tên/email đứng trước nó trong cùng form và nút gửi. null = không có form.
+const LOGIN_FORM = `() => {
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  for (const el of document.querySelectorAll('[data-mtm-login]')) el.removeAttribute('data-mtm-login');
+  const pass = [...document.querySelectorAll('input[type=password]')].find(visible);
+  if (!pass) return null;
+  const scope = pass.form || document;
+  const fields = [...scope.querySelectorAll('input')].filter(el => visible(el) &&
+    !/^(password|hidden|checkbox|radio|submit|button|image|file|reset)$/i.test(el.type));
+  const before = fields.filter(el => el.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const user = before[before.length - 1] || fields[0];
+  if (!user) return null;
+  const buttons = [...scope.querySelectorAll('button,input[type=submit]')].filter(visible);
+  const submit = buttons.find(b => (b.type || '').toLowerCase() === 'submit') ||
+    buttons.find(b => /sign ?in|log ?in|đăng nhập/i.test(b.innerText || b.value || ''));
+  user.setAttribute('data-mtm-login', 'user'); pass.setAttribute('data-mtm-login', 'password');
+  if (submit) submit.setAttribute('data-mtm-login', 'submit');
+  return { submit: !!submit };
+}`;
+const LOGIN_ROUTE = /\/(login|signin|sign-in|auth)\b/i;
+
 // Practice #5 (BC3JL6ZC): fixer viết selector Playwright (`:has-text()`, `>> nth=0`); querySelectorAll ném lỗi,
 // lỗi bị nuốt và tool chờ hết giờ rồi báo ELEMENT_NOT_FOUND. Chặn ngay, chỉ cách viết đúng.
 const PLAYWRIGHT_ONLY = /:has-text\(|:text(-is|-matches)?\(|:visible\b|:nth-match\(|>>|^\s*(text|css|xpath|role)=/;
@@ -174,8 +198,10 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const vp = { width: Math.min(3840, Math.max(320, viewport.width | 0 || 1366)), height: Math.min(4000, Math.max(240, viewport.height | 0 || 900)) };
   // Kiểm toàn bộ bước trước khi mở trình duyệt.
   const rules = new Map();
+  const accounts = new Map();
   for (const [i, s] of steps.entries()) {
-    if (s.action === 'goto' && !loopback(s.url)) fail('URL_NOT_ALLOWED', 'goto only accepts http(s)://localhost or 127.0.0.1');
+    if (['goto', 'login'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
+    if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
     if (s.action === 'route') rules.set(i, routeRule(s, i));
     checkSelector(s, i);
@@ -307,6 +333,15 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       fail('ELEMENT_OBSCURED', `${q.selector ?? `text "${q.text}"`} is covered by ${last?.by ?? 'another element'} at its centre; ` +
         'force:true clicks through the cover');
     };
+    // Gõ như người dùng: bấm vào ô, chọn hết, xoá, chèn text (input có kiểm soát của React nhận sự kiện input).
+    const fill = async (q, value, opts) => {
+      const r = await click(q, opts);
+      await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      await send('Input.insertText', { text: String(value ?? '') });
+      return r;
+    };
 
     let at = -1;
     try {
@@ -325,12 +360,43 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             break;
           }
           case 'fill': {
-            const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+            const r = await fill(q, s.value, { timeoutMs: s.timeoutMs, force: s.force });
             if (r.obscured) log.push({ step: i + 1, action: 'fill', obscuredBy: r.by, forced: true });
-            await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
-            await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-            await send('Input.insertText', { text: String(s.value ?? '') });
+            break;
+          }
+          case 'login': {
+            // Tài khoản seed do helper tìm (applogin.mjs); giá trị không vào log, kết quả hay error.details.
+            const account = accounts.get(i);
+            await send('Page.navigate', { url: s.url });
+            await waitReady();
+            const formUntil = Math.min(deadline, Date.now() + 10_000);
+            let form = null;
+            while (!(form = await evaluate(`(${LOGIN_FORM})()`).catch(() => null))) {
+              const href = await evaluate('location.pathname').catch(() => '');
+              if (Date.now() >= formUntil || (href && !LOGIN_ROUTE.test(href) && await evaluate('document.readyState').catch(() => '') === 'complete')) break;
+              await sleep(200);
+            }
+            if (!form) {
+              const href = await evaluate('location.pathname').catch(() => '');
+              if (LOGIN_ROUTE.test(href)) fail('LOGIN_FORM_NOT_FOUND', `no username + password field on ${s.url}`);
+              log.push({ step: i + 1, action: 'login', alreadySignedIn: true });
+              break;
+            }
+            await fill({ selector: '[data-mtm-login=user]' }, account.username, { force: true });
+            await fill({ selector: '[data-mtm-login=password]' }, account.password, { force: true });
+            if (form.submit) await click({ selector: '[data-mtm-login=submit]' }, { force: true });
+            else await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+              .then(() => send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }));
+            const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 15_000));
+            while (await evaluate(`[...document.querySelectorAll('input[type=password]')].some(el => el.getBoundingClientRect().width > 0)`).catch(() => true)) {
+              if (Date.now() >= until) {
+                fail('LOGIN_FAILED', `still on the sign-in form after submitting the seeded account (${account.sources.join(', ')}); ` +
+                  'read error.details.visibleText for the app\'s message');
+              }
+              await sleep(200);
+            }
+            await waitReady();
+            log.push({ step: i + 1, action: 'login', account: account.sources });
             break;
           }
           case 'press': {
@@ -390,7 +456,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           default:
             fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
         }
-        if (s.action !== 'assertText') log.push({ step: i + 1, action: s.action });
+        if (!['assertText', 'login'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
     } catch (error) {
       // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).

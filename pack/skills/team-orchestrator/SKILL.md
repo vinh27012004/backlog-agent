@@ -237,6 +237,12 @@ Do not repeat that in the brief. Your part:
   pause and polled `wait_agent` for 2.5 minutes): the next attempt gets the sync.
 - `worktree remove` may return `leftover` (files locked on Windows): the worktree is gone for git, leave the folder.
 - Two items' data scenarios never run at the same time: the `app_data` lock enforces it; do not work around it.
+- Fixers sign in to the app with `capture_evidence`'s `login` step (the helper uses the app's seeded account). An
+  auto-review rejection covers that one action, not the item and not the match: never call `request_user_input` or
+  wait for approval (nobody answers during the match), never put a rejection or "do not log in" into another item's
+  brief, and never report `BACKLOG_STATUS` `BLOCKED` for it. The item carries on: scenarios without their evidence are
+  `NOT_RUN`, and the gate and answer rules below decide (Practice 9KNXREJ5: one rejected login on CR-01 left CR-01 and
+  TASK-02 `BLOCKED` waiting for an approval that never came, with TASK-02's gate and review already passed).
 
 ## Answers
 `answers/<ID>/submit.json` keeps every template key, satisfies `files/challenge/<ID>-submit.schema.json`

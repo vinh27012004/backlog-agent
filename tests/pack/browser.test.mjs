@@ -1,9 +1,10 @@
 // capture_evidence: Edge headless qua CDP trên một app giả ở localhost (đăng nhập → form → chụp).
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { seededAccount } from '../../pack/src/applogin.mjs';
 import { captureEvidence, findBrowser } from '../../pack/src/browser.mjs';
 import { install, McpClient, tempDir } from './support.mjs';
 
@@ -170,9 +171,59 @@ test('capture_evidence browserProfile keeps the login cookie across calls', { sk
   }
 });
 
+// Thư mục trận giả có app node với seed đọc ADMIN_* (mặc định admin/secret, như prisma/seed.ts của Solova).
+const SEED = 'const email = process.env.ADMIN_EMAIL ?? "admin";\nconst password = process.env.ADMIN_PASSWORD ?? "secret";\n';
+
+function seededRepo(tw, { env = '', seed = SEED } = {}) {
+  const root = join(tw, 'matches', 'M1', 'M1');
+  mkdirSync(join(root, 'src', 'prisma'), { recursive: true });
+  writeFileSync(join(root, 'src', 'package.json'), JSON.stringify({ name: 'app', scripts: { start: 'next start' } }));
+  writeFileSync(join(root, 'src', 'prisma', 'seed.ts'), seed);
+  writeFileSync(join(root, 'src', '.env'), env);
+  return root;
+}
+
+test('seededAccount takes the seed script defaults, .env values first, and skips other services', () => {
+  const tw = join(tempDir('mtm-login-'), 'BUN');
+  let root = seededRepo(tw, { env: 'DATABASE_URL=postgres://x\nSMTP_USER=mailer\nSMTP_PASSWORD=mail\n' });
+  assert.deepEqual(seededAccount(root), { username: 'admin', password: 'secret',
+    sources: ['ADMIN_EMAIL default in src/prisma/seed.ts', 'ADMIN_PASSWORD default in src/prisma/seed.ts'] });
+  root = seededRepo(tw, { env: 'ADMIN_PASSWORD="from-env" # comment\n' });
+  const acct = seededAccount(root);
+  assert.equal(acct.password, 'from-env');
+  assert.deepEqual(acct.sources, ['ADMIN_EMAIL default in src/prisma/seed.ts', 'ADMIN_PASSWORD from src/.env']);
+  root = seededRepo(tw, { seed: 'const url = process.env.DATABASE_URL;\n', env: 'SMTP_USER=a\nSMTP_PASSWORD=b\n' });
+  assert.throws(() => seededAccount(root), e => e.code === 'LOGIN_ACCOUNT_NOT_FOUND');
+});
+
+test('capture_evidence login signs in with the seeded account without exposing it', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const root = seededRepo(tw);
+  const { server, url } = await app();
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'login', url: `${url}/login`, matchRoot: root }, { action: 'assertText', text: 'Dashboard' }] });
+    assert.ok(res.finalUrl.endsWith('/dashboard'), res.finalUrl);
+    assert.deepEqual(res.steps[0], { step: 1, action: 'login', account: ['ADMIN_EMAIL default in src/prisma/seed.ts', 'ADMIN_PASSWORD default in src/prisma/seed.ts'] });
+    assert.doesNotMatch(JSON.stringify(res), /secret/);
+    // Mật khẩu sai: LOGIN_FAILED kèm trang (thông báo của app), không lộ mật khẩu.
+    seededRepo(tw, { env: 'ADMIN_PASSWORD=wrong\n' });
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'login', url: `${url}/login`, matchRoot: root, timeoutMs: 2000 }] }), e => {
+      assert.equal(e.code, 'LOGIN_FAILED');
+      assert.match(e.details.visibleText, /Invalid/);
+      assert.doesNotMatch(JSON.stringify({ m: e.message, d: e.details }), /wrong/);
+      return true;
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('capture_evidence refuses non-loopback URLs and paths outside answers/<ID>/evidence', async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
   await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: 'https://example.com/' }] }), /URL_NOT_ALLOWED/);
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'login', url: 'https://example.com/login', matchRoot: tw }] }), /URL_NOT_ALLOWED/);
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'login', url: 'http://localhost:3100/login', matchRoot: tempDir('mtm-x-') }] }), /PATH_NOT_ALLOWED/);
   await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'screenshot', path: join(tw, 'matches', 'M1', 'M1', 'src', 'x.png') }] }), /PATH_NOT_ALLOWED/);
   await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'screenshot', path: join(tw, 'elsewhere', 'answers', 'A', 'evidence', 'x.png') }] }), /PATH_NOT_ALLOWED/);
 });

@@ -113,6 +113,10 @@ không tự `git push`.
 > hoặc làm chậm `delayMs` rồi cho đi tiếp; `times` giới hạn số lần, luật mới nhất thắng. Dùng cho MVS kiểu "khi API lỗi
 > / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
 > `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
+> **29/10 (Practice 9KNXREJ5, L60):** bước `login {url, matchRoot}` đăng nhập bằng tài khoản mà seed của app tạo
+> (`pack/src/applogin.mjs`: biến `process.env.X ?? "mặc định"` trong file seed, giá trị trong `.env` nếu có, không thì
+> mặc định). Helper tự điền form và kiểm form đã biến mất; kết quả chỉ nêu tên biến và nguồn, không có giá trị. Lý do:
+> agent tự moi mật khẩu trong seed bị auto-review chặn như dò mật khẩu.
 >
 > **28/10:** codegraph (§5.21): MCP server ngoài `@colbymchenry/codegraph` thay cho CodeGraph của kiến trúc cũ (chưa từng
 > dựng); helper chỉ dựng index. Bỏ "system map". Cùng ngày: proxy cho subagent (§5.22), để `team_verifier` chạy

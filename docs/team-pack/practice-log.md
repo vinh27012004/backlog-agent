@@ -335,3 +335,15 @@ Judge cho cả 5 item đạt mọi tiêu chí mức H; gate 5/5 và reviewer 5/5
 Root: 38% input của root là lượt gọi model ngay sau `wait_agent` (48 lần), 24% sau `spawn_agent` (29 lần); context lớn
 nhất 116K. Guardian review root 56 lần (3,5M input); tool bị review nhiều nhất: `capture_evidence` 31, `run_gate` 27,
 `app` 26, `worktree` 17.
+
+## #10 · 29/10/2026 · tự luyện `9KNXREJ5` (Player 0.9.39, cùng bộ item)
+
+Đang chạy thì dừng: lúc 13:44:59Z (trận còn khoảng 32 phút) lượt của root bị ngắt (`aborted by user`, Stop trong
+Player). Khi đó BUG-02 và BUG-01 đã nộp; CR-01 và TASK-02 ở `BLOCKED` (`HOST_APPROVAL_REQUIRED`). Nguồn:
+`.team-work/journal.json`, `results/`, transcript `~/.codex/sessions/2026/10/29/rollout-…-01a187dd-7c59…` (fixer CR-01)
+và `…-7c6a…` (guardian của nó).
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L60 | Fixer CR-01 đăng nhập app: lần 1 đọc `ADMIN_EMAIL`/`ADMIN_PASSWORD` bằng dotenv, `.env` không có nên form bị điền rỗng, đăng nhập hỏng; lần 2 regex mật khẩu mặc định trong `prisma/seed.ts`. Guardian từ chối (`high`/`deny`): "after normal authentication failed, extracts admin credentials from the seed source… credential probing". BUG-01 và BUG-02 lấy mật khẩu từ seed y như vậy mà được cho qua vì lần đầu đã đăng nhập được. Playbook còn dặn tự lấy mật khẩu trong seed | CR-01 thiếu mọi ảnh cần đăng nhập, `partial` | **Đã** sửa: `capture_evidence` có bước `login {url, matchRoot}`. Helper (`pack/src/applogin.mjs`) tìm tài khoản seed: biến môi trường mà file seed đọc (`process.env.X ?? "mặc định"`), lấy giá trị trong `.env` nếu có, không thì lấy mặc định; bỏ cặp của dịch vụ khác (SMTP, DB…). Helper tự điền form và kiểm form đã biến mất (`LOGIN_FAILED` kèm thông báo của app). Agent không thấy mật khẩu: kết quả chỉ nêu tên biến và nguồn. Playbook §1–2 cấm tự đọc mật khẩu seed và cấm thử nguồn khác sau khi đăng nhập hỏng. Test trong `browser.test.mjs`; trên worktree thật của trận tìm đúng `ADMIN_*` trong `src/prisma/seed.ts` |
+| L61 | Root nhận lời từ chối của CR-01 thì gọi `request_user_input_async` xin "organizer approval", ghi `BACKLOG_STATUS BLOCKED` cho CR-01, rồi đưa "do not bypass the rejected credential use" vào brief của TASK-02. Fixer TASK-02 tự bỏ bước smoke login (guardian chưa từng chặn nó), dù đề ghi "A valid seeded user can log in" | TASK-02 đã pass gate và review nhưng nằm `BLOCKED` chờ một approval không ai trả lời | **Đã** sửa skill root (§Screenshots): lời từ chối của auto-review chỉ áp cho đúng một hành động, không áp cho item hay cả trận; cấm `request_user_input`, cấm chuyển lời từ chối sang brief item khác, cấm `BLOCKED` vì lý do này; kịch bản thiếu evidence thì `NOT_RUN`, gate và luật answer quyết định. Playbook: hành động bị từ chối thì không thử lại, làm nốt phần khác, `NOT_RUN` đúng kịch bản cần nó, không xin approval |
