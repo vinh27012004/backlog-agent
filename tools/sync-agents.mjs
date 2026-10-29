@@ -108,9 +108,12 @@ const REWRITES = [
 ];
 
 const rewrite = text => REWRITES.reduce((t, [re, to]) => t.replace(re, to), text);
+// Checkout trên Windows (core.autocrlf=true) có thể là CRLF: khi đó `^---\n` không khớp và skill sinh ra
+// mất dòng HEADER, nên mọi file đọc vào đều đổi về LF.
+const read = path => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 
 function commonRules(schema) {
-  const text = readFileSync(join(SRC, 'rules', 'common.md'), 'utf8');
+  const text = read(join(SRC, 'rules', 'common.md'));
   const parts = text.split(/^(?=## )/m);
   return parts.map(part => {
     const title = part.match(/^## (.+)$/m)?.[1]?.trim();
@@ -137,14 +140,14 @@ for (const r of ROLES) {
     ...r.reads,
     '',
     rewrite(commonRules(r.schema)),
-    rewrite(readFileSync(join(SRC, 'roles', r.file), 'utf8'))
+    rewrite(read(join(SRC, 'roles', r.file)))
   ].join('\n');
   outputs.set(join(PACK, 'agents', `team-${r.role}.toml`),
     `# ${HEADER}\nname = "${name}"\ndescription = "${r.description}"\ndeveloper_instructions = ${tomlLiteral(body)}\n`);
 }
 
 for (const type of readdirSync(join(SRC, 'skills'))) {
-  const text = readFileSync(join(SRC, 'skills', type, 'SKILL.md'), 'utf8');
+  const text = read(join(SRC, 'skills', type, 'SKILL.md'));
   outputs.set(join(PACK, 'skills', `backlog-${type}`, 'SKILL.md'), rewrite(text).replace(/^---\n/, `---\n# ${HEADER}\n`));
 }
 
@@ -152,16 +155,16 @@ const refs = readdirSync(join(SRC, 'references')).filter(f => f.endsWith('.md'))
 outputs.set(join(PACK, 'skills', 'backlog-references', 'SKILL.md'), [
   '---', 'name: backlog-references', 'description: Reference notes for fixers: bug patterns, PI triage checklist, the retry playbook and the evidence playbook.', '---', '',
   `<!-- ${HEADER} -->`, '', ...refs.map(f => `- \`${f}\``), ''].join('\n'));
-for (const f of refs) outputs.set(join(PACK, 'skills', 'backlog-references', f), rewrite(readFileSync(join(SRC, 'references', f), 'utf8')));
+for (const f of refs) outputs.set(join(PACK, 'skills', 'backlog-references', f), rewrite(read(join(SRC, 'references', f))));
 
 const stacks = readdirSync(join(SRC, 'stacks')).filter(f => f.endsWith('.md'));
 outputs.set(join(PACK, 'skills', 'stack-notes', 'SKILL.md'), [
   '---', 'name: stack-notes', 'description: Stack-specific pitfalls and commands (java, node, python, dotnet, go, php, unknown). Read the one matching detect_profile.', '---', '',
   `<!-- ${HEADER} -->`, '', ...stacks.map(f => `- \`${f}\``), ''].join('\n'));
-for (const f of stacks) outputs.set(join(PACK, 'skills', 'stack-notes', f), rewrite(readFileSync(join(SRC, 'stacks', f), 'utf8')));
+for (const f of stacks) outputs.set(join(PACK, 'skills', 'stack-notes', f), rewrite(read(join(SRC, 'stacks', f))));
 
 for (const f of readdirSync(join(SRC, 'schemas')).filter(f => f.endsWith('.schema.json'))) {
-  outputs.set(join(PACK, 'contracts', f), readFileSync(join(SRC, 'schemas', f), 'utf8'));
+  outputs.set(join(PACK, 'contracts', f), read(join(SRC, 'schemas', f)));
 }
 
 // Còn sót tool cũ thì báo lỗi, để prompt không trỏ tới thứ không tồn tại.
@@ -170,7 +173,7 @@ if (stale.length) { console.error(`stale references to legacy tools in:\n${stale
 
 let changed = 0;
 for (const [path, text] of outputs) {
-  const old = existsSync(path) ? readFileSync(path, 'utf8') : null;
+  const old = existsSync(path) ? read(path) : null;
   if (old === text) continue;
   changed++;
   if (CHECK) { console.error(`out of date: ${path}`); continue; }

@@ -1,3 +1,5 @@
 # patch mock và repo mẫu phải giữ LF, nếu không git apply sẽ fail trên Windows (core.autocrlf=true)
 *.patch -text
 samples/repo-template/** text eol=lf
+# nguồn prompt agent giữ LF để tools/sync-agents.mjs sinh pack giống nhau trên mọi máy
+agents/** text eol=lf
