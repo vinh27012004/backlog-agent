@@ -249,7 +249,25 @@ server báo 60 phút: với 40 phút thì TASK-01 đã trễ. ≈176,81 credit t
 (`gpt-6-sol` medium), fixer 81,73, reviewer 22,64, verifier 16,08; guardian (`codex-auto-review`, ngoài price card) 6,1M
 input, 20% tổng input. `models.json` lúc đó đặt `gpt-6-sol` đầu tier `small` và `review`. Hạn mức gói Plus 23% → 98%.
 Nguồn: `runs/judge/TOKXKPBV/_usage/usage.md`, transcript root `…791f0581b9ca`, `.team-work/journal.json`, `results/`.
-Chưa chấm lại bằng `/judge-practice` và chưa có điểm BTC.
+Chưa có điểm BTC (grader: 4 item `GRADED`, TASK-01 `PENDING` lúc chấm lại).
+
+### Chấm lại (`/judge-practice`, 29/10)
+
+Bundle `runs/judge/TOKXKPBV/` (`report.md`, `<ID>/judge.json`). Judge cho cả 5 item đạt mọi tiêu chí mức H; gate 5/5 và
+reviewer 5/5 khớp judge, không false green, không false red (HIET12OA: gate 3 false green, reviewer 3). Cùng bộ item
+với các trận trước, nên phần lớn là nhờ các bản sửa nhắm đúng những item này (L43, tests-guard/baseline, L51).
+
+| Item | Judge | Điểm nhỏ (không mất điểm) |
+|---|---|---|
+| BUG-01 | pass | Bản sửa lặp lại 15rem của `w-60` thay vì thêm token theme; TC-02 chỉ có ảnh Accounting, Boards chỉ ghi trong note |
+| BUG-02 | pass | Sửa test cascade fail sẵn có căn cứ (migration, comment, seed của BTC) nhưng giữ tên cũ "…is RESTRICTED"; ảnh TC-02 là danh sách hoá đơn, không phải màn Payments |
+| CR-01 | pass | AC-2 (chuẩn xuất CSV) không kiểm được: kết quả `kb_search` chỉ nằm trong brief, không lưu ở đâu (L54) |
+| TASK-02 | pass | zod 3 → 4 (bản major) không có code tương thích; typecheck, test và login smoke vẫn pass |
+| TASK-01 | pass | Đáp án 98304 đúng với source đã phát; commit `571c531` mà đề nêu không có trong repo (trace ghi rõ); một test kiểm `submit.json` nằm trong bộ test của sản phẩm |
+
+Sửa sau chấm lại (`4063f45`): `start_work` tách đề thành `requirements` (AC/RQ/EV), fixer khai và reviewer chấm từng
+id, gate chặn `DONE` khi còn `not_met`; `company_call {backlogItemKey}` tự lưu kết quả (L54); item trả lời thuần có
+checker giải độc lập, `record_verification` chặn khi hai đáp án lệch. Kiểm ở trận sau: `next-practice-checklist.md` mục 3b.
 
 | # | Lỗi | Hệ quả | Sửa |
 |---|---|---|---|
