@@ -14,7 +14,7 @@ backlog-agent/
 │   ├── team-pack/       thiết kế hiện hành (13 file)
 │   ├── btc/             tài liệu của BTC: guide, luật chơi, Q&A, API (NDA)
 │   └── legacy/          kiến trúc cũ, đã thay thế
-├── vendor/              phần mềm của BTC, chỉ đọc: mtm-player-0.9.35/ (gitignore), team-orchestrator-pack-0.5.1/
+├── vendor/              phần mềm của BTC, chỉ đọc: mtm-player-0.9.39/ (gitignore), team-orchestrator-pack-0.5.1/
 ├── agents/              prompt tiếng Anh (luật, vai trò, skill theo loại item, stack): nguồn để port sang skill của pack
 ├── samples/             repo mẫu, item mẫu, kịch bản, mock: fixture cho test
 │

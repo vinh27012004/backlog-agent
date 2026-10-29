@@ -6,6 +6,17 @@ closed unsubmitted; BC3JL6ZC: BUG-02 scored 30/150 because 6 `capture_evidence` 
 your rules holds: one call per scenario, at most 2 retries, at most a third of your time, then `NOT_RUN` with the
 reason.
 
+## 0. Evidence the item text asks for
+`<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
+of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
+scored 0 of 200 although all 3 scenarios passed). Every listed file must exist in `answers/<ID>/evidence/` and appear
+in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
+- `beforeFix: true`: capture it **first**, before you change any code, on the unfixed app (build, start, one
+  `capture_evidence` call, stop). It shows the defect, so take it even though the screen looks broken.
+- Code already changed (a retry): save your change as a patch, undo it, capture, re-apply it:
+  `git diff HEAD --binary > <checkoutRoot>/.team-work/scratch/<ID>/fix.patch`, `git apply -R <that file>`, restart the
+  app, capture, `git apply <that file>`, check `git status`. Never `git stash`: the stash is shared by every worktree.
+
 ## 1. Start the app from your worktree
 - Build first, then start it on a free port (3100, 3101, …; another item's app may hold 3000) and record its PID.
   Stop it when your evidence is written: `taskkill /PID <pid> /T /F`.
@@ -43,7 +54,8 @@ goto <base>/login → fill user → fill password → click "Sign in" → waitFo
 - Otherwise retry that click with `force: true` (Practice #5: BUG-01's sidebar covered the Accounting tabs in every
   other item's worktree). Say in the scenario note that a shared layout bug was clicked through.
 - Never copy another item's files into your worktree to get rid of it, and never pause to wait for a sync: the
-  orchestrator syncs between attempts.
+  orchestrator syncs between attempts. "Waiting for the other item's fix" is never a reason to mark a scenario
+  `NOT_RUN` or to reply `partial` (Practice TOKXKPBV: CR-01 did, and its evidence-only second attempt cost 6 minutes).
 
 ## 5. A failing server (500, timeout, offline, slow)
 Add a `route` step before the action that sends the request, e.g. `{action: "route", url: "/api/invoices/export",

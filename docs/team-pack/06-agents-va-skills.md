@@ -155,15 +155,16 @@ loopback, ảnh chỉ vào `answers/<ID>/evidence/`) và hướng dẫn trong sk
   | Tier | Thứ tự ưu tiên | Dùng cho |
   |---|---|---|
   | `small` | 6-luna, 5.6-luna, 6.1-terra (medium) | Lần 1 của item tier `small`, kể cả item có deadline |
-  | `small_high` | như `small` (high) | Lần 1 của item tier `strong` (PI, CR, item `hard`, hoặc Jev chọn `strong`) |
-  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Từ lần 2; `team_pi_hypothesis` (chỉ chạy khi PI đã kẹt, từ 28/10) |
+  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Lần 1 của item tier `strong` (PI, CR, item `hard`, item chỉ cần câu trả lời có cờ `tricky` (từ 29/10, sau TOKXKPBV), hoặc Jev chọn `strong`); từ lần 2 mọi item; `team_pi_hypothesis` (PI đã kẹt, từ 28/10; hoặc reviewer chỉ cãi đáp án của item trả lời thuần, từ 29/10) |
   | `top` | 6-astra, rồi như `strong` (high) | Lần cuối (3, PI 4) của item có deadline hoặc PI |
   | `review` | 6-luna, 5.6-luna (high), 6.1-terra (medium) | `team_reviewer` |
   | `small` | như trên | `team_verifier` (chỉ chạy gate và đối chiếu MVS, `triage.models.verifier`) |
 
   Từ 29/10 lần 1 luôn chạy 6-luna và reviewer cũng 6-luna (theo dashboard credit 22–28/10: root, fixer và reviewer
-  chạy 6.1-sol chiếm gần hết 225,79 credit). Model 6.1 chỉ dùng từ lần 2. Tier `strong` của Jev giờ chỉ nâng effort
-  của lần 1 chứ không đổi model.
+  chạy 6.1-sol chiếm gần hết 225,79 credit). Từ 29/10 (sau ZVUYZ41V) item tier `strong` lại chạy 6.1-sol ngay lần 1:
+  BTC xếp hạng theo điểm, rồi thời gian, rồi mới tới credit, mà 6-luna lần 1 trên item khó tốn thời gian rồi vẫn phải
+  lên sol (TASK-02: 15,6 phút luna fail gate, sol 3,8 phút; BUG-02: 7,1 phút luna, sol 2 phút). Item tier `small`,
+  reviewer, verifier và root vẫn chạy 6-luna.
 
   Thứ tự theo giá chính thức và số token thật của các trận tập (27/10): một lượt fixer điển hình (4M input,
   cache 97%, 25K output) tốn khoảng $0,06 trên 6-luna, $0,44 trên 6.1-terra, $0,88 trên 6.1-sol và $6,33 trên astra.

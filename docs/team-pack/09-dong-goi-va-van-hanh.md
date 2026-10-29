@@ -75,8 +75,8 @@ Sau khi cài: `args = ["D:/mtm/T01/team-sdlc-pack/runtime/bin/runtime-server.mjs
 
 - **Không** đặt `model`, `model_reasoning_effort`, `sandbox_mode`, `approval_policy`: Player đặt các giá trị
   này cho thread.
-- Cân nhắc thêm sau Spike S1/S4: giới hạn multi-agent (`[agents] max_threads`), cấu hình approval cho
-  tool MCP (Spike S3). **Giữ web search bật** (Q11, 26/10); nếu Spike S1 cho thấy nó đang tắt mặc định thì
+- `[agents] max_concurrent_threads_per_session = 8` (tên cũ `max_threads`): mặc định của Codex chỉ cho 3
+  subagent chạy cùng lúc (ZVUYZ41V, L48). Còn cân nhắc: cấu hình approval cho tool MCP (Spike S3). **Giữ web search bật** (Q11, 26/10); nếu Spike S1 cho thấy nó đang tắt mặc định thì
   bật trong `config/codex.toml`.
 - `command = "node"` cần Node ≥ 20 trên PATH của tiến trình Codex. Checker kiểm điều này.
 

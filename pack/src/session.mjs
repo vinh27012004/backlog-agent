@@ -11,7 +11,7 @@ const MARKERS = {
   RESUME_GAME_V1: 'RESUME_GAME'
 };
 const POLICY_MARKERS = ['MTM_SUBMISSION_POLICY_V1', 'MTM_MODEL_POLICY_V1'];
-// Player 0.9.35 gửi `submission:create` (bootstrap.mjs:13); guide 0.5.1 ghi `submissions:create`. Nhận cả hai.
+// Player 0.9.35–0.9.39 gửi `submission:create` (bootstrap.mjs:13); guide 0.5.1 ghi `submissions:create`. Nhận cả hai.
 const SUBMIT_SCOPES = ['submission:create', 'submissions:create'];
 
 // Frame = dòng marker + dòng JSON, rồi các khối policy (dòng trống + marker + JSON). Không parse cả prompt.

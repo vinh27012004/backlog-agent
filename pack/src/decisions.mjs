@@ -137,11 +137,16 @@ export class Decider {
     return { severity, difficulty, injection };
   }
 
-  routeFrom(type, difficulty, a, err) {
-    const needsStrong = type === 'PI' || type === 'CR' || difficulty === 'hard';
+  routeFrom(type, difficulty, a, err, signals = null) {
+    // Câu trả lời thuần có bẫy: cả bài là một lần lập luận, chấm khớp chuỗi, nộp một lần (TOKXKPBV: TASK-01 chạy model
+    // small, reviewer cãi đáp án, phải chạy lại cả vòng fixer + verifier + reviewer, mất 7,5 phút).
+    const flags = new Set(signals?.flags ?? []);
+    const trickyAnswer = flags.has('answerOnly') && flags.has('tricky');
+    const needsStrong = type === 'PI' || type === 'CR' || difficulty === 'hard' || trickyAnswer;
     let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : 'small'), new Set(['small', 'strong']));
     if (needsStrong && model.value !== 'strong') {
-      model = { ...model, value: 'strong', source: 'rule', reason: `${type === 'PI' || type === 'CR' ? type : 'a hard item'} always gets the strong tier` };
+      const who = type === 'PI' || type === 'CR' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
+      model = { ...model, value: 'strong', source: 'rule', reason: `${who} always gets the strong tier` };
     }
     let reviewer;
     // PI sai = 0 điểm và không nộp lại được; reviewer chạy cùng lúc với gate (~1 phút) nên gần như không tốn thêm giờ.
@@ -167,11 +172,11 @@ export class Decider {
   }
 
   // 2. Cách chạy fixer: tier model, có cần reviewer.
-  async route(key, item, triage, { pendingItems = null, minutesLeft = null } = {}) {
+  async route(key, item, triage, { pendingItems = null, minutesLeft = null, signals = null } = {}) {
     const type = typeOf(key);
     const { answers, err, ms } = await this.ask(ROUTE_QUESTIONS,
       state({ item_type: type, triage, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
-    const out = this.routeFrom(type, triage?.difficulty ?? 'medium', answers ?? {}, err);
+    const out = this.routeFrom(type, triage?.difficulty ?? 'medium', answers ?? {}, err, signals);
     for (const d of Object.values(out)) this.record(key, d, ms);
     return out;
   }
@@ -182,7 +187,7 @@ export class Decider {
     const { answers, err, ms } = await this.ask({ ...TRIAGE_QUESTIONS, ...ROUTE_QUESTIONS },
       state({ item_type: type, signals, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
     const triage = this.triageFrom(type, item, answers ?? {}, err, signals);
-    const route = this.routeFrom(type, triage.difficulty.value, answers ?? {}, err);
+    const route = this.routeFrom(type, triage.difficulty.value, answers ?? {}, err, signals);
     for (const d of [...Object.values(triage), ...Object.values(route)]) this.record(key, d, ms);
     return { triage, route };
   }

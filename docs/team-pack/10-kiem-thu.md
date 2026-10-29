@@ -31,7 +31,7 @@ Codex nên **chỉ dùng lúc phát triển**, không bao giờ nằm trong pack
 
 ## 3. Contract test dùng source Player làm oracle
 
-Source Player nằm trong repo (`vendor/mtm-player-0.9.35/app/src`), chỉ dùng built-in của Node, nên
+Source Player nằm trong repo (`vendor/mtm-player-0.9.39/app/src`), chỉ dùng built-in của Node, nên
 test import trực tiếp được. Đặt đường dẫn qua biến `MTM_PLAYER_SRC`; không có thì **skip** (không fail).
 
 | Hàm của Player | Dùng để |

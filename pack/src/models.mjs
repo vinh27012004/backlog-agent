@@ -1,8 +1,8 @@
 // Model cụ thể cho từng lần spawn (config/models.json): mỗi tier là danh sách ưu tiên, lấy model đầu tiên có trong
 // allowedModels của MTM_MODEL_POLICY_V1. Không model nào khớp thì trả null: root bỏ trống model, subagent dùng model root.
-// Thang fixer: lần 1 luôn model rẻ (small; Jev/luật xếp tier strong thì small_high: cùng model, effort cao hơn), kể cả
-// item có deadline; từ lần 2 strong; lần cuối của item có deadline hoặc PI thì top. Tính lại mỗi lần gọi vì operator có
-// thể đổi allowedModels khi Stop/Resume.
+// Thang fixer: lần 1 theo tier của Jev/luật (small: model rẻ, kể cả item có deadline; strong: model mạnh ngay, vì
+// ZVUYZ41V cho thấy 6-luna lần 1 trên item khó tốn 7–15 phút rồi vẫn phải lên 6.1-sol); từ lần 2 strong; lần cuối của
+// item có deadline hoặc PI thì top. Tính lại mỗi lần gọi vì operator có thể đổi allowedModels khi Stop/Resume.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ export function pickModel(tier, allowed, cfg = loadModelsConfig()) {
 export function modelPlan({ type, modelTier, deadline, allowed, cfg = loadModelsConfig() }) {
   if (!allowed?.length) return null;
   const attempts = type === 'PI' ? 4 : 3;
-  const tiers = Array.from({ length: attempts }, (_, i) => (i > 0 ? 'strong' : modelTier === 'strong' ? 'small_high' : 'small'));
+  const tiers = Array.from({ length: attempts }, (_, i) => (i > 0 || modelTier === 'strong' ? 'strong' : 'small'));
   if (deadline || type === 'PI') tiers[attempts - 1] = 'top';
   return {
     fixer: tiers.map(t => pickModel(t, allowed, cfg)),

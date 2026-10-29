@@ -251,6 +251,9 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   item đầu tiên có `start.json`/`page.json` đòi chạy cả bộ test (`pnpm test`, "existing tests", `mvn test`…); hai fixer
   cùng sửa một test thì item integrate sau bị `WORKTREE_CONFLICT`. Chủ đã nộp, bỏ hoặc integrate mà test vẫn fail thì
   item kế tiếp có MVS như vậy nhận việc. Root đưa nguyên khối vào brief (`<baseline_failures>`).
+- `requiredEvidence` = `[{file, beforeFix}]` (bỏ khi rỗng): evidence mà mô tả item đòi ngoài MVS (§5.10 bước 7).
+  `beforeFix` = câu chứa "before" (vd "before fixing"): fixer chụp trước khi sửa code. Root đưa vào brief
+  (`<required_evidence>`).
 
 ### 5.9 `worktree`
 
@@ -299,7 +302,12 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
      tồn tại. **Bản đã dựng thêm** (rubric T1/T5 của harness mẫu, Practice #2 L19): mỗi kịch bản trong
      `testResults` của template có đúng một kết quả; kịch bản `PASS` phải liệt kê đủ file mà MVS ghi ở dòng
      "Required evidence" của mục `## <ID>`; `DONE` mà có kịch bản không `PASS` → lỗi; mọi kịch bản `PASS` mà
-     `PARTIAL` → cảnh báo (check `answer` ở trạng thái `warn`, không chặn).
+     `PARTIAL` → cảnh báo (check `answer` ở trạng thái `warn`, không chặn). Từ 29/10 thêm evidence mà **mô tả
+     item** đòi ngoài MVS (`itemEvidence` trong `gate.mjs`: tên file trong câu nói tới screenshot/capture/evidence
+     của `descriptionMd`, bỏ tên trong đường dẫn, file submit và file đề; ZVUYZ41V BUG-01 được 0/200 vì thiếu
+     `dashboard_before_fixing.png` chỉ có ở mục Submission): file phải có trong `evidence/` và trong
+     `evidenceFiles`. Thiếu file → `evidence_missing` (chữ ký `evidence_missing:<files>`, tree vẫn lưu, là một lượt
+     fixer chứ không phải sửa answer, không có luật cơ hội cuối); `commit_and_push` cũng kiểm.
 - **Thứ tự check của bản đã dựng** (27/10, mục 5–10 lấy từ harness mẫu; tên check trong `checks[]`):
   `diff` → `forbidden` → `tests-guard` → `test-quality` → `code-scan` → `typecheck`/`build` → `tests-added` →
   `regression` → `tests-kept` → (tính `tree`) → `fail-before` → `answer`. MVS chưa có lệnh chạy nên không có `mvs_fail`.
@@ -425,6 +433,12 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 Có PI đã hiện mà chưa Start Work (còn ≥ 3 phút) thì `job_status` và lượt chờ của `run_gate` trả về ngay, hoặc ngay khi
 PI hiện giữa lượt chờ, kèm `newPI` và `hint`: root giao PI trước rồi chờ job tiếp (HIET12OA: đề hiện → `start_work`
 mất 56 s đến 1 phút 52 vì root đang chờ).
+
+Item thường không làm lượt chờ trả sớm (vòng chờ trong `exec` sẽ quay liên tục). Thay vào đó mọi kết quả tool của
+root (trừ `match_state`, `wait_for_update`, `login_match`, `refresh_match`, và không gắn cho lời gọi qua proxy) có
+`notice` = `{newItems, freeSlots, hint}` khi có item không phải PI đã ra mà chưa Start Work (còn ≥ 4 phút) trong lúc
+số item `started` dưới `MAX_ITEMS_IN_FLIGHT` = 4. `newItems` theo `suggestedOrder`. (ZVUYZ41V: TASK-01 ra lúc
+02:49:49, root chỉ bắt đầu lúc 03:02 vì lặp `wait_agent`/`spawn_agent` mà không gọi `wait_for_update`.)
 
 ### 5.17 `detect_profile` (A)
 

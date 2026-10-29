@@ -177,3 +177,65 @@ root, mỗi lần một item, nên kết quả của fixer xong trước phải 
 | L40 | `worktree sync` CR-01 dùng `stash -u`: hỏng giữa chừng vì app của fixer giữ `app.log`/`app-error.log` ở gốc worktree; root tự khôi phục stash (`restore --source=stash^3` xoá luôn `.gitignore`), lần sau hỏng vì `Filename too long` trong `node_modules` | Root 17 lượt, 1,8M token, 3 phút; fixer CR-01 bị bảo dừng, poll `wait_agent` 10 s ×5 + `sleep` (0,5M) | **Đã** sửa: sync không stash, file đã track đi qua `git diff --binary HEAD` rồi `apply --3way` lên HEAD main; file chưa track giữ nguyên, trùng với file main vừa thêm thì `WORKTREE_CONFLICT` trước khi đụng vào; hỏng giữa chừng thì tự trả về base cũ. `create` bật `core.longpaths` trên Windows. Skill: log app ra `.team-work/logs/<ID>-app.log`, không sync khi fixer đang chạy |
 | L41 | `worktree remove` TASK-02 trả `{removed:true}` nhưng thư mục còn (`codegraph.db` bị server codegraph giữ); `commit_and_push` thấy thư mục nên chặn sửa `answers/TASK-02/submit.json` trên main (`WORKTREE_CONFLICT`) | Root 13 lượt, 1,8M token, 3 phút; root kill server codegraph của cả đội để chuyển thư mục đi | **Đã** sửa: worktree "còn" là có file `.git` (`liveWorktree`); `remove` xoá `.git`, `worktree prune`, phần sót do khoá trả `leftover` và để lại. `commit_and_push` cho sửa `answers/<ID>/` của chính item trên main khi worktree còn |
 | L42 | Root `wait_agent` 60 s thay vì 180 s như skill, và nói một câu sau mỗi lần chờ; root tự đọc `tools.mjs` của helper, chạy git tay, kill tiến trình | 11 lượt hết giờ rỗng (~2M token) | **Đã** sửa skill: 180 s, im lặng giữa các lần chờ; lỗi tool helper thì làm theo `code`/`hint`, không gỡ tay, không kill, ghi `report_progress` rồi làm item khác |
+
+## #7 · 29/10/2026 · tự luyện `ZVUYZ41V` (Player 0.9.39, cùng bộ item)
+
+Cả 5 item nộp trong 55 phút (02:18Z → 03:13Z), 30,3 credit theo price card (fixer 25,4, trong đó 17,8 là các lượt
+6.1-sol thứ 2–3). Lúc đông nhất chỉ có 2 item chạy. BUG-01 được 0/200: BTC chấm 0 cả item vì thiếu một file evidence.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L43 | Mô tả BUG-01 (mục Submission, không phải MVS) đòi "Capture screenshot of Dashboard before fixing as dashboard_before_fixing.png"; gate chỉ đọc "Required evidence" của MVS nên fixer, gate, verifier và reviewer đều cho qua. HIET12OA cũng có câu này | BUG-01 0/200 dù 3/3 kịch bản PASS | **Đã** sửa: `itemEvidence` (gate) lấy tên file từ câu nói tới screenshot/capture/evidence của mô tả, bỏ đường dẫn, file submit, file đề; `start_work` trả `requiredEvidence` (`beforeFix`), brief `<required_evidence>`; thiếu file thì gate fail `evidence_missing` (lượt fixer, không có luật cơ hội cuối), `commit_and_push` cũng chặn. Fixer chụp ảnh `beforeFix` trước khi sửa code; lần sau thì dùng patch + `git apply -R` (không dùng `stash`, vì stash dùng chung giữa các worktree). Chạy lại trên answer thật của trận: chỉ BUG-01 fail |
+| L44 | Lần 1 luôn chạy 6-luna, cả item tier `strong` (`small_high`) | TASK-02: luna 15,6 phút fail gate, sol 3,8 phút; BUG-02: luna 7,1 phút, sol 2 phút; CR-01 luna 14 phút | **Đã** sửa: item tier `strong` chạy tier `strong` (6.1-sol) ngay lần 1; bỏ tier `small_high`. BTC xếp theo điểm, rồi thời gian, rồi credit |
+| L45 | TASK-01 ra lúc 02:49:49 (đợt 3) khi chỉ 2 item chạy; root lặp `wait_agent`/`spawn_agent` mà không gọi `wait_for_update`, chỉ thấy item lúc 03:02 | Item bắt đầu trễ 12 phút | **Đã** sửa: mọi kết quả tool của root mang `notice {newItems, freeSlots}` khi có item chưa bắt đầu mà còn chỗ; giới hạn nâng từ 3 lên 4 item (`MAX_ITEMS_IN_FLIGHT`), PI vẫn không tính |
+| L46 | Fixer BUG-02 sửa test fail sẵn bằng cách viết lại nó (`… is RESTRICTED` thành `… cascades invoices as specified by the financial migration`, `test_change` trỏ tới migration). `fixesBaseline` (`gate.mjs`) bỏ qua test đã đổi tên (`!gone.includes(t)`) nên `integrate` không trả `baselineFixed`/`syncWorktrees` | `baselineFixed` không bao giờ được ghi: `start_work` CR-01 (02:38, base đã có bản sửa) vẫn nhận `youFix: true`, TASK-01 (03:02) vẫn thấy test là đang fail. Lần này không mất điểm (CR-01 không đụng tới test) | **Đã** sửa: test fail sẵn không còn chạy được tính là đã sửa khi gate có `allowTestChange` hợp lệ, hoặc khi item trước đã được chấp nhận bỏ nó (`acceptedRemovals`, gate main). Test trong `gate-runs.test.mjs` |
+| L47 | `exec` publish của root gọi `run_gate where:main` mà không có `allowTestChange`; tests-guard của gate main fail vì BUG-02 sửa test fail sẵn, dù gate worktree đã chấp nhận lý do | Publish dừng ở `stoppedAt: "mainGate"`; root tự chạy lại `run_gate` main với `allowTestChange` (thêm 62 s, đúng item có deadline 18 phút), rồi làm tiếp từ `commit_and_push` | **Đã** sửa: gate worktree pass có `testChangeJustification` thì ghi vào `journal.items[ID].testChange`; gate main của item đó dùng lại khi người gọi không đưa `allowTestChange` (`gateTestChange`). Test trong `baseline.test.mjs` |
+| L48 | `spawn_agent bug02_review1` lúc 02:29:29 bị từ chối: `collab spawn failed: agent thread limit reached`. Lúc đó có 3 subagent đang chạy (bug01_verify1, bug01_review1, bug02_verify1) | Root bỏ luôn reviewer của BUG-02, không thử lại. Với giới hạn này, 4 item cùng lúc (L45) không đủ chỗ cho verifier và reviewer | **Đã** sửa: Player không đặt giới hạn này (không có trong `vendor/mtm-player-0.9.39`); khoá của Codex là `[agents] max_concurrent_threads_per_session` (tên cũ `max_threads`, Codex 0.165 kiểm `>= 1`, khoá lạ làm hỏng cả config). `pack/config/codex.toml` đặt 8. Skill root: gặp lỗi này thì `wait_agent` rồi spawn lại, không bỏ verifier/reviewer. Chưa biết Codex mặc định là bao nhiêu (trận #7 cho thấy 3 subagent) |
+
+### Đối chiếu checklist (29/10)
+
+Nguồn: transcript `~/.codex/sessions/2026/10/29/` (root `…fd7130db628b`), `.team-work/journal.json`, `decisions.ndjson`,
+`runs/judge/ZVUYZ41V/_usage/usage.md`. Chưa chấm lại bằng `/judge-practice` (chưa có `judge.json`) và chưa có điểm BTC
+ngoài BUG-01.
+
+- **Cài đặt, Player**: root chạy `gpt-6-luna` medium; pack mới đã cài (`proxy.mjs`, `liveWorktree`/`proxyCall`,
+  `team-verifier.toml`); Player nhận `team_verifier` (spawn 8 lần, không lỗi).
+- **Worktree (L40, L41)**: không lần nào `worktree sync` (L46 làm `syncWorktrees` không xuất hiện), nên phần sync chưa
+  kiểm được. `remove` trả `removed: true` cộng `leftover` ở 4/5 item, root không kill tiến trình nào, `git worktree list`
+  chỉ còn main và `_probe`. Không có `Filename too long`, `GIT_FAILED`.
+- **Root chờ (L42)**: 28 `wait_agent`, đều 180000 trừ một lần 120000 (BUG-02 sát deadline); 5 lần hết giờ. Một câu nói
+  giữa hai lần chờ (02:51:01). Root không đọc `runtime\src`, không `git -C`, không `Stop-Process`/`taskkill`. Không fixer
+  nào gọi `wait_agent`; log app nằm ở `.team-work/logs/<ID>-app*.log`. Root 7,0M input / 110 lượt (HIET12OA 13,0M / 134).
+- **Test fail ở baseline**: `start_work` BUG-02 trả `baselineFailures` với `youFix: true`; fixer ghi `test_change`
+  (nguồn: migration), gate worktree cho qua (tests-guard `warn`). `baselineFixed` không có (L46), publish vướng gate main
+  (L47). CR-01, TASK-02 nộp `DONE`; BUG-01 nộp `DONE` trước khi có bản sửa.
+- **Evidence**: `browserProfile` giữ đăng nhập (L28 đạt): BUG-02 lần 1 gọi 3–6 và CR-01 gọi 3–5 không login lại mà vẫn
+  vào `/accounting`. Mọi fixer có chụp ảnh đều đọc `evidence-playbook`. Số lần gọi: BUG-02 6 cho 4 kịch bản, BUG-01 6/3,
+  CR-01 7/5, TASK-02 6/5 + 3; thời gian chụp 12–24% lượt fixer. Lỗi lặp: `screenshot path must be absolute` (BUG-02, CR-01),
+  `[role=option]` không thấy 2 lần nên BUG-02 TC-03 (USD) phải sang lượt 2, profile mới chưa đăng nhập (BUG-02 lần 2)
+  bị đẩy về `/login`, TASK-02 lần 1 chụp 3 lần khi app chưa chạy (`chrome-error`). Brief của root mã hoá trong
+  transcript nên không kiểm được việc root bỏ mẹo evidence.
+- **Verifier (proxy)**: `configure_session` trả `proxy: {ready: true}`, có `runtime-endpoint.json`. Mỗi verifier gọi
+  `run_gate {fixResultFile}` nhận `jobId`, vòng `job_status` nằm trong một `exec` (5/8 có pragma, 3 lần còn lại dùng
+  `wait`). Root chỉ chạy `run_gate` một lần, `where: main` (L47). Verifier và reviewer spawn liền nhau trong một lượt.
+  Publish là một `exec`; khi `stoppedAt` root làm tiếp đúng bước. BUG-01 `answer_invalid` + `codePassed`: verifier sửa
+  `status` trong `submit.json`, `answer_fixed: true`, không chạy lại gate. Lớn nhất 3 subagent cùng lúc, một lần chạm
+  giới hạn (L48). Verifier 115–188K input mỗi lượt, tổng 0,70 credit.
+- **Model và credit**: lượt 1 `gpt-6-luna` medium (BUG-01, TASK-01) và high (BUG-02, CR-01, TASK-02); lượt 2–3
+  `gpt-6.1-sol` high; không gọi `gpt-6-astra`. Reviewer luna high, verifier luna medium. Xong ngay lượt 1: BUG-01, CR-01;
+  lên lượt 2+: BUG-02 (evidence), TASK-02 (gate `forbidden_change`), TASK-01 (3 lượt, nộp `PARTIAL` vì commit
+  `571c531` không có trong repo). Tổng 30,29 credit (HIET12OA 127,29): root 2,57, fixer 25,41, reviewer 1,60, verifier
+  0,70. Hạn mức gói Plus 0% → 17%. Reviewer luna cũng bỏ sót câu "dashboard_before_fixing.png" (L43), như reviewer
+  6.1-sol ở HIET12OA.
+- **Jev**: mọi item có `signals`; `code` chỉ khác `null` ở CR-01 (`terms: ["New invoice"]`, không có mã TC). `difficulty`
+  vẫn 0/5 lần lấy theo Jev (độ tin 0,27–0,48, ngưỡng 0,7); luật cho `hard` ở CR-01, `medium` ở 4 item còn lại. Jev có
+  ích ở `model` (BUG-02, CR-01, TASK-02 `strong`) và `severity` TASK-02. `start_work` mất 3,2 s (TASK-01) đến 12,2 s
+  (BUG-01, Jev 3,8 s); chưa tách được phần `git grep`.
+
+| Item | difficulty luật / Jev (độ tin) | modelTier | Lượt fixer | Kết quả |
+|---|---|---|---|---|
+| BUG-02 | medium / medium (0,34) | strong (Jev 0,80) | 2: luna high, sol | Nộp; TC-03 cần lượt 2 vì evidence |
+| BUG-01 | medium / medium (0,27) | small (luật; Jev strong 0,02) | 1: luna medium | Nộp, 0/200 (L43) |
+| CR-01 | hard / hard (0,27) | strong (Jev 0,80) | 1: luna high, 14 phút | Nộp `DONE` |
+| TASK-02 | medium / hard (0,35) | strong (Jev 0,96) | 2: luna high, sol | Nộp `DONE` |
+| TASK-01 | medium / medium (0,48) | small (luật) | 3: luna medium, sol, sol | Nộp `PARTIAL` |

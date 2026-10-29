@@ -24,6 +24,8 @@ evidence, and you do not run build or test commands yourself: the gate does that
    that file exactly as the gate's `problems` say (keep every template key; never change a scenario result to
    `PASS` that the fixer did not report as passed), set `answer_fixed` true, and do not run the gate again (build
    and tests passed; the publish step re-checks the answer). This is the only file you may change.
+   `evidence_missing` is not an answer fix: a file the item description requires was never captured, so the
+   recommendation is `retry` and `retry_brief` names the missing files.
 4. MVS check (the gate already checked the answer's format and the evidence file names of `PASS` rows): for every
    MVS scenario (`<materials>` `mvs.json`, or the template's scenarios), compare `testResults` in `submit.json`
    with the fix-result's `verification`. Report under `mvs.missing` each scenario that has no result, a `PASS` that

@@ -12,7 +12,7 @@ import { modelPlan } from './models.mjs';
 import { itemSignals } from './signals.mjs';
 import { EventQueue } from './events.mjs';
 import { GameMaster } from './game.mjs';
-import { answerCheck, changedFiles, runGate, scenarioCounts } from './gate.mjs';
+import { answerCheck, changedFiles, itemEvidence, runGate, scenarioCounts } from './gate.mjs';
 import { contentTree, git, normalizeRepoUrl, revParse, treeChanges } from './git.mjs';
 import { HttpClient } from './http.mjs';
 import { Jobs } from './jobs.mjs';
@@ -34,6 +34,10 @@ const PUBLISH_RESERVE_MIN = 5;
 // partial kèm danh sách giả thuyết để root cho kiểm song song (SRE: định kỳ xét lại hướng đi). Chỉnh sau diễn tập.
 const PI_ATTEMPT_MIN = 12;
 const PI_CHECKPOINT_MIN = 6;
+// Số item thường (không tính PI) root làm cùng lúc; khớp "Up to 4 items in flight" trong skill team-orchestrator.
+const MAX_ITEMS_IN_FLIGHT = 4;
+// Không bắt đầu item mới khi còn ít hơn số phút này (skill: "Under 4 minutes left: no new items").
+const NEW_ITEM_MIN = 4;
 const TERMINAL = new Set(['FINISHED', 'CANCELLED']);
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
 // Đề / MVS đòi chạy cả bộ test hiện có (Practice #6: BUG-02-TC-04 "pnpm test exits 0 with no failed test").
@@ -501,6 +505,19 @@ export class Runtime {
       && (r.minutesLeft === null || r.minutesLeft >= 3)).map(r => r.key);
   }
 
+  // Item thường đã hiện mà chưa Start Work khi còn chỗ (ZVUYZ41V: TASK-01 hiện lúc 02:49:49 với 2 item đang chạy, root
+  // chỉ thấy lúc 03:02 vì không gọi wait_for_update giữa các wait_agent). callTool gắn kết quả này vào mọi tool của
+  // root dưới tên `notice`; không làm lượt chờ job trả sớm như PI, vì vòng chờ trong exec sẽ quay liên tục.
+  itemNotice() {
+    if (this.session.phase !== 'GAME' || !this.gm.view) return null;
+    const rows = this.itemRows().filter(r => typeOf(r.key) !== 'PI' && r.status !== 'CLOSED');
+    const freeSlots = MAX_ITEMS_IN_FLIGHT - rows.filter(r => r.local === 'started').length;
+    const todo = new Set(rows.filter(r => r.local === 'todo' && (r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
+    const newItems = this.matchState().suggestedOrder.filter(k => todo.has(k));
+    if (freeSlots <= 0 || !newItems.length) return null;
+    return { newItems, freeSlots, hint: `Not started yet with ${freeSlots} free slot(s): start ${newItems.slice(0, freeSlots).join(', ')} now (One item, step 1), then carry on.` };
+  }
+
   // Lượt chờ job của root (gate, chuẩn bị worktree) trả về sớm khi có PI chưa bắt đầu (`newPI`): điểm PI tính từ lúc đề
   // hiện, mà root có thể đang chờ trong một exec tới vài phút (HIET12OA: đề hiện → start_work mất 56 s đến 1 phút 52).
   // `pi: false` cho subagent (verifier qua proxy): bắt PI mới là việc của root.
@@ -629,13 +646,18 @@ export class Runtime {
     const remote = pi ? await this.catchUpRemote() : null;
     const triage = await this.autoTriage(key);
     const baselineFailures = this.baselineBrief(key);
+    // Evidence mô tả đòi ngoài MVS (ZVUYZ41V BUG-01): root đưa vào brief, gate chặn khi thiếu.
+    const requiredEvidence = this.itemEvidence(key);
     return { untrusted: true, type: ji.type, replay: Boolean(data?.replay), startInstruction: data?.startInstruction ?? null,
       submitTemplate: data?.submitTemplate ?? null, minimumVerificationScenarios: data?.minimumVerificationScenarios ?? null,
-      files: saved, materialsDir: dir, minutesLeft: left, timeBox: this.timeBox(item), triage, baselineFailures, ...(remote ? { remote } : {}),
+      files: saved, materialsDir: dir, minutesLeft: left, timeBox: this.timeBox(item), triage, baselineFailures,
+      ...(requiredEvidence.length ? { requiredEvidence } : {}), ...(remote ? { remote } : {}),
       next: 'worktree create, then spawn_agent team_fixer with fork_turns "none", model/reasoning_effort from triage.models.fixer[0] '
         + 'and the full brief (return_by = timeBox.returnBy'
         + (pi ? ', checkpoint_by = timeBox.checkpointBy in <item_meta>; <recent_changes> from remote' : ' in <item_meta>')
-        + (baselineFailures?.failing.length ? `; <baseline_failures> with youFix=${baselineFailures.youFix}` : '') + ').' };
+        + (baselineFailures?.failing.length ? `; <baseline_failures> with youFix=${baselineFailures.youFix}` : '')
+        + (requiredEvidence.length ? `; <required_evidence> = requiredEvidence as given${requiredEvidence.some(e => e.beforeFix) ? ' (beforeFix files are captured first, on the unfixed code)' : ''}` : '')
+        + ').' };
   }
 
   // Test fail ở baseline (Practice #6, HIET12OA): mỗi item có MVS đòi "pnpm test exits 0" mất điểm khi còn một test
@@ -873,6 +895,15 @@ export class Runtime {
     try { return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null; } catch { return null; }
   }
 
+  // Evidence mà mô tả item (page.json) đòi ngoài MVS; gate và commit_and_push kiểm các file này có trong evidence/.
+  itemEvidence(key) {
+    const file = join(this.itemDir(key), 'page.json');
+    try {
+      const page = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
+      return itemEvidence(String(page?.descriptionMd ?? page?.description ?? ''), [...(page?.releaseFiles ?? []), ...(page?.onStartFiles ?? [])]);
+    } catch { return []; }
+  }
+
   // Hard gate: chỉ tích hợp / push đúng nội dung mà gate gần nhất của item đã build và test pass (so tree của
   // <folder>/ trừ answers/<ID>/). Sửa gì sau gate (fixer chạy tiếp, reviewer lỡ ghi, root vá code, main đã có item
   // khác) đều phải gate lại; answers/<ID>/ thì được sửa tiếp vì commit_and_push kiểm lại answer.
@@ -917,6 +948,12 @@ export class Runtime {
     return result;
   }
 
+  // ZVUYZ41V BUG-02: gate main trong exec publish không mang allowTestChange nên tests-guard chặn lại thay đổi test mà
+  // gate worktree đã chấp nhận. Gate main lấy lý do đã được chấp nhận của chính item khi người gọi không đưa.
+  gateTestChange(key, inWorktree, given) {
+    return given ?? (inWorktree ? null : this.journal.item(key).testChange ?? null);
+  }
+
   async runGate({ backlogItemKey: key, where, needsDependency = false, testsAdded = [], allowTestChange = null, waitSeconds = 40 }, { pi = true } = {}) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -936,10 +973,12 @@ export class Runtime {
     const template = this.itemTemplate(key);
     const schema = this.itemSchema(key);
     const mvs = this.itemMvs(key);
+    const requiredEvidence = this.itemEvidence(key);
+    const testChange = this.gateTestChange(key, inWorktree, allowTestChange);
     const job = this.jobs.start('run_gate', async job => {
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
-        profile: detectProfile(matchRoot), base, baseline: j.data.preparation?.baseline, template, schema, mvs, needsDependency,
-        testsAdded, allowTestChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
+        profile: detectProfile(matchRoot), base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, needsDependency,
+        testsAdded, allowTestChange: testChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
         probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && typeOf(key) === 'PI',
         logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
       result.where = inWorktree ? 'worktree' : 'main';
@@ -948,6 +987,10 @@ export class Runtime {
       // Test bỏ có lý do (allowTestChange) ở item này: gate của item sau (base đã gồm thay đổi này) không tính lại.
       if (result.codePassed && result.removedTests?.length) {
         j.data.preparation.acceptedRemovals = [...new Set([...(j.data.preparation.acceptedRemovals ?? []), ...result.removedTests])].slice(-500);
+      }
+      if (inWorktree && result.codePassed) {
+        if (result.testChangeJustification) ji.testChange = result.testChangeJustification;
+        else delete ji.testChange;
       }
       // Cùng chữ ký lỗi lần 2: lượt sau phải đổi giả thuyết; lần 3: bỏ item (next_action thôi đề xuất retry).
       ji.gateHistory = [...(ji.gateHistory ?? []), { jobId: job.id, where: result.where, failKind: result.failKind,
@@ -966,6 +1009,12 @@ export class Runtime {
         if (result.failKind === 'not_reproduced' && result.codePassed) {
           result.next += ' Build and regression passed: the next fixer only adds a test that fails on the unfixed code (see detail). '
             + 'No time for another attempt: this version may still be published under the last-chance rule.';
+        }
+        // ZVUYZ41V BUG-01: thiếu một file evidence mô tả đòi là 0 điểm cả item, nên không có luật cơ hội cuối ở đây.
+        if (result.failKind === 'evidence_missing' && result.codePassed) {
+          result.next += ' Build and regression passed: the next fixer keeps the code and only captures the missing evidence '
+            + '(see detail; a "before fixing" shot is taken on the unfixed code: save the diff as a patch, git apply -R it, restart the app, capture, git apply it again) '
+            + 'and lists it in submit.json. Without that file the item scores 0.';
         }
       }
       // Practice #5 (TASK-02): chỉ submit.json hỏng mà root chạy lại cả gate (~1 phút). Build/test đã pass và tree đã lưu;
@@ -1007,7 +1056,7 @@ export class Runtime {
     // pass và gate pass; kịch bản chưa chạy (skipped) không bao giờ được tính là đạt (Practice #1, L4).
     // Gate chỉ hỏng submit.json (build/test đã pass): root sửa answer rồi gọi tiếp, không chạy lại gate; kiểm answer ngay đây.
     const answerFixed = job.state === 'done' && job.result.failKind === 'answer_invalid' && job.result.codePassed
-      && !answerCheck(answerRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key)).problems.length;
+      && !answerCheck(answerRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key), this.itemEvidence(key)).problems.length;
     const gatePassed = job.state === 'done' && (job.result.passed || answerFixed);
     const requiredScenarios = Math.max(1, ji.requiredScenarios ?? 1);
     const required = requiredScenarios + 1;
@@ -1035,7 +1084,7 @@ export class Runtime {
     const folder = this.session.descriptor.matchId;
     const branch = this.session.descriptor.repository?.branch ?? this.gm.view?.repository?.branch;
     if (!branch) fail('NOT_CONFIGURED', 'assigned branch unknown');
-    const { problems, warnings } = answerCheck(matchRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key));
+    const { problems, warnings } = answerCheck(matchRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key), this.itemEvidence(key));
     if (problems.length) fail('ANSWER_INVALID', problems.join('; '));
     const files = await changedFiles(checkoutRoot, `origin/${branch}`);
     const working = await changedFiles(checkoutRoot, 'HEAD');
@@ -1280,7 +1329,8 @@ export class Runtime {
       this.journal.save();
     } else if (point === 'route') {
       const pending = this.itemRows().filter(r => r.status !== 'CLOSED' && ['todo', 'started'].includes(r.local)).length;
-      decisions = await d.route(key, item, ji.triage ?? {}, { pendingItems: context.pendingItems ?? pending, minutesLeft: this.minutesLeft() });
+      decisions = await d.route(key, item, ji.triage ?? {}, { pendingItems: context.pendingItems ?? pending, minutesLeft: this.minutesLeft(),
+        signals: ji.signals ?? null });
     } else if (point === 'next_action') {
       const row = this.itemRows().find(r => r.key === key);
       decisions = { next_action: await d.nextAction(key, item, { gatePassed: Boolean(ji.lastGate?.passed), mvsPassed: context.mvsPassed ?? null,
@@ -1347,6 +1397,8 @@ export class Runtime {
   }
 }
 
+const NOTICE_SKIP = new Set(['match_state', 'wait_for_update', 'login_match', 'refresh_match']);
+
 // Bọc kết quả theo MCP: text JSON gọn + structuredContent + networkActivity cho Player.
 // `activity: false` cho lời gọi qua proxy: request HTTP của root (poller) báo trong kết quả tool của chính root.
 export async function callTool(runtime, tool, args, ctx, { activity: report = true } = {}) {
@@ -1361,7 +1413,13 @@ export async function callTool(runtime, tool, args, ctx, { activity: report = tr
   const takeActivity = () => (report ? runtime.http.takeActivity() : []);
   try {
     const result = await tool.handler(args ?? {}, ctx);
-    const value = redactDeep(result ?? {});
+    // Item mới còn chỗ: gắn vào kết quả tool của root (không gắn cho lời gọi qua proxy, và match_state /
+    // wait_for_update đã liệt kê item).
+    let notice = null;
+    if (report && runtime.session.configured && !NOTICE_SKIP.has(tool.name) && result && typeof result === 'object' && !Array.isArray(result)) {
+      try { notice = runtime.itemNotice?.() ?? null; } catch { /* thông báo không được làm hỏng kết quả tool */ }
+    }
+    const value = redactDeep(notice ? { ...result, notice } : result ?? {});
     const activity = takeActivity();
     return { content: [{ type: 'text', text: truncate(JSON.stringify(value)) }],
       structuredContent: { ...(typeof value === 'object' && !Array.isArray(value) ? value : { value }), ...(activity.length ? { networkActivity: activity } : {}) },

@@ -10,7 +10,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync,
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexStandardPriceCard } from '../../vendor/mtm-player-0.9.35/app/src/codex-price-card.mjs';
+import { codexStandardPriceCard } from '../../vendor/mtm-player-0.9.39/app/src/codex-price-card.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const COUNTERS = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
@@ -101,7 +101,7 @@ const roleOf = m => m.agent_role ?? (m.thread_source === 'guardian_review' || m.
   : m.id === m.session_id ? 'root' : String(m.thread_source ?? 'other'));
 
 export function parseTranscript(file, keys = []) {
-  const t = { file, id: null, sessionId: null, parent: null, role: null, agentPath: null, item: null, model: null, effort: null,
+  const t = { file, id: null, sessionId: null, parent: null, role: null, agentPath: null, item: null, model: null, effort: null, serviceTier: null,
     start: null, end: null, busyMs: 0, tokens: zero(), calls: 0, maxContext: 0, quota: { first: null, last: null, plan: null },
     limitErrors: 0, limitAt: null, triggers: {}, warnings: 0 };
   const bump = label => (t.triggers[label] ??= { calls: 0, input: 0 });
@@ -142,7 +142,8 @@ export function parseTranscript(file, keys = []) {
         }
       }
     } else if (r.type === 'event_msg') {
-      if (p.type === 'task_started') turnStart = ts;
+      if (p.type === 'thread_settings_applied') t.serviceTier = p.thread_settings?.service_tier ?? t.serviceTier;
+      else if (p.type === 'task_started') turnStart = ts;
       else if (['task_complete', 'turn_aborted', 'task_aborted'].includes(p.type)) {
         if (turnStart !== null && Number.isFinite(ts)) t.busyMs += ts - turnStart;
         turnStart = null;
@@ -169,12 +170,15 @@ export function parseTranscript(file, keys = []) {
   return t;
 }
 
-// Credit danh nghĩa theo price card của Player (cùng công thức với nominalCredit trên dashboard).
-export function credits(tokens, model) {
+// Credit danh nghĩa theo price card của Player (cùng công thức với nominalCredit trên dashboard). Từ 0.9.39 price card
+// có hệ số theo service tier (Fast = `priority` ×2); tier lạ thì không tính, như dashboard (TIER_RATE_UNAVAILABLE).
+export function credits(tokens, model, serviceTier = 'default') {
   const rate = codexStandardPriceCard.models[model];
-  if (!rate) return null;
+  const multiplier = (codexStandardPriceCard.serviceTierMultipliers ?? { default: 1 })[serviceTier ?? 'default'];
+  if (!rate || !multiplier) return null;
   const cached = tokens.cached_input_tokens;
-  return ((tokens.input_tokens - cached) * rate.input + cached * rate.cachedInput + tokens.output_tokens * rate.output) / codexStandardPriceCard.unitTokens;
+  return ((tokens.input_tokens - cached) * rate.input + cached * rate.cachedInput + tokens.output_tokens * rate.output) * multiplier
+    / codexStandardPriceCard.unitTokens;
 }
 
 // ------------------------------------------------------------------ định dạng (dấu phẩy thập phân như practice-log)
@@ -223,7 +227,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
   const threads = files.map(f => parseTranscript(f, keys)).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
   const byId = new Map(threads.map(t => [t.id, t]));
   for (const t of threads) {
-    t.credits = credits(t.tokens, t.model);
+    t.credits = credits(t.tokens, t.model, t.serviceTier);
     if (t.role !== 'guardian') continue;
     const parent = byId.get(t.parent);
     t.reviewedRole = parent?.role ?? 'unknown';

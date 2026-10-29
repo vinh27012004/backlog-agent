@@ -48,11 +48,36 @@ export function mvsEvidence(mvs, ids) {
   return out;
 }
 
+// Evidence mà mô tả item đòi ngoài MVS (ZVUYZ41V BUG-01: "Capture screenshot of Dashboard before fixing as
+// dashboard_before_fixing.png" chỉ có ở mục Submission; thiếu file đó BTC chấm 0 cả item dù 3/3 kịch bản PASS).
+// Lấy tên file trong câu nói tới chụp / evidence; bỏ tên nằm trong đường dẫn (challenge/BUG-01-submit.json,
+// answers/BUG-01/submit.json) trừ evidence/<file>, bỏ file submit và file đề của BTC (`challengeFiles`, vd
+// "Follow the evidence rules in `BUG-02-minimum-verification-scenarios.md`"). `beforeFix`: câu có "before" (không
+// phải "before submitting") nên phải chụp trên code chưa sửa.
+export function itemEvidence(description, challengeFiles = []) {
+  if (typeof description !== 'string') return [];
+  const own = new Set(challengeFiles.map(f => String(f).split(/[\\/]/).pop().toLowerCase()));
+  const out = new Map();
+  for (const sentence of description.split(/(?<=[.!?])\s+|\r?\n/)) {
+    if (!/screenshot|capture|evidence/i.test(sentence)) continue;
+    const beforeFix = /\bbefore\b(?!\s+submit)/i.test(sentence);
+    for (const m of sentence.matchAll(EVIDENCE_FILE)) {
+      const name = m[0];
+      const inPath = /[\\/]$/.test(sentence.slice(0, m.index)) && !/evidence\/$/i.test(sentence.slice(0, m.index));
+      if (inPath || own.has(name.toLowerCase()) || /submit(\.schema)?\.json$|minimum-verification-scenarios\.md$/i.test(name)) continue;
+      out.set(name, { file: name, beforeFix: beforeFix || Boolean(out.get(name)?.beforeFix) });
+    }
+  }
+  return [...out.values()];
+}
+
 // Kiểm answers/<ID>/submit.json: JSON hợp lệ, giữ key của template, khớp submit.schema.json của item (nếu có),
 // status đã đổi khỏi giá trị ban đầu của template, mọi evidence/<file> tham chiếu đều tồn tại. Thêm (theo T1/T5 của
 // harness tham chiếu, Practice #2 L19): mỗi kịch bản của template có đúng một kết quả, kịch bản PASS tham chiếu đủ
-// evidence mà MVS đòi, và status khớp kết quả. `warnings` không chặn.
-export function answerCheck(matchRoot, key, template, schema = null, mvs = null) {
+// evidence mà MVS đòi, và status khớp kết quả. `required` (itemEvidence của mô tả): file phải có trong evidence/ và
+// trong evidenceFiles; thiếu file thì `missingEvidence` liệt kê (gate báo evidence_missing: phải chụp, không chỉ sửa
+// submit.json). `warnings` không chặn.
+export function answerCheck(matchRoot, key, template, schema = null, mvs = null, required = []) {
   const file = join(matchRoot, 'answers', key, 'submit.json');
   if (!existsSync(file)) return { problems: [`missing answers/${key}/submit.json`], warnings: [] };
   let answer;
@@ -70,6 +95,15 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null)
     if (!existsSync(join(matchRoot, 'answers', key, ref))) problems.push(`missing ${ref}`);
   }
   if (/DRAFT/.test(JSON.stringify(answer.status ?? ''))) problems.push('submit.json status is still DRAFT');
+  const missingEvidence = [];
+  for (const { file: name, beforeFix } of required) {
+    if (!existsSync(join(matchRoot, 'answers', key, 'evidence', name))) {
+      missingEvidence.push(name);
+      problems.push(`missing evidence/${name}: the item description requires it${beforeFix ? ' (captured on the unfixed code)' : ''}`);
+    } else if (Array.isArray(answer.evidenceFiles) && !answer.evidenceFiles.some(e => String(e).split('/').pop() === name)) {
+      problems.push(`evidenceFiles lacks evidence/${name}, which the item description requires`);
+    }
+  }
 
   const results = Array.isArray(answer.testResults) ? answer.testResults.filter(r => r && typeof r === 'object') : null;
   if (results) {
@@ -95,7 +129,7 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null)
       warnings.push(`all ${results.length} testResults PASS but status is PARTIAL: use DONE unless a requirement outside the scenarios is unmet, and name it in engineeringRecord`);
     }
   }
-  return { problems, warnings };
+  return { problems, warnings, ...(missingEvidence.length ? { missingEvidence } : {}) };
 }
 
 export const answerProblems = (...args) => answerCheck(...args).problems;
@@ -346,7 +380,7 @@ const fallbackSignature = (kind, text, root) => {
 // sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
 // root còn publish được theo luật cơ hội cuối.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
+  requiredEvidence = [], needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -487,8 +521,12 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     }
     // Test fail ở baseline mà nay pass (không phải vì bị bỏ): item này sửa được chúng. tools.mjs ghi lại khi integrate
     // để gợi ý sync các worktree khác (Practice #6: một test fail sẵn làm ba item mất điểm "existing tests").
+    // ZVUYZ41V BUG-02: fixer viết lại test fail sẵn dưới tên mới (allowTestChange); test cũ không còn chạy cũng là đã
+    // sửa, kể cả khi item trước đã được chấp nhận bỏ nó (acceptedRemovals, gate main sau integrate).
     const passedNow = id => (run.report ? run.report.tests.get(id) === 'passed' : res.code === 0);
-    result.fixesBaseline = (baseline?.failing ?? []).filter(t => !run.failing.includes(t) && !gone.includes(t) && passedNow(t));
+    const accepted = new Set(acceptedRemovals);
+    result.fixesBaseline = (baseline?.failing ?? []).filter(t => !run.failing.includes(t)
+      && (gone.includes(t) ? justified : accepted.has(t) || passedNow(t)));
   }
 
   // Build và test đã pass: lưu tree của đúng nội dung vừa kiểm (trừ answers/<ID>/, còn được sửa tiếp). worktree
@@ -518,9 +556,11 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     if (problem) return done('not_reproduced', problem[1], `not_reproduced:${problem[0]}`);
   }
 
-  const { problems, warnings } = answerCheck(matchRoot, key, template, schema, mvs);
+  const { problems, warnings, missingEvidence } = answerCheck(matchRoot, key, template, schema, mvs, requiredEvidence);
   checks.push({ name: 'answer', status: problems.length ? 'fail' : warnings.length ? 'warn' : 'ok', schema: Boolean(schema),
     ...(problems.length ? { problems } : {}), ...(warnings.length ? { warnings } : {}) });
+  // File evidence đề đòi mà chưa có: sửa submit.json không đủ, phải một lượt fixer chụp nó (tree vẫn được lưu).
+  if (missingEvidence) return done('evidence_missing', problems.join('; '), `evidence_missing:${missingEvidence.join(',')}`);
   if (problems.length) return done('answer_invalid', problems.join('; '));
 
   result.passed = true;

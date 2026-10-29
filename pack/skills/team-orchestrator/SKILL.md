@@ -21,14 +21,17 @@ submissions go only through `team_runtime` tools.
 | `team_fixer` | Analyse and implement one item in its worktree; fill `answers/<ID>/` and evidence | code, tests, answers |
 | `team_verifier` | Tester: runs the gate on one fixer attempt through `team_runtime`, checks the answer against the MVS, returns publish / retry | only `submit.json` after an `answer_invalid` gate |
 | `team_reviewer` | Read-only review of the candidate diff, in parallel with the verifier | nothing |
-| `team_pi_hypothesis` | Read-only check of ONE hypothesis when a PI is stuck; spawn 2-3 in parallel | nothing |
+| `team_pi_hypothesis` | Read-only check of ONE hypothesis when a PI is stuck (spawn 2-3 in parallel), or of a disputed answer | nothing |
 
 Spawn only with the model the helper picked (see **Models**), which is always from
 `MTM_MODEL_POLICY_V1.allowedModels`, and pass that rule on. Always spawn with `fork_turns: "none"`: the
 subagent starts from its own instructions plus your `message`, so the brief must hold everything it needs.
 Forking copies your whole history into every call it makes (Practice CV8WV1JM: `fork_turns: "all"` started
-each fixer at ~60K tokens, 4.9M input for one item). Up to 3 items
-in flight (each in its own worktree), not counting a PI: a PI never waits for a free slot. Results go to
+each fixer at ~60K tokens, 4.9M input for one item). Up to 4 items
+in flight (each in its own worktree), not counting a PI: a PI never waits for a free slot. Never leave a slot
+empty while an item waits: any `team_runtime` result may carry `notice: {newItems, freeSlots}` (items released and
+not started while a slot is free); start them right away (**One item**, step 1) before going back to waiting
+(Practice ZVUYZ41V: TASK-01 waited 12 minutes with 2 slots free). Results go to
 `<checkoutRoot>/.team-work/results/<ID>-<role>-<n>.json`.
 
 ## One item
@@ -49,6 +52,7 @@ in flight (each in its own worktree), not counting a PI: a PI never waits for a 
    <project_profile>commands from detect_profile on the worktree matchRoot</project_profile>
    <company_facts>…</company_facts>
    <baseline_failures>start_work.baselineFailures as given: failing tests, owner, youFix (omit when null)</baseline_failures>
+   <required_evidence>start_work.requiredEvidence as given: files the item text requires outside the MVS; beforeFix ones are captured first, on the unfixed code</required_evidence>
    <materials>.team-work/items/<ID>/ (start.json, template.json, mvs.json, files/): copy provided scripts where the MVS says</materials>
    <recent_changes>PI: start_work.remote as given (newCommits with files, merged, recentChanges)</recent_changes>
    <previous_attempt>failKind, signature, condensed log, reviewer high issues, the last fix-result's hypotheses (retries only)</previous_attempt>
@@ -82,6 +86,14 @@ in flight (each in its own worktree), not counting a PI: a PI never waits for a 
 6. Act on the verdict JSON (`<ID>-verifier-<n>.json`) and the review, once both are back:
    - `recommendation: "publish"` and no reviewer `high` → step 7. `answer_fixed: true` means the verifier fixed
      `submit.json` after an `answer_invalid` gate whose build and tests passed: no fixer, no new gate.
+   - Disputed answer: `recommendation: "publish"`, and every reviewer `high` disputes only the value in
+     `submit.json` of an answer-only item (no code at stake) → no new fixer round. Spawn one `team_pi_hypothesis`
+     (`task_name` `<id>_check<n>`, model `piHypothesis`; first line `Item <ID> (<TYPE>).`, then `<hypothesis>` = the
+     reviewer's claim with its evidence next to the fixer's trace from the fix-result, `<item>`, `<company_facts>`,
+     `<materials>`, `<worktree>`, `<results_path>` `<ID>-pi_hypothesis-<n>.json`). `refuted` → step 7 now (the gate
+     still holds). `supported` or `inconclusive` → new fixer attempt (step 4) with the checker's value and evidence in
+     `<previous_attempt>` (Practice TOKXKPBV: TASK-01's reviewer disputed 98304; a second round of fixer, verifier and
+     reviewer took 7.5 minutes and the answer stood).
    - `"retry"` or a reviewer `high` → new fixer attempt (step 4) with `<previous_attempt>` = the verdict's
      `retry_brief` plus the reviewer's `high` issues, model from `gate.next`. Max 2 retries (PI 3), within the
      item's time. `gate.repeat: 2` → tell the fixer `sameSignatureAsBefore` and to change the hypothesis, not the
@@ -139,17 +151,19 @@ It is advice: you still decide, and the hard rules (gate, tests-guard, last-chan
 `triage.models` names the model for every spawn, already picked from `allowedModels`. Pass its `model` and
 `reasoning_effort` to `spawn_agent` as given; do not pick a model yourself.
 - Fixer attempt n (a retry after a reviewer `high` counts too; always a new spawn) → `fixer[n-1]`; past the end, the last entry. The
-  first try is always the cheap model (higher effort for a hard item), later tries are stronger, and the last try
+  first try is the cheap model for an easy item and the strong model for a hard one or a tricky answer-only one, later tries are strong, and the last try
   of a deadline item or a PI gets the top model.
 - `team_verifier` → `verifier`; `team_reviewer` → `reviewer`; `team_pi_hypothesis` → `piHypothesis`.
 - `models` or the entry is `null`, or the provider rejects the model (`MODEL_UNAVAILABLE`) → spawn without
   `model` and `reasoning_effort` (the subagent inherits yours).
+- `spawn_agent` fails with `agent thread limit reached` → `wait_agent` until one subagent finishes, then repeat the
+  same spawn. Never drop the verifier or the reviewer because of it (Practice ZVUYZ41V: BUG-02 went out unreviewed).
 
 ## PI
 A PI is a race: a PASSED submission scores 100/90/75/60 % by rank, timed from the moment the item appeared; a
 wrong one scores 0 and cannot be resubmitted. Be correct, then lose no minute.
 1. The moment it appears (`ITEM_NEW`, `newPI` in a job wait, or `match_state`), before anything else and even with
-   3 items in flight: `read_item` (its `relatedEvents` are clues), `start_work`, the company systems that hold
+   4 items in flight: `read_item` (its `relatedEvents` are clues), `start_work`, the company systems that hold
    incident facts (logs, monitoring, tickets, standards), `worktree create`, fixer with the `backlog-pi` skill.
    `start_work` fetches the remote first: `remote.newCommits` (merged into main when possible) are the prime
    suspects; pass `remote` as `<recent_changes>`.
@@ -204,7 +218,10 @@ Do not repeat that in the brief. Your part:
 `answers/<ID>/submit.json` keeps every template key, satisfies `files/challenge/<ID>-submit.schema.json`
 when provided, moves `status` away from the template's initial value as instructed, and references
 evidence as `evidence/<file>`. The gate also checks: one `testResults` entry per template scenario; a `PASS`
-lists every file the MVS names under "Required evidence" (exact names), otherwise it is `FAIL`/`NOT_RUN`;
+lists every file the MVS names under "Required evidence" (exact names), otherwise it is `FAIL`/`NOT_RUN`; every
+file in `requiredEvidence` (named by the item text, e.g. a "before fixing" screenshot) exists and is in
+`evidenceFiles`, otherwise the gate fails `evidence_missing` and the item would score 0, so it is a retry, never
+published under the last-chance rule;
 `DONE` only when every scenario passed, and every scenario passed means `DONE` (a `warn` says so) unless a
 requirement outside the scenarios is unmet and named in `engineeringRecord`. Last-chance rule: no time for another attempt and build + regression pass →
 you may submit with MVS not all passing; never submit a build or regression failure.

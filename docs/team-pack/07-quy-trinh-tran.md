@@ -42,13 +42,15 @@ mở blocker và kết thúc lượt. Player hiện blocker cho organizer.
 
 ## 4. Xếp lịch
 
-**Lane**: 1 **lane PI** + `N` **lane thường** (mặc định `N = 2`, cấu hình trong `config/runtime.json`).
+**Lane**: 1 **lane PI** + `N` **lane thường** (`N = 4`, hằng `MAX_ITEMS_IN_FLIGHT` trong `src/tools.mjs`, khớp skill
+root; `config/runtime.json` của thiết kế ban đầu không được làm).
 Mỗi lane là một item đang được một worker xử lý trong worktree riêng. Bước publish (integrate → commit →
 push → submit) chạy **tuần tự** qua một khoá chung.
 
 **Thứ tự ưu tiên** (helper tính `suggestedOrder`, root quyết định cuối):
-1. **PI** theo `revealedAt` tăng dần, không bao giờ chờ lane trống (skill root: tối đa 3 item cùng lúc, không tính
-   PI).
+1. **PI** theo `revealedAt` tăng dần, không bao giờ chờ lane trống (skill root: tối đa 4 item cùng lúc, không tính
+   PI; từ 29/10 là 4 thay vì 3, và helper gắn `notice {newItems, freeSlots}` vào mọi kết quả tool của root khi có item
+   đã ra mà chưa bắt đầu trong lúc còn chỗ, vì ZVUYZ41V có TASK-01 chờ 12 phút với 2 chỗ trống).
 2. Item **có deadline**, theo độ dư `slack = (deadlineAt − now) − estimate` tăng dần. Bỏ item có
    `slack < −0.4 × estimate` (không kịp).
 3. Item **không deadline**, theo mật độ giá trị `maxPoints / estimate` giảm dần.

@@ -125,6 +125,13 @@ test('a baseline-failing test that now passes is reported in fixesBaseline', asy
   assert.equal(fixed.passed, true, JSON.stringify(fixed.checks));
   assert.deepEqual(fixed.fixesBaseline, [id]);
   assert.deepEqual(fixed.baselineFailures, []);
+
+  // ZVUYZ41V BUG-02: test cũ được viết lại dưới tên mới. Có allowTestChange thì tên cũ biến mất cũng là đã sửa.
+  writeFileSync(join(r.app, 'tests', 'stale.test.js'), "const lib = require('../lib.js');\nit('company delete cascades', () => { expect(lib.deleteMode).toBe('cascade'); });\n");
+  const renamed = await gate(at, { baseline, allowTestChange: { reason: 'owner asked for cascade', source: 'prisma/migrations/x/migration.sql:11' } });
+  assert.equal(renamed.passed, true, JSON.stringify(renamed.checks));
+  assert.deepEqual(renamed.removedTests, [id]);
+  assert.deepEqual(renamed.fixesBaseline, [id]);
 });
 
 test('test quality blocks a new test without an assertion or with one that cannot fail', async () => {

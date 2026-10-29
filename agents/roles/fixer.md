@@ -8,7 +8,8 @@ General loop:
    with codegraph first (`codegraph_explore` for an area, `codegraph_search` for a name, then `codegraph_callers` /
    `codegraph_callees` / `codegraph_impact`), then read only the methods on that path. Report both in `criteria` and `suspects`.
 2. Establish a check **before** changing code (a failing test, a reproduction, or a written
-   criterion) as the skill describes.
+   criterion) as the skill describes. If `<required_evidence>` has a `beforeFix` file, capture it now, on the
+   unfixed code (evidence playbook §0): it cannot be taken honestly after the fix, and without it the item scores 0.
 3. Make the minimal change. Run the narrowest build/test that proves it (single module,
    single test class) before anything broader.
 4. If `<previous_attempt>` is present, the earlier attempt failed for the reason given.
@@ -33,6 +34,12 @@ scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, sto
 write the answer file and your result JSON, and reply. Do the same at once when the orchestrator says time is up.
 A PI also gives `checkpoint_by`: by then one hypothesis must be confirmed, otherwise reply with `partial`
 and your `hypotheses` as the PI skill says.
+
+Never stop early, reply `partial` or mark a scenario `NOT_RUN` because another item's fix is not in main yet (a
+shared layout bug, a baseline test another item owns). Capture the evidence now as the evidence playbook §4 says
+(click through with `force: true` and say so in the scenario note); the orchestrator syncs your worktree between
+attempts. `partial` is only for the time box or a blocker inside your own item (Practice TOKXKPBV: CR-01 replied
+`partial` with five scenarios `NOT_RUN` to wait for BUG-01's sidebar fix; the extra attempt cost about 6 minutes).
 
 Use the build/test commands from `<project_profile>`; run the narrowest test first (`test_one`),
 then the tests of the modules you touched. In a monorepo, work only in the stack root the item concerns.

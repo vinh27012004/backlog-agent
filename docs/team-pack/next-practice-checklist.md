@@ -1,66 +1,73 @@
-# Cần kiểm ở trận luyện sau (#7)
+# Cần kiểm ở trận luyện sau (#8)
 
-Những thay đổi đã qua test offline (`node --test "tests/pack/*.test.mjs"`, 71/71) nhưng chưa chạy trên trận thật.
-Sau trận, chạy `/judge-practice <match checkout>` (gồm cả `tools/judge/usage.mjs`), rồi đối chiếu từng mục dưới đây với
-transcript (`~/.codex/sessions/<ngày>/`, root là file `source: "vscode"`, subagent có `agent_path`) và
-`<checkout>/.team-work/journal.json`. Ghi kết quả vào `practice-log.md` mục #7; mục nào đạt thì xoá khỏi file này.
+Những thay đổi đã qua test offline (`node --test "tests/pack/*.test.mjs"`) nhưng chưa chạy trên trận thật, cộng các mục
+trận #7 (`ZVUYZ41V`) chưa kiểm được. Sau trận, chạy `/judge-practice <match checkout>` (gồm cả `tools/judge/usage.mjs`),
+rồi đối chiếu từng mục dưới đây với transcript (`~/.codex/sessions/<ngày>/`, root là file `source: "vscode"`, subagent
+có `agent_path`) và `<checkout>/.team-work/journal.json`. Ghi kết quả vào `practice-log.md` mục #8; mục nào đạt thì xoá
+khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục #7, "Đối chiếu checklist".
 
 ## Trước trận
 
+- [ ] Mở Player **0.9.39** ở `D:\mtm\MTM-PLAYER\0.9.39\mtm-player.exe`; không mở bản 0.9.35.
+- [ ] Trang Init: model root `gpt-6-luna`; không bật Fast mode (transcript không ghi chế độ này, nên phải xem trên
+      Player).
 - [ ] Cài lại pack: `pwsh -NoProfile -File pack/install.ps1 -TeamWorkspace D:\mtm\BUN -Force`. Nếu helper đang chạy
       thì Stop/Resume trong Player, không thì nó vẫn chạy code cũ.
-- [ ] `team-sdlc-pack/runtime/src/tools.mjs` có `liveWorktree` và `proxyCall`, có `runtime/src/proxy.mjs` (bản mới đã
-      được cài).
-- [ ] `TeamWorkspace/.codex/agents/team-verifier.toml` tồn tại (profile thứ tư), và checker của Player không báo lỗi.
+- [ ] `team-sdlc-pack/runtime/src/tools.mjs` có `itemEvidence`, `MAX_ITEMS_IN_FLIGHT = 4` và `gateTestChange` (bản sửa
+      L43, L45, L47 đã được cài).
 
-## 1. Worktree trên Windows (L40, L41)
-
-Mốc so sánh từ HIET12OA: hai lần root tự gỡ lỗi khoá file, 30 lượt, 3,6M token, khoảng 6 phút.
+## 1. Worktree sync (L40; #7 không có lần sync nào)
 
 - [ ] `worktree sync` khi fixer của item đó **đã dừng** và app còn chạy (log bị khoá): trả `synced: true`, không có
       `GIT_FAILED`. Tìm trong transcript root: `action:"sync"`.
 - [ ] Sau sync, file chưa track của item (code mới, `answers/<ID>/`) vẫn còn; `git -C <wt> stash list` rỗng.
-- [ ] Không có lỗi `Filename too long` (`core.longpaths` được bật lúc `create`).
-- [ ] `worktree remove` khi `.codegraph/codegraph.db` còn bị giữ: trả `removed: true` cộng `leftover`, root không
-      kill tiến trình nào, `git worktree list` không còn item đó.
 - [ ] Sửa `answers/<ID>/submit.json` trên main sau `integrate` rồi `commit_and_push`: không còn `WORKTREE_CONFLICT`.
 - [ ] Nếu có `WORKTREE_CONFLICT` thật (xung đột code): worktree vẫn y như trước, patch còn trong `.team-work/scratch/`.
 
-## 2. Root chờ và không gỡ tay (L42)
+## 2. Test fail ở baseline (L46, L47, sửa sau ZVUYZ41V)
 
-- [ ] Mọi `wait_agent` của root đều có `timeout_ms` 180000 (hoặc ngắn hơn nhưng có lý do: `return_by` hay
-      `releases.next.at`). Mốc HIET12OA: 11 lần hết giờ 60 s, khoảng 2M token.
-- [ ] Root không viết câu nào giữa hai lần chờ liên tiếp.
-- [ ] Root không đọc `team-sdlc-pack/runtime/src/*`, không chạy `git` tay trong worktree hay checkout chính, không
-      `Stop-Process`/`taskkill` ngoài app do chính item chạy. Tìm trong transcript root: `runtime\\src`, `Stop-Process`,
-      `git -C`.
-- [ ] Fixer không bị bảo "pause" để chờ sync; không fixer nào poll `wait_agent`/`sleep` (mốc HIET12OA: CR-01, 0,5M).
-- [ ] Fixer ghi log app vào `.team-work/logs/<ID>-app.log`, không có `app.log` ở gốc worktree.
-- [ ] Token của root, so với HIET12OA (13,0M, 134 lượt).
+Mốc ZVUYZ41V: BUG-02 viết lại test fail sẵn, `baselineFixed` không có, gate main dừng publish 62 s.
 
-## 3. Test fail ở baseline (sửa sau HIET12OA, commit d843b25)
+- [ ] Chủ của test sửa nó bằng `test_change`: `integrate` trả `baselineFixed` cùng `syncWorktrees`, rồi root sync các
+      worktree đó (mục 1).
+- [ ] `start_work` của item bắt đầu sau đó trả `baselineFailures` với `failing: []` và `fixedBy`, không giao chủ mới.
+- [ ] `exec` publish của chủ không dừng ở `mainGate` vì tests-guard.
 
-Mốc HIET12OA: test `deleting a company with invoices is RESTRICTED` fail sẵn, CR-01, TASK-02 và BUG-02 mất tổng 80 điểm.
+## 3. Evidence mô tả đòi (L43, sửa sau ZVUYZ41V)
 
-- [ ] `start_work` trả `baselineFailures` với đúng một `youFix: true`; brief của fixer có `<baseline_failures>`.
-- [ ] Chủ của test sửa nó với `test_change {reason, source}`, và gate (`tests-guard`) cho qua nhờ `allowTestChange`.
-- [ ] Sau khi chủ integrate: `integrate` trả `baselineFixed` cùng `syncWorktrees`, rồi root sync các worktree đó
-      (nằm trong mục 1).
-- [ ] Các item còn lại báo `DONE`, không `PARTIAL` chỉ vì test này.
+Mốc ZVUYZ41V: BUG-01 0/200 vì thiếu `dashboard_before_fixing.png`.
 
-## 4. Còn treo từ các trận trước
+- [ ] `start_work` BUG-01 trả `requiredEvidence` có `dashboard_before_fixing.png` (`beforeFix`); fixer chụp ảnh đó
+      trước khi sửa code.
+- [ ] Thiếu file thì gate fail `evidence_missing`; lượt sau chỉ chụp bù (patch + `git apply -R`, không `stash`).
+- [ ] Không có tên file lạ trong `requiredEvidence` (đường dẫn, file submit, file đề).
 
-- [ ] `capture_evidence` với `browserProfile` giữ đăng nhập qua các lần gọi (L28). Ở HIET12OA, `bug01_fix1` vẫn bị
-      đẩy về `/login` ("redirected to /login") và trả `partial` vì thiếu evidence: xem lần gọi đó có bỏ bước login mà
-      dùng profile chưa từng đăng nhập không, hay cookie vẫn mất.
+## 4. Thang model (L44, sửa sau ZVUYZ41V)
 
-- [ ] Fixer đọc `backlog-references/evidence-playbook.md` trước kịch bản cần ảnh (tìm trong transcript fixer:
-      `evidence-playbook`). Đếm số lần gọi `capture_evidence` mỗi kịch bản (mục tiêu ≤ 3) và thời gian evidence so với
-      cả lượt fixer (mục tiêu ≤ 1/3). Mốc BC3JL6ZC: BUG-02 6 lần gọi không lần nào xong, 30/150.
-- [ ] Root không chép mẹo evidence vào brief nữa (brief ngắn hơn); fixer vẫn dùng đúng `[role=option]`, `force: true`,
-      `pnpm exec next start`, log app ở `.team-work/logs/`.
+Mốc ZVUYZ41V: 30,29 credit; fixer 25,41, trong đó 17,8 là lượt 6.1-sol thứ 2–3. TASK-02 luna 15,6 phút rồi sol 3,8
+phút; BUG-02 luna 7,1 phút rồi sol 2 phút; CR-01 luna 14 phút.
 
-## 5. Nếu trận có PI (chưa thấy ở trận nào)
+- [ ] Item tier `strong` (BUG-02, CR-01, TASK-02) chạy `gpt-6.1-sol` ngay lượt 1; item `small` chạy `gpt-6-luna`
+      medium. Tìm trong transcript root: `"spawn_agent"` rồi xem `model`, `reasoning_effort`.
+- [ ] Thời gian mỗi item và tổng credit so với ZVUYZ41V: sol từ lượt 1 có rút ngắn thời gian mà không đẩy credit vượt
+      quá mức đã tiết kiệm không.
+- [ ] Lần cuối của item có deadline hoặc PI dùng `gpt-6-astra`: ghi số lần và credit (một lượt ≈ 158 credit). #7 không
+      gọi lần nào.
+- [ ] So điểm với HIET12OA và ZVUYZ41V (cùng bộ item). Cần bảng điểm BTC của cả hai trận; practice-log chưa ghi.
+- [ ] Đối chiếu tổng credit (usage.md) với dashboard Codex của tài khoản (cập nhật 7:00 UTC hằng ngày) sau một ngày.
+
+## 5. Item mới và giới hạn thread (L45, L48)
+
+Mốc ZVUYZ41V: TASK-01 ra lúc 02:49:49, root thấy lúc 03:02; `spawn_agent` thứ tư bị từ chối khi đã có 3 subagent chạy.
+
+- [ ] Kết quả tool của root có `notice {newItems, freeSlots}` khi item mới ra; root `start_work` item đó trong vòng
+      1 phút.
+- [ ] `TeamWorkspace/.codex/config.toml` có `[agents] max_concurrent_threads_per_session = 8`; Player khởi động
+      root bình thường và checker không báo lỗi với khoá này.
+- [ ] Số subagent chạy cùng lúc lớn nhất (mong đợi trên 3), và có `agent thread limit reached` không. Nếu có: root
+      chờ rồi spawn lại, không bỏ reviewer hay verifier.
+
+## 6. Nếu trận có PI (chưa thấy ở trận nào)
 
 - [ ] `job_status`/`run_gate` trả sớm với `newPI`; root `start_work` PI trong vòng 1 phút từ lúc đề hiện.
 - [ ] Lần thử của fixer PI có `timeBox.checkpointBy` (phút 6) và dừng trước 12 phút; fix-result có `hypotheses`.
@@ -68,21 +75,22 @@ Mốc HIET12OA: test `deleting a company with invoices is RESTRICTED` fail sẵn
 - [ ] Reviewer PI chạy song song với gate; PI kẹt thì có 2–3 `team_pi_hypothesis` song song.
 - [ ] `start_work` của PI có `remote.newCommits` khi BTC đã đẩy commit lên remote.
 
-## 6. Verifier chạy gate thay root (proxy, 05 §5.22)
+## 7. Còn treo từ #7
 
-Thay cho "mục 4" cũ (helper tự chạy gate khi thấy file kết quả). Mốc HIET12OA: root ngồi chờ gate tới 3 phút trong khi
-fixer khác đã xong; 13,0M token, 134 lượt.
+- [ ] Chạy `/judge-practice` cho ZVUYZ41V (bundle đã có ở `runs/judge/ZVUYZ41V/`, chưa có `judge.json`): reviewer
+      `gpt-6-luna` có false green nào ngoài L43 không.
+- [ ] Evidence: không còn `screenshot path must be absolute`; fixer không mở profile mới chưa đăng nhập rồi bị đẩy về
+      `/login`; không chụp khi app chưa chạy (`chrome-error`). Đếm lại số lần gọi mỗi kịch bản (≤ 3).
+- [ ] `[role=option]` của Radix Select (L26) chạy được: BUG-02 TC-03 (USD) xong ngay lượt 1.
+- [ ] Jev `difficulty`: #6 và #7 đều 0/5 lần đủ ngưỡng 0,7 (độ tin 0,27–0,48). Nếu #8 cũng vậy thì hạ ngưỡng hoặc bỏ
+      câu hỏi này khỏi Jev.
+- [ ] Item `easy` mà Jev cho bỏ reviewer (#7 không có item `easy`): kết quả chấm có lỗi mà reviewer đáng lẽ bắt được
+      không.
+- [ ] `start_work` chậm (#7: 3,2–12,2 s, Jev 0,2–3,8 s): tách thời gian `git grep`, Jev và Game Master.
 
-- [ ] `configure_session` của root trả `proxy: {ready: true}`; có `team-sdlc-pack/local/runtime-endpoint.json`.
-      `ready: false` thì ghi lại `error` (named pipe bị chặn trong môi trường Player?).
-- [ ] Player nhận profile thứ tư `team_verifier`: checker không báo lỗi, root spawn được với `agent_type` đó.
-- [ ] Transcript verifier (`agent_path` `/root/<id>_verify<n>`): `run_gate` với `fixResultFile` trả `jobId`, không
-      phải `NOT_CONFIGURED`; vòng `job_status` nằm trong một `exec` có pragma.
-- [ ] Root không còn gọi `run_gate` trên worktree (chỉ `where: main` trong exec publish, hoặc sau `orchestrator_gate`).
-      Tìm trong transcript root: `"run_gate"`.
-- [ ] Verifier và reviewer được spawn trong cùng một lượt root; trong lúc chúng chạy root xử lý item khác.
-- [ ] Publish là một `exec` (`record_verification` → `integrate` → `commit_and_push` → `submit_work` → `remove`);
-      nếu có `stoppedAt` thì root làm tiếp từ đúng bước đó, không lặp bước đã xong.
-- [ ] `answer_invalid` có `codePassed`: verifier sửa `submit.json`, `answer_fixed: true`, không chạy gate lại.
-- [ ] Số thread cùng lúc lớn nhất (fixer + verifier + reviewer + pi-hypothesis) và có lỗi giới hạn `max_threads` không.
-- [ ] Token: root so với 13,0M / 134 lượt; verifier mỗi lượt (mong đợi nhỏ, model `small`).
+## 8. Player 0.9.39 (chỉ xem được trên Player)
+
+- [ ] Dashboard có cột **Mode** và dòng "Detected mode: Standard" (không có Fast, nếu không credit tính gấp 2).
+- [ ] Credit trên dashboard có số cho root chạy `gpt-6-luna` (không còn "N/A").
+- [ ] Nếu Player báo `INSTALLED_RUNTIME_TAMPERED`: ghi lại file nằm sau `File:` rồi cài lại pack bằng installer, không
+      sửa tay file đã cài.

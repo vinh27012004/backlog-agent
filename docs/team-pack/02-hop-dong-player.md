@@ -1,6 +1,6 @@
 # 02 · Hợp đồng với MTM Player
 
-Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35, xem §12) (`vendor/mtm-player-0.9.35/app/`),
+Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35 và 0.9.39, xem §12) (`vendor/mtm-player-0.9.39/app/`),
 trừ chỗ ghi *chưa xác minh*. Đường dẫn `src/...` bên dưới tính từ thư mục `app/`.
 
 ## 1. Player làm gì, không làm gì
@@ -260,6 +260,23 @@ thước), `src/cli-supervisor.mjs` (`protocolPrompt`), `src/codex-app-server.mj
 `src/local-app-lifecycle.mjs`, `src/submission-policy.mjs`, `src/model-policy.mjs`,
 `src/workspace-paths.mjs`, `src/workspace-instructions.mjs`, `src/preparation.mjs`, và
 `contracts/progress-event.schema.json` trong sample pack mới.
+
+### 0.9.39 (29/10/2026)
+
+Bản `mtm-player-0.9.39-local-windows`. Trong danh sách trên có `team-install.mjs`, `progress.mjs` và `codex-app-server.mjs`
+đổi, nhưng không đổi gì mà pack phải theo; contract test chạy lại trên source 0.9.39 (77/77). Thay đổi:
+
+- `src/team-install.mjs`: `INSTALLED_RUNTIME_TAMPERED` kèm `detail` là file đầu tiên khác bản tham chiếu (đường dẫn
+  tương đối với TeamWorkspace); trang Init hiện `File: …`. Cách kiểm vẫn như cũ (so từng file của `runtime/` và các
+  file đăng ký), nên vẫn phải cài lại bằng installer, không sửa tay file đã cài.
+- `src/codex-price-card.mjs`: price card `codex-standard-2026-10-28` có giá **gpt-6.1-sol** (50 / 2,5 / 250 credit mỗi
+  1M input / cached / output) và **gpt-6.1-terra** (25 / 1,25 / 125), cùng `serviceTierMultipliers`: Fast (`priority`)
+  ×2, Ultrafast ×6. Giá khớp với ước tính trong [06 §9](06-agents-va-skills.md#9-chọn-model), nên thang model giữ nguyên.
+- `src/progress.mjs`, `src/codex-app-server.mjs`: dashboard ghi service tier của root (`thread/settings/updated`),
+  thêm cột Mode, tính credit theo hệ số tier. Các trận tập tới 28/10 đều chạy `default` (Standard), không có Fast.
+- `src/dashboard-streaming.mjs`: snapshot đẩy lên Game Master tối đa 1 lần / 15 s (trước là 10 s).
+- Lỗi khởi động local app và desktop kèm `detail`; form duyệt quyền (approval) không còn tự submit.
+- `tools/judge/usage.mjs` dùng price card mới và nhân hệ số tier đọc từ `thread_settings_applied` trong transcript.
 
 ### 0.9.35 (27/10/2026)
 

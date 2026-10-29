@@ -15,4 +15,4 @@
 | [`btc/Q&A.md`](btc/Q&A.md) | Hỏi đáp với BTC, gom theo chủ đề, số `#n` theo bảng gốc |
 | [`btc/digital-cuder-api-start-submit.html`](btc/digital-cuder-api-start-submit.html) | Đặc tả API Start Work và Submit. Bản tóm tắt tiếng Việt: [`team-pack/03-game-master.md`](team-pack/03-game-master.md) |
 
-Phần mềm của BTC (MTM Player 0.9.35, sample pack 0.5.1) nằm ở [`../vendor/`](../vendor/).
+Phần mềm của BTC (MTM Player 0.9.39, sample pack 0.5.1) nằm ở [`../vendor/`](../vendor/).

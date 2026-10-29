@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { answerCheck, baselineTestFiles, changedFiles, codeScan, mvsEvidence, runGate, scenarioCounts } from '../../pack/src/gate.mjs';
+import { answerCheck, baselineTestFiles, changedFiles, codeScan, itemEvidence, mvsEvidence, runGate, scenarioCounts } from '../../pack/src/gate.mjs';
 import { contentTree, treeChanges } from '../../pack/src/git.mjs';
 import { validateSchema } from '../../pack/src/jsonschema.mjs';
 import { sh, tempDir } from './support.mjs';
@@ -154,6 +154,45 @@ test('answer results must cover the template, carry the MVS evidence and agree w
   assert.deepEqual(check({ ...TEMPLATE2, status: 'DONE', testResults: [tc1, tc2] }), { problems: [], warnings: [] });
   assert.deepEqual(check({ ...TEMPLATE2, status: 'PARTIAL', testResults: [tc1, { ...tc2, result: 'FAIL' }] }).problems, []);
   assert.deepEqual(scenarioCounts(join(dir, 'submit.json')), { passed: 1, failed: 1, skipped: 0 });
+});
+
+// Mục Submission thật của BUG-01 (ZVUYZ41V, cũng có ở HIET12OA): 0/200 vì thiếu dashboard_before_fixing.png.
+const BUG01 = ['## Submission', '',
+  'Create `answers/BUG-01/`, copy `challenge/BUG-01-submit.json` to `answers/BUG-01/submit.json`, and create its `evidence/` child directory. '
+  + 'Capture screenshot of Dashboard before fixing as dashboard_before_fixing.png and commit to `evidence/` folder. '
+  + 'Record actual test results and relative evidence paths. Every PASS result must reference an existing evidence file.', '',
+  '- Before submitting, set the top-level `status` to `DONE`.'].join('\n');
+
+test('evidence the item text requires: names in capture/evidence sentences, not paths, submit or challenge files', () => {
+  assert.deepEqual(itemEvidence(BUG01), [{ file: 'dashboard_before_fixing.png', beforeFix: true }]);
+  // BUG-02/CR-01 thật: tên file MVS là file đề, dòng ví dụ evidence/<file> là evidence thật.
+  const bug02 = 'Follow the evidence rules and file names in `BUG-02-minimum-verification-scenarios.md`.\n'
+    + '{ "id": "BUG-02-TC-01", "result": "PASS", "evidence": ["evidence/tc-01-vnd-invoice.png", "evidence/currency-report.txt"] }';
+  assert.deepEqual(itemEvidence(bug02, ['challenge/BUG-02-minimum-verification-scenarios.md']).map(e => e.file),
+    ['tc-01-vnd-invoice.png', 'currency-report.txt']);
+  assert.deepEqual(itemEvidence('Add two screenshots: `a.png` and `b.png`. Export invoices.csv for finance.'),
+    [{ file: 'a.png', beforeFix: false }, { file: 'b.png', beforeFix: false }]);
+  assert.deepEqual(itemEvidence(null), []);
+});
+
+test('a file the item text requires must be captured and listed; missing it fails the gate as evidence_missing', async () => {
+  const r = repo();
+  writeFileSync(join(r.app, 'tests', 'money.test.ts'), 'it("vnd", () => { expect(vnd(1)).toBe(100); expect(vnd(2)).toBe(200); });\n');
+  writeAnswer(r, GOOD);
+  const required = itemEvidence(BUG01);
+  const missing = await gate(r, { requiredEvidence: required });
+  assert.equal(missing.failKind, 'evidence_missing');
+  assert.equal(missing.codePassed, true);
+  assert.equal(missing.signature, 'evidence_missing:dashboard_before_fixing.png', 'a new fixer attempt, counted for repeats');
+  assert.match(missing.detail, /missing evidence\/dashboard_before_fixing\.png: the item description requires it \(captured on the unfixed code\)/);
+  const dir = join(r.root, 'M1', 'answers', 'BUG-09');
+  writeFileSync(join(dir, 'evidence', 'dashboard_before_fixing.png'), 'png');
+  const unlisted = answerCheck(join(r.root, 'M1'), 'BUG-09', TEMPLATE, SCHEMA, null, required);
+  assert.equal(unlisted.missingEvidence, undefined);
+  assert.match(unlisted.problems.join('\n'), /evidenceFiles lacks evidence\/dashboard_before_fixing\.png/);
+  writeAnswer(r, { ...GOOD, evidenceFiles: [...GOOD.evidenceFiles, 'evidence/dashboard_before_fixing.png'] });
+  const ok = await gate(r, { requiredEvidence: required });
+  assert.equal(ok.passed, true, JSON.stringify(ok.checks));
 });
 
 test('gate records the tree of what it checked; answers do not change it, code does', async () => {

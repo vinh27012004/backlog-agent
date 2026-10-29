@@ -84,6 +84,18 @@ test('PI, CR and hard items always get the strong tier; Jev skips review only fo
   assert.equal(easy.reviewer.source, 'jev');
 });
 
+test('a tricky answer-only item gets the strong tier from the first attempt; a plain one stays small', async () => {
+  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "small" ở 0.9
+  const tricky = await d.route('TASK-01', ITEM, { difficulty: 'medium' }, { signals: { flags: ['data', 'tricky', 'answerOnly'] } });
+  assert.equal(tricky.model.value, 'strong');
+  assert.equal(tricky.model.source, 'rule');
+  assert.match(tricky.model.reason, /tricky answer-only/);
+  const plain = await d.route('TASK-01', ITEM, { difficulty: 'medium' }, { signals: { flags: ['answerOnly'] } });
+  assert.equal(plain.model.value, 'small');
+  const codeChange = await d.route('TASK-02', ITEM, { difficulty: 'medium' }, { signals: { flags: ['tricky'] } });
+  assert.equal(codeChange.model.value, 'small');
+});
+
 test('a PI always gets a reviewer (in parallel with its gate) and errors fall back to code rules', async () => {
   const d = new Decider(new JevClient(CONFIG));          // không key, không transport → JEV_ERROR → luật code
   const r = await d.route('PI-01', ITEM, { difficulty: 'medium' }, { minutesLeft: 20 });
