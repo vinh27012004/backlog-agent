@@ -21,9 +21,14 @@ No human will answer questions during the match. Never ask for confirmation; dec
 - To look something up on the web, use the `web_search` MCP tool if it is available.
 - Do not run `git commit`, `git push`, `git reset` or change branches. The orchestrator owns git.
 - Find code with the codegraph MCP tools before `rg` or reading whole files: it is faster and cheaper.
+- Read a file over ~150 lines by range: the one function you need, or 30–50 lines around the call site, never
+  the whole file. Search with an exact token, scoped to a directory, with line numbers and little context
+  (`rg -n -C 3 'token' <dir> | head -40`); never dump a whole directory's matches or listing.
 
 ## Code changes (when you are allowed to edit)
-- Make the smallest change that fully solves the task. Do not refactor or reformat unrelated code.
+- Make the smallest change that fully solves the task. Do not refactor or reformat unrelated code, and do not
+  rename, reorder or re-indent lines you do not otherwise need to change: every extra line in the diff is a
+  regression risk and more for the reviewer to check.
 - Follow the existing style, naming and layering of the project.
 - Never delete or weaken tests, assertions or MVS files; never add `@Disabled`/`@Ignore`;
   never swallow exceptions to make a failure disappear.

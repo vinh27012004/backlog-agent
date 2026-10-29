@@ -67,7 +67,9 @@ No human will answer questions during the match. Never ask for confirmation; dec
   only when you are blocked on a decision that only it can make.
 
 ## Code changes (when you are allowed to edit)
-- Make the smallest change that fully solves the task. Do not refactor or reformat unrelated code.
+- Make the smallest change that fully solves the task. Do not refactor or reformat unrelated code, and do not
+  rename, reorder or re-indent lines you do not otherwise need to change: every extra line in the diff is a
+  regression risk and more for the reviewer to check.
 - Follow the existing style, naming and layering of the project.
 - Never delete or weaken tests, assertions or MVS files; never add `@Disabled`/`@Ignore`;
   never swallow exceptions to make a failure disappear.

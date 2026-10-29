@@ -40,7 +40,9 @@ reproduction. Use `.agents/skills/backlog-references/pi-triage.md` to map sympto
 5. **Confirm with a reproduction test**: the smallest test that fails on the current code for the reported
    reason, at the lowest layer that shows it, next to the existing tests. Isolate test data so shared state or
    other worktrees are not corrupted. A local HTTP call to the app you started
-   is extra evidence, not a substitute. **Stop investigating at the first hypothesis the test confirms.**
+   is extra evidence, not a substitute. A test that passes on the current code has not reproduced anything:
+   fix the test (or refute the hypothesis) before you change production code.
+   **Stop investigating at the first hypothesis the test confirms.**
 6. **Fix the root cause** minimally, correct for every user and input, not only the reported case: the same
    pattern in the same function/class, and the neighbours of the failing input (null/empty, boundary, other time
    zones, roles or tenants). If the cause is one recent change, undoing that part is a valid fix when nothing
