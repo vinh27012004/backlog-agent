@@ -1,6 +1,6 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { captureEvidence } from './browser.mjs';
 import { indexCodegraph } from './codegraph.mjs';
 import { CompanyTools } from './company.mjs';
@@ -9,6 +9,7 @@ import { Decider } from './decisions.mjs';
 import { JevClient, loadJevConfig } from './jev.mjs';
 import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './environment.mjs';
 import { modelPlan } from './models.mjs';
+import { itemSignals } from './signals.mjs';
 import { EventQueue } from './events.mjs';
 import { GameMaster } from './game.mjs';
 import { answerCheck, changedFiles, runGate, scenarioCounts } from './gate.mjs';
@@ -18,6 +19,7 @@ import { Jobs } from './jobs.mjs';
 import { Journal } from './journal.mjs';
 import { Probe } from './probe.mjs';
 import { PREPARATION_STAGES, ProgressWriter } from './progress.mjs';
+import { PROXY_TOOLS, forward, startProxyServer } from './proxy.mjs';
 import { redactDeep } from './redact.mjs';
 import { Session } from './session.mjs';
 import { trustedTeamWorkspace } from './paths.mjs';
@@ -145,7 +147,8 @@ export class Runtime {
   definitions() {
     return [
       { name: 'configure_session', description: 'Load the machine-provided Player frame (marker line, descriptor JSON line and policy blocks, copied verbatim). Call first in every turn.',
-        inputSchema: obj({ frame: str('Exact frame text from the marker line to the end of the last policy block.') }, ['frame']), handler: a => this.configureSession(a) },
+        inputSchema: obj({ frame: str('Exact frame text from the marker line to the end of the last policy block.') }, ['frame']),
+        handler: async a => ({ ...this.configureSession(a), proxy: await this.ensureProxy() }) },
       { name: 'prepare_checkout', description: 'PREPARE: verify Git access, clone the assigned branch into checkoutRoot (or verify an existing checkout) and return the revision. Writes GIT_AUTH and REPOSITORY stages.',
         inputSchema: obj({}), handler: () => this.prepareCheckout() },
       { name: 'setup_environment', description: 'PREPARE: background job. Detects the stack, fills .env from .env.example, installs dependencies, runs migrations/seed and env-require doctor, builds and runs baseline tests. Writes ENVIRONMENT and BUILD stages.',
@@ -165,9 +168,11 @@ export class Runtime {
       { name: 'worktree', description: 'GAME: per-item git worktree. create: new worktree at the main HEAD (+ .env with a per-item test database, dependency install as a job, template copied to answers/<ID>/submit.json). integrate: commit the worktree and cherry-pick onto the main checkout; only the exact content of the last gate whose build and tests passed (answers/<ID>/ may still change), else GATE_REQUIRED / GATE_STALE. sync: move a worktree with no commit yet onto the main HEAD, keeping its uncommitted work (pulls in fixes other items already integrated, e.g. a shared layout bug; WORKTREE_CONFLICT leaves it unchanged; reinstall job when dependencies changed). remove: delete it. status: paths and state.',
         inputSchema: obj({ action: { type: 'string', enum: ['create', 'integrate', 'sync', 'remove', 'status'] }, backlogItemKey: str('Item key.'), message: str('integrate: one-line commit message.') }, ['action', 'backlogItemKey']), handler: a => this.worktree(a) },
       { name: 'run_gate', description: 'GAME: background job that re-checks an item: diff, forbidden changes, test quality (new tests without assertions or with assertions that cannot fail → weak_test), code scan of the added lines (TODO, stubs, debug output, SQL built from strings, credentials, backup/helper files; warnings only), typecheck/build, declared tests, full regression vs baseline (failures rerun once to rule out flakiness; baseline tests that no longer run fail like a test change), the declared tests on the unfixed code (fail-before, worktree only; a PI fails as not_reproduced unless a new test fails there), answer file (template scenarios, MVS-required evidence for PASS scenarios, status vs results). where=worktree (default when the item has one) or main. A failure has a stable `signature` and `repeat` (how often this item failed with it); warnings are collected in `findings` for the reviewer.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), where: { type: 'string', enum: ['worktree', 'main'] }, needsDependency: bool('True only if the item requires changing dependency/build files.'), testsAdded: { type: 'array', items: { type: 'string' }, description: 'Test files or names added/changed for this item.' },
+        inputSchema: obj({ backlogItemKey: str('Item key.'), where: { type: 'string', enum: ['worktree', 'main'] },
+          fixResultFile: str('team_verifier (required there): absolute path of the fixer result <checkoutRoot>/.team-work/results/<ID>-fixer-<n>.json. The gate then runs on the worktree with testsAdded, needsDependency and allowTestChange taken from that file, once per file (calling again returns the same job).'),
+          needsDependency: bool('True only if the item requires changing dependency/build files.'), testsAdded: { type: 'array', items: { type: 'string' }, description: 'Test files or names added/changed for this item.' },
           allowTestChange: { type: 'object', description: 'Only when an existing test contradicts the intended behaviour: the fixer\'s test_change {reason, source}; source quotes the item text, a company standard (e.g. kb_search result id) or repo evidence (file:line of a migration, code comment or organizer seed). Without it, editing a baseline-failing test or removing assertions fails the gate.' },
-          waitSeconds: num('Seconds to wait in this call (max 45).') }, ['backlogItemKey']), handler: a => this.runGate(a) },
+          waitSeconds: num('Seconds to wait in this call (max 45).') }, ['backlogItemKey']), handler: a => (a.fixResultFile ? this.gateFromFixResult(a, { pi: true }) : this.runGate(a)) },
       { name: 'record_verification', description: 'GAME: log BACKLOG_TESTS from a finished gate job plus the verification scenarios. Counts come from testResults in answers/<ID>/submit.json (PASS / FAIL / anything else = not run) when it has them; the count arguments are only for items without testResults.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), gateJobId: str('Job id returned by run_gate.'), scenariosPassed: num('Scenarios executed and passed (only without testResults).'), scenariosFailed: num('Scenarios executed and failed (only without testResults).'), scenariosSkipped: num('Scenarios not executed (only without testResults).') }, ['backlogItemKey', 'gateJobId']), handler: a => this.recordVerification(a) },
       { name: 'commit_and_push', description: 'GAME: validate answers/<ID>/ and changed paths, commit everything under the match folder and push to the assigned branch (never force). Requires that the last gate of the item passed build and tests on exactly the current content (GATE_REQUIRED / GATE_STALE otherwise). Returns the full revision.',
@@ -234,6 +239,31 @@ export class Runtime {
         items: Object.fromEntries(Object.entries(j.data.items).map(([k, v]) => [k, { started: Boolean(v.startedAt), published: v.publishedRevision ?? null, receipt: v.receipt?.id ?? null }])) } : null,
       next
     };
+  }
+
+  // Proxy cho helper của subagent (05 §5.22): chỉ trong GAME, một lần mỗi tiến trình. Lỗi không chặn root, chỉ báo lại.
+  async ensureProxy() {
+    if (this.session.phase !== 'GAME') return null;
+    this.proxyStart ??= startProxyServer({ teamWorkspace: this.teamWorkspace, playerSessionId: this.session.descriptor.playerSessionId,
+      handle: (name, args) => callTool(this, { handler: a => this.proxyCall(name, a) }, args, {}, { activity: false }) })
+      .then(() => ({ ready: true }), error => ({ ready: false, error: oneLine(error?.message ?? error, 200) }));
+    return this.proxyStart;
+  }
+
+  // Lời gọi từ helper của subagent. Danh sách đóng, kiểm ở đây chứ không tin phía gửi: không Game Master, không git
+  // publish, không progress; run_gate chỉ từ file fix-result trên worktree; chờ job không trả sớm vì PI (việc của root).
+  proxyCall(name, args) {
+    switch (name) {
+      case 'read_item': return this.readItem(args);
+      case 'job_status': return this.jobStatus(args, { pi: false });
+      case 'worktree':
+        if (args.action !== 'status') fail('PROXY_DENIED', 'subagents may only call worktree status');
+        return this.worktree(args);
+      case 'run_gate':
+        if (!args.fixResultFile) fail('PROXY_DENIED', 'subagents run the gate only with fixResultFile');
+        return this.gateFromFixResult(args);
+      default: fail('PROXY_DENIED', `${name} is for the orchestrator only`);
+    }
   }
 
   // ------------------------------------------------------------------ chuẩn bị
@@ -473,9 +503,11 @@ export class Runtime {
 
   // Lượt chờ job của root (gate, chuẩn bị worktree) trả về sớm khi có PI chưa bắt đầu (`newPI`): điểm PI tính từ lúc đề
   // hiện, mà root có thể đang chờ trong một exec tới vài phút (HIET12OA: đề hiện → start_work mất 56 s đến 1 phút 52).
-  async settleJob(id, waitMs) {
+  // `pi: false` cho subagent (verifier qua proxy): bắt PI mới là việc của root.
+  async settleJob(id, waitMs, { pi: watchPI = true } = {}) {
     const job = this.jobs.jobs.get(id);
     if (!job) return null;
+    if (!watchPI) return this.jobs.settle(id, waitMs);
     let pi = this.pendingPI();
     if (!pi.length && job.state === 'running' && waitMs > 0) {
       const ac = new AbortController();
@@ -640,7 +672,7 @@ export class Runtime {
   // Worktree còn mở của item chưa integrate (cần sync khi main có bản sửa dùng chung).
   openWorktrees(except) {
     return Object.entries(this.journal.data.items).filter(([k, v]) => k !== except && !v.integratedRevision
-      && existsSync(this.wtPaths(k).worktreeRoot)).map(([k]) => k);
+      && this.liveWorktree(k)).map(([k]) => k);
   }
 
   profile() {
@@ -663,6 +695,12 @@ export class Runtime {
     return { worktreeRoot: root, matchRoot: join(root, this.session.descriptor.matchId), branch: `team/${key}` };
   }
 
+  // Worktree còn đăng ký với git (có file .git). Sau `remove` trên Windows thư mục có thể còn lại vì file bị khoá
+  // (codegraph.db do server codegraph giữ, log của app): thư mục đó không còn là worktree.
+  liveWorktree(key) {
+    return existsSync(join(this.wtPaths(key).worktreeRoot, '.git'));
+  }
+
   async worktree({ action, backlogItemKey: key, message }) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -672,12 +710,17 @@ export class Runtime {
     const j = this.journal;
     const ji = j.item(key);
     if (action === 'status') {
-      return { ...wt, exists: existsSync(wt.worktreeRoot), baseRevision: ji.worktreeBase ?? null,
+      return { ...wt, exists: this.liveWorktree(key), baseRevision: ji.worktreeBase ?? null,
         mainHead: await revParse(checkoutRoot), setupJob: ji.worktreeSetupJob ?? null };
     }
     if (action === 'create') {
-      if (!existsSync(wt.worktreeRoot)) {
+      if (!this.liveWorktree(key)) {
+        if (existsSync(wt.worktreeRoot)) {
+          rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
+        }
         const base = await revParse(checkoutRoot);
+        // node_modules của pnpm vượt 260 ký tự dưới .team-work/wt/<ID>/: không có longpaths thì git status/diff hỏng.
+        if (process.platform === 'win32') await git(['config', 'core.longpaths', 'true'], { cwd: checkoutRoot, allowFail: true });
         await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
         await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
         ji.worktreeBase = base;
@@ -702,13 +745,22 @@ export class Runtime {
         setupJobId: job.id, codegraph: codegraph.skipped ?? (codegraph.code === 0 ? 'indexed' : 'failed'),
         hint: 'Wait for setupJobId (job_status) before building or testing in the worktree.' };
     }
-    if (!existsSync(wt.worktreeRoot)) fail('WORKTREE_MISSING', `${key} has no worktree`);
+    if (!this.liveWorktree(key)) fail('WORKTREE_MISSING', `${key} has no worktree`);
     if (action === 'remove') {
       await git(['worktree', 'remove', '--force', wt.worktreeRoot], { cwd: checkoutRoot, timeoutMs: 120_000, allowFail: true });
+      // Windows: file bị khoá làm `worktree remove` bỏ dở (Practice HIET12OA: codegraph.db của TASK-02, root kill server
+      // codegraph của cả đội để xoá). Xoá phần còn lại được bao nhiêu thì xoá; đăng ký worktree phải mất, thư mục sót thì kệ.
+      if (existsSync(wt.worktreeRoot)) {
+        rmSync(join(wt.worktreeRoot, '.git'), { force: true });
+        try { rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 }); } catch { /* file bị khoá: để lại */ }
+      }
+      await git(['worktree', 'prune'], { cwd: checkoutRoot, allowFail: true });
       await git(['branch', '-D', wt.branch], { cwd: checkoutRoot, allowFail: true });
       delete ji.worktreeBase;
       j.save();
-      return { removed: true };
+      const leftover = existsSync(wt.worktreeRoot);
+      return { removed: true, ...(leftover ? { leftover: wt.worktreeRoot,
+        hint: 'Some files are locked (app, codegraph). The worktree is unregistered and no longer blocks anything: leave the folder, do not kill processes.' } : {}) };
     }
     // Đưa worktree lên HEAD của main, giữ thay đổi chưa commit của item (Practice #5: sidebar lỗi của BUG-01 che màn
     // hình ở mọi worktree; CR-01 phải chép tay layout.tsx từ main vào worktree để chụp evidence).
@@ -718,17 +770,37 @@ export class Runtime {
       const oldBase = ji.worktreeBase;
       if (mainHead === oldBase) return { synced: false, baseRevision: mainHead, hint: 'Already at the main HEAD.' };
       if ((await revParse(cwd)) !== oldBase) fail('WORKTREE_CONFLICT', 'the worktree has its own commits; sync only before integrate');
-      const dirty = Boolean((await git(['status', '--porcelain'], { cwd })).out.trim());
-      if (dirty) await git(['stash', 'push', '--include-untracked', '-m', `sync ${key}`], { cwd });
-      await git(['reset', '--hard', mainHead], { cwd });
-      if (dirty && (await git(['stash', 'pop'], { cwd, allowFail: true })).code !== 0) {
-        const conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], { cwd, allowFail: true })).out.split(/\r?\n/).filter(Boolean);
-        // Trả worktree về như cũ: stash còn nguyên khi pop hỏng; file untracked đều nằm trong stash nên clean (không -x) an toàn.
-        await git(['reset', '--hard', oldBase], { cwd });
-        await git(['clean', '-fd'], { cwd });
-        await git(['stash', 'pop'], { cwd });
-        fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ') || 'unknown'}; the worktree is unchanged`);
+      // Không dùng stash (Practice HIET12OA: `stash -u` hỏng giữa chừng vì app.log đang bị app giữ, rồi vì đường dẫn dài
+      // trong node_modules; root mất 3 phút và 1,8M token gỡ tay). File đã track đi qua một patch; file chưa track không
+      // bị reset đụng tới, chỉ cần không trùng đường dẫn với file main vừa thêm.
+      const untracked = (await git(['ls-files', '--others', '--exclude-standard'], { cwd })).out.split(/\r?\n/).filter(Boolean);
+      const added = new Set((await git(['diff', '--name-only', '--no-renames', '--diff-filter=A', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean));
+      const clash = untracked.filter(f => added.has(f));
+      if (clash.length) fail('WORKTREE_CONFLICT', `main adds files ${key} also created: ${clash.slice(0, 5).join(', ')}; the worktree is unchanged`);
+      const patch = join(teamWork, 'scratch', `${key}-sync-${Date.now()}.patch`);
+      mkdirSync(dirname(patch), { recursive: true });
+      await git(['diff', '--binary', `--output=${patch}`, 'HEAD'], { cwd });
+      const tracked = statSync(patch).size > 0;
+      const restore = async () => {
+        await git(['reset', '-q', '--hard', oldBase], { cwd, allowFail: true });
+        if (tracked) await git(['apply', '--whitespace=nowarn', patch], { cwd, allowFail: true });
+      };
+      let conflicts = null;
+      try {
+        await git(['reset', '-q', '--hard', mainHead], { cwd });
+        if (tracked && (await git(['apply', '--3way', '--whitespace=nowarn', patch], { cwd, allowFail: true })).code !== 0) {
+          conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], { cwd, allowFail: true })).out.split(/\r?\n/).filter(Boolean);
+        }
+      } catch (e) {
+        await restore();
+        throw e;
       }
+      if (conflicts) {
+        await restore();
+        fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ') || 'unknown'}; the worktree is unchanged (patch kept at ${patch})`);
+      }
+      // apply --3way ghi vào index; bỏ khỏi index để worktree giống lúc trước sync (thay đổi chưa stage).
+      if (tracked) await git(['reset', '-q'], { cwd });
       ji.worktreeBase = mainHead;
       const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);
       // Dependency hay schema đổi: cài lại và generate trong worktree (.env đã có nên giữ nguyên).
@@ -818,7 +890,34 @@ export class Runtime {
     fail('GATE_STALE', `content differs from what gate ${g.jobId} (${g.where}) checked: ${changed.slice(0, 8).join(', ') || 'unknown'}${changed.length > 8 ? ', …' : ''}; run run_gate${main ? ' with where=main' : ''} again`);
   }
 
-  async runGate({ backlogItemKey: key, where, needsDependency = false, testsAdded = [], allowTestChange = null, waitSeconds = 40 }) {
+  // run_gate của team_verifier (qua proxy) hoặc của root có fixResultFile: tham số lấy từ file fix-result chứ không từ
+  // người gọi, chỉ trên worktree, mỗi file một gate (gọi lại trả job cũ). Fixer không tự chạy gate được, và lịch sử gate
+  // (repeat, thang model của lượt sau) chỉ đếm lượt thử thật.
+  async gateFromFixResult({ backlogItemKey: key, fixResultFile: file, waitSeconds = 40 }, { pi = false } = {}) {
+    this.session.require('GAME');
+    if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
+    const dir = join(this.session.paths.teamWork, 'results');
+    const name = typeof file === 'string' && isAbsolute(file) ? basename(file) : '';
+    if (!name || normalize(dirname(file)).toLowerCase() !== normalize(dir).toLowerCase()
+      || !new RegExp(`^${key.replace(/[.]/g, '\\.')}-fixer-\\d+\\.json$`, 'i').test(name)) {
+      fail('PATH_NOT_ALLOWED', `fixResultFile must be ${join(dir, `${key}-fixer-<n>.json`)}`);
+    }
+    const ji = this.journal.item(key);
+    const seen = ji.proxiedGates?.[name];
+    if (seen && this.jobs.jobs.has(seen)) return { ...(await this.settleJob(seen, Math.min(45, waitSeconds) * 1000, { pi })), reused: true };
+    const fr = this.readResultFile(file);
+    const result = await this.runGate({ backlogItemKey: key, where: 'worktree',
+      testsAdded: Array.isArray(fr.tests_added) ? fr.tests_added.filter(t => typeof t === 'string') : [],
+      needsDependency: Array.isArray(fr.needs_dependency) && fr.needs_dependency.length > 0,
+      allowTestChange: fr.test_change ?? null, waitSeconds }, { pi });
+    if (result.jobId && !result.busy) {
+      ji.proxiedGates = { ...(ji.proxiedGates ?? {}), [name]: result.jobId };
+      this.journal.save();
+    }
+    return result;
+  }
+
+  async runGate({ backlogItemKey: key, where, needsDependency = false, testsAdded = [], allowTestChange = null, waitSeconds = 40 }, { pi = true } = {}) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
     const busy = [...this.jobs.jobs.values()].find(x => x.kind === 'run_gate' && x.key === key && x.state === 'running');
@@ -827,8 +926,8 @@ export class Runtime {
     const j = this.journal;
     const ji = j.item(key);
     const wt = this.wtPaths(key);
-    const inWorktree = (where ?? (existsSync(wt.worktreeRoot) ? 'worktree' : 'main')) === 'worktree';
-    if (inWorktree && !existsSync(wt.worktreeRoot)) fail('WORKTREE_MISSING', 'create the worktree first');
+    const inWorktree = (where ?? (this.liveWorktree(key) ? 'worktree' : 'main')) === 'worktree';
+    if (inWorktree && !this.liveWorktree(key)) fail('WORKTREE_MISSING', 'create the worktree first');
     const checkoutRoot = inWorktree ? wt.worktreeRoot : this.session.paths.checkoutRoot;
     const matchRoot = inWorktree ? wt.matchRoot : this.session.paths.matchRoot;
     // Worktree: so với điểm tạo worktree (gồm cả commit cục bộ). Main: so với remote (gồm commit đã tích hợp chưa push).
@@ -885,7 +984,7 @@ export class Runtime {
       j.save();
       return result;
     }, { key });
-    return this.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
+    return this.settleJob(job.id, Math.min(45, waitSeconds) * 1000, { pi });
   }
 
   recordVerification({ backlogItemKey: key, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped }) {
@@ -897,7 +996,7 @@ export class Runtime {
     const n = v => Math.max(0, Math.floor(Number(v) || 0));
     // Số kịch bản lấy từ testResults của submit.json mà gate vừa kiểm (đúng thứ sẽ nộp), không để root tự đếm.
     const wt = this.wtPaths(key);
-    const answerRoot = job.result?.where === 'worktree' && existsSync(wt.worktreeRoot) ? wt.matchRoot : this.session.paths.matchRoot;
+    const answerRoot = job.result?.where === 'worktree' && this.liveWorktree(key) ? wt.matchRoot : this.session.paths.matchRoot;
     const counted = scenarioCounts(join(answerRoot, 'answers', key, 'submit.json'));
     const sp = counted ? counted.passed : n(scenariosPassed);
     const sf = counted ? counted.failed : n(scenariosFailed);
@@ -953,8 +1052,11 @@ export class Runtime {
     const republish = ji.publishedRevision && !working.length && (await revParse(checkoutRoot)) === ji.publishedRevision;
     if (!republish) await this.requireGate(key, checkoutRoot);
     if (working.length) {
-      // Có worktree thì không commit thẳng trên checkout chính: thay đổi lạc ở đây có thể là của item khác.
-      if (existsSync(this.wtPaths(key).worktreeRoot)) {
+      // Có worktree thì không commit thẳng trên checkout chính: thay đổi lạc ở đây có thể là của item khác. Riêng
+      // answers/<ID>/ của chính item được sửa sau integrate (Practice HIET12OA: root sửa dấu câu trong submit.json của
+      // TASK-02 trên main, bị chặn, rồi mất 3 phút gỡ worktree để qua được).
+      const ownAnswers = `${folder}/answers/${key}/`;
+      if (this.liveWorktree(key) && !working.every(f => f.path.startsWith(ownAnswers))) {
         fail('WORKTREE_CONFLICT', `main checkout has uncommitted changes (${working.slice(0, 5).map(f => f.path).join(', ')}); integrate from the worktree instead`);
       }
       await git(['add', '--', folder], { cwd: checkoutRoot });
@@ -1082,9 +1184,9 @@ export class Runtime {
         jobs: [...this.jobs.jobs.values()].filter(x => x.state === 'running').map(x => x.id) } };
   }
 
-  jobStatus({ jobId, waitSeconds = 0 }) {
+  jobStatus({ jobId, waitSeconds = 0 }, { pi = true } = {}) {
     // 110 s < tool_timeout_sec 120 (config/codex.toml): một lần gọi chờ hết một gate, root đỡ một lượt model.
-    return this.settleJob(jobId, Math.min(110, waitSeconds) * 1000).then(v => v ?? fail('JOB_NOT_FOUND', jobId));
+    return this.settleJob(jobId, Math.min(110, waitSeconds) * 1000, { pi }).then(v => v ?? fail('JOB_NOT_FOUND', jobId));
   }
 
   detectProfile({ path } = {}) {
@@ -1119,7 +1221,7 @@ export class Runtime {
   jevItem(key) {
     const page = this.gm.view?.items.find(i => i.key === key)?.raw ?? null;
     const start = existsSync(join(this.itemDir(key), 'start.json')) ? JSON.parse(readFileSync(join(this.itemDir(key), 'start.json'), 'utf8')) : null;
-    return { key, title: page?.title ?? null, type: page?.type ?? null, points: page?.points ?? null,
+    return { key, title: page?.title ?? null, type: page?.type ?? null, points: page?.points ?? null, deadlineMinutes: page?.deadlineMinutes ?? null,
       description: String(page?.descriptionMd ?? page?.description ?? ''),
       startInstruction: start?.startInstruction ?? null };
   }
@@ -1131,7 +1233,9 @@ export class Runtime {
     if (ji.triage && ji.route) return this.compactTriage(key, ji);
     try {
       const pending = this.itemRows().filter(r => r.status !== 'CLOSED' && ['todo', 'started'].includes(r.local)).length;
-      const { triage: t, route: r } = await this.decider().intake(key, this.jevItem(key), { pendingItems: pending, minutesLeft: this.minutesLeft() });
+      const item = this.jevItem(key);
+      ji.signals ??= await this.itemSignals(key, item);
+      const { triage: t, route: r } = await this.decider().intake(key, item, { pendingItems: pending, minutesLeft: this.minutesLeft(), signals: ji.signals });
       const values = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v.value]));
       ji.triage = values;
       ji.route = { modelTier: r.model.value, reviewer: r.reviewer.value };
@@ -1141,6 +1245,14 @@ export class Runtime {
     } catch (error) {
       return { error: oneLine(error.message, 120), models: this.spawnModels(key, null) };
     }
+  }
+
+  // Đặc trưng khách quan cho Jev và luật difficulty (src/signals.mjs); không có checkout thì bỏ phần grep code.
+  async itemSignals(key, item) {
+    const root = this.session.paths?.matchRoot;
+    let scenarios = 0;
+    try { const mvs = JSON.parse(readFileSync(join(this.itemDir(key), 'mvs.json'), 'utf8')); scenarios = Array.isArray(mvs) ? mvs.length : 0; } catch { /* không có MVS */ }
+    return itemSignals(item, { root: root && existsSync(root) ? root : null, scenarios });
   }
 
   compactTriage(key, ji) {
@@ -1162,7 +1274,8 @@ export class Runtime {
     const ji = this.journal.item(key);
     let decisions;
     if (point === 'triage') {
-      decisions = await d.triage(key, item);
+      ji.signals ??= await this.itemSignals(key, item);
+      decisions = await d.triage(key, item, { signals: ji.signals });
       ji.triage = Object.fromEntries(Object.entries(decisions).map(([k, v]) => [k, v.value]));
       this.journal.save();
     } else if (point === 'route') {
@@ -1235,16 +1348,26 @@ export class Runtime {
 }
 
 // Bọc kết quả theo MCP: text JSON gọn + structuredContent + networkActivity cho Player.
-export async function callTool(runtime, tool, args, ctx) {
+// `activity: false` cho lời gọi qua proxy: request HTTP của root (poller) báo trong kết quả tool của chính root.
+export async function callTool(runtime, tool, args, ctx, { activity: report = true } = {}) {
+  // Helper của subagent (chưa configure_session) chuyển tool trong danh sách proxy sang helper của root (05 §5.22).
+  if (report && PROXY_TOOLS.has(tool.name) && !runtime.session.configured) {
+    try {
+      return await forward(runtime.teamWorkspace, tool.name, args ?? {}, { signal: ctx?.signal });
+    } catch (error) {
+      return callTool(runtime, { handler: () => { throw error; } }, args, ctx, { activity: false });
+    }
+  }
+  const takeActivity = () => (report ? runtime.http.takeActivity() : []);
   try {
     const result = await tool.handler(args ?? {}, ctx);
     const value = redactDeep(result ?? {});
-    const activity = runtime.http.takeActivity();
+    const activity = takeActivity();
     return { content: [{ type: 'text', text: truncate(JSON.stringify(value)) }],
       structuredContent: { ...(typeof value === 'object' && !Array.isArray(value) ? value : { value }), ...(activity.length ? { networkActivity: activity } : {}) },
       isError: false };
   } catch (error) {
-    const activity = runtime.http.takeActivity();
+    const activity = takeActivity();
     const body = redactDeep({ error: { code: error instanceof HelperError ? error.code : 'INTERNAL_ERROR',
       message: oneLine(error instanceof HelperError ? error.message : String(error?.stack ?? error), 600),
       ...(error instanceof HelperError && error.details ? { details: error.details } : {}) } });

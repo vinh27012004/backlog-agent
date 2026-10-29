@@ -1,6 +1,6 @@
 ---
 name: team-orchestrator
-description: MTM GAME turn. Discover backlog items and drive each through team_fixer / team_reviewer / team_pi_hypothesis subagents in per-item worktrees until the match ends. Never end the turn while the match runs.
+description: MTM GAME turn. Discover backlog items and drive each through team_fixer / team_verifier / team_reviewer / team_pi_hypothesis subagents in per-item worktrees until the match ends. Never end the turn while the match runs.
 ---
 
 # Team orchestrator (START_GAME_V4)
@@ -19,7 +19,8 @@ submissions go only through `team_runtime` tools.
 | Agent type | Use | Writes |
 |---|---|---|
 | `team_fixer` | Analyse and implement one item in its worktree; fill `answers/<ID>/` and evidence | code, tests, answers |
-| `team_reviewer` | Read-only review of the candidate diff (a PI's runs in parallel with its gate) | nothing |
+| `team_verifier` | Tester: runs the gate on one fixer attempt through `team_runtime`, checks the answer against the MVS, returns publish / retry | only `submit.json` after an `answer_invalid` gate |
+| `team_reviewer` | Read-only review of the candidate diff, in parallel with the verifier | nothing |
 | `team_pi_hypothesis` | Read-only check of ONE hypothesis when a PI is stuck; spawn 2-3 in parallel | nothing |
 
 Spawn only with the model the helper picked (see **Models**), which is always from
@@ -60,37 +61,67 @@ in flight (each in its own worktree), not counting a PI: a PI never waits for a 
    its stale context (Practice BC3JL6ZC: BUG-01's 3 attempts all ran on the first `gpt-6-luna` medium). The
    worktree is not reset, so the new fixer starts from the previous change; say so in `<previous_attempt>`.
    `send_message` to a fixer is only for "time is up" / "stop" (and PI hypothesis verdicts, see **PI**).
-5. `run_gate` (job, worktree) with the job pattern; when the fix-result has a non-null `test_change`, pass it as
-   `allowTestChange`. The gate runs build, typecheck, the fixer's `tests_added` and
-   the regression suite itself: its result counts, not the fixer's claims, and you do not re-check them. Gate fail → new fixer attempt with
-   `<previous_attempt>` (the gate's `failKind`, `signature`, the failing check's `tail`). Max 2 retries (PI 3),
-   within the item's time. The gate counts repeats: `repeat: 2` → tell the fixer `sameSignatureAsBefore` and to
-   change the hypothesis, not the details; `repeat: 3` → drop the item (step 9; `next_action` no longer offers retry).
-   `answer_invalid` needs no fixer and no new gate: fix `submit.json` as the problems say and go on to step 7
-   (build and tests passed; `record_verification` and `commit_and_push` re-check the answer). `weak_test` = a new test without an
-   assertion or with one that cannot fail. A passing gate can still carry `findings` (warnings): a `fail-before`
-   finding on a BUG/PI means the reproduction test passes on the unfixed code, so it proves nothing; send that back
-   to the fixer once if time allows. Flaky warnings need no action.
-6. BUG/CR/TASK with ≥ 6 minutes left (a PI: always, started together with `run_gate`, see **PI**): spawn `team_reviewer` with the same first line as the fixer
-   (`Item <ID> (<TYPE>). Skill: … Stack notes: …`: the reviewer judges against that skill's done-conditions),
-   `<item>`, `<fix_result>`, `<diff>`, `<gate_findings>` (the gate's `findings`, if any) and `<results_path>`. In `<diff>` give the commands, not the
-   text: `git -C <wt.matchRoot> diff HEAD` and `git -C <wt.matchRoot> status --short` (the reviewer runs them).
-   A `high` issue → one more fixer attempt if time allows; `medium`/`low` never block the submission.
-7. Check every MVS scenario / criterion against the fixer's `verification` and evidence list (do not open
-   the files or redo the scenarios). `record_verification {backlogItemKey, gateJobId}`: it counts the
-   scenarios from `testResults` in `submit.json`; pass counts only for items without `testResults` (tests in
-   the gate's `baselineFailures` are not your scenarios).
-8. Publish (one item at a time): `worktree integrate` → if `baseChanged`, `run_gate` with `where: main`
-   → `commit_and_push` → `submit_work` → `worktree remove`. Integrate and push accept only the exact content
-   the last passing gate checked (`answers/<ID>/` excepted): `GATE_REQUIRED` = no passing gate, `GATE_STALE` =
-   files changed after it (listed) or main moved; run `run_gate` again (where it says), never work around it.
-   Baseline owner first: the item whose `baselineFailures.youFix` was true goes ahead of the others in this queue
-   as soon as its gate passes. When `worktree integrate` returns `syncWorktrees`, finish that item's
-   `submit_work`, then `worktree sync` each listed item: a fixer still running → `send_message` "main now has the
-   baseline fix; re-run the test-suite step of the MVS before writing results"; a fixer already finished whose MVS
-   needs the suite → a short new attempt that only re-runs that step and updates its `testResults` row and log,
-   then `run_gate` again (the sync changed the worktree, so the old gate is stale).
-9. Drop (gate `repeat: 3`, no time for another attempt, or the item is not worth the time left): if its fixer
+5. The fixer returned (any status, also after `interrupt_agent` under the last-chance rule): in ONE step spawn
+   `team_verifier` (`task_name` `<id>_verify<n>`, model `verifier`) and, for a BUG/CR/TASK with `triage.reviewer`
+   and ≥ 6 minutes left (a PI: always), `team_reviewer` (`<id>_review<n>`, model `reviewer`). Then go back to the
+   other items: you never run or wait for this gate yourself (Practice HIET12OA: root sat in one gate wait for up to
+   3 minutes while other fixers had finished). Verifier brief:
+   ```
+   Item <ID> (<TYPE>).
+   <worktree>matchRoot=<wt.matchRoot> answers=<answerFile> evidence=<evidenceDir></worktree>
+   <fix_result><checkoutRoot>/.team-work/results/<ID>-fixer-<n>.json</fix_result>
+   <materials>.team-work/items/<ID>/ (start.json, template.json, mvs.json)</materials>
+   <results_path><checkoutRoot>/.team-work/results/<ID>-verifier-<n>.json</results_path>
+   ```
+   Reviewer brief: the same first line as the fixer (`Item <ID> (<TYPE>). Skill: … Stack notes: …`: the reviewer
+   judges against that skill's done-conditions), `<item>`, `<fix_result>`, `<diff>` and `<results_path>`. In
+   `<diff>` give the commands, not the text: `git -C <wt.matchRoot> diff HEAD` and `git -C <wt.matchRoot> status
+   --short` (the reviewer runs them). The verifier runs the gate through `team_runtime` (build, typecheck, the
+   fixer's tests, regression, tests-guard, answer): its result counts, not the fixer's claims, and you do not
+   re-check it.
+6. Act on the verdict JSON (`<ID>-verifier-<n>.json`) and the review, once both are back:
+   - `recommendation: "publish"` and no reviewer `high` → step 7. `answer_fixed: true` means the verifier fixed
+     `submit.json` after an `answer_invalid` gate whose build and tests passed: no fixer, no new gate.
+   - `"retry"` or a reviewer `high` → new fixer attempt (step 4) with `<previous_attempt>` = the verdict's
+     `retry_brief` plus the reviewer's `high` issues, model from `gate.next`. Max 2 retries (PI 3), within the
+     item's time. `gate.repeat: 2` → tell the fixer `sameSignatureAsBefore` and to change the hypothesis, not the
+     details; `gate.repeat: 3` → drop the item (step 8). A `fail-before` note in `retry_brief` (BUG/PI: the new test
+     passes on the unfixed code, so it proves nothing) is worth one more attempt if time allows; flaky warnings
+     need no action. `medium`/`low` review issues never block the submission.
+   - `"orchestrator_gate"` (the verifier could not reach the gate): run `run_gate {backlogItemKey, fixResultFile}`
+     yourself with the job pattern in **Waiting**, then decide as above.
+7. Publish (one item at a time) in ONE `exec`, which stops at the first error and says where:
+   ```
+   // @exec: {"yield_time_ms": 600000, "max_output_tokens": 3000}
+   const t = "mcp__team_runtime__", call = async (n, a) => JSON.parse((await tools[t + n](a)).content[0].text);
+   const key = "<ID>", msg = "<one-line commit message>", out = {};
+   const step = async (name, n, a) => { const r = await call(n, a); out[name] = r; if (r.error) throw new Error(name); return r; };
+   try {
+     await step("verification", "record_verification", { backlogItemKey: key, gateJobId: "<verdict gate.jobId>" });
+     const integrated = await step("integrate", "worktree", { action: "integrate", backlogItemKey: key, message: msg });
+     if (integrated.baseChanged) {
+       let g = await step("mainGate", "run_gate", { backlogItemKey: key, where: "main", waitSeconds: 45 });
+       while (g.state === "running" && !g.newPI) g = out.mainGate = await call("job_status", { jobId: g.jobId, waitSeconds: 110 });
+       if (g.newPI || !g.result?.passed) throw new Error("mainGate");
+     }
+     const pushed = await step("push", "commit_and_push", { backlogItemKey: key, message: msg });
+     await step("submit", "submit_work", { backlogItemKey: key, gitRevision: pushed.revision });
+     await step("remove", "worktree", { action: "remove", backlogItemKey: key });
+   } catch (e) { out.stoppedAt = e.message; }
+   text(out);
+   ```
+   On `stoppedAt`, carry on from that step by hand; never repeat a step that succeeded. `mainGate` with `newPI`:
+   start the PI, then wait for that gate again and finish. Integrate and push accept only the exact content the
+   last passing gate checked (`answers/<ID>/` excepted): `GATE_REQUIRED` = no passing gate, `GATE_STALE` = files
+   changed after it (listed) or main moved; run `run_gate` again (where it says), never work around it.
+   `record_verification` counts the scenarios from `testResults` in `submit.json` (tests in the gate's
+   `baselineFailures` are not your scenarios). Baseline owner first: the item whose `baselineFailures.youFix` was
+   true goes ahead of the others in this queue as soon as its gate passes. When `integrate` returns
+   `syncWorktrees`, after that item's submit `worktree sync` each listed item: a fixer still running →
+   `send_message` "main now has the baseline fix; re-run the test-suite step of the MVS before writing results"; a
+   fixer already finished whose MVS needs the suite → a short new attempt that only re-runs that step and updates
+   its `testResults` row and log, then a new verifier (the sync changed the worktree, so the old gate is stale).
+8. Drop (gate `repeat: 3`, no time for another attempt, or the item is not worth the time left): if its fixer
    still runs, tell it to stop (`send_message`), then `report_progress {event: {type: "BACKLOG_STATUS",
    backlogId: "<ID>", status: "FAILED", summary: "<one-line reason>"}}`. Never drop silently: the dashboard and the
    journal's end time (`endedAt`, used to measure the match) come only from this event. Keep the worktree.
@@ -108,9 +139,9 @@ It is advice: you still decide, and the hard rules (gate, tests-guard, last-chan
 `triage.models` names the model for every spawn, already picked from `allowedModels`. Pass its `model` and
 `reasoning_effort` to `spawn_agent` as given; do not pick a model yourself.
 - Fixer attempt n (a retry after a reviewer `high` counts too; always a new spawn) → `fixer[n-1]`; past the end, the last entry. The
-  first try is cheap, later tries are stronger, items with a deadline start strong, and the last try of a
-  deadline item or a PI gets the top model.
-- `team_reviewer` → `reviewer`; `team_pi_hypothesis` → `piHypothesis`.
+  first try is always the cheap model (higher effort for a hard item), later tries are stronger, and the last try
+  of a deadline item or a PI gets the top model.
+- `team_verifier` → `verifier`; `team_reviewer` → `reviewer`; `team_pi_hypothesis` → `piHypothesis`.
 - `models` or the entry is `null`, or the provider rejects the model (`MODEL_UNAVAILABLE`) → spawn without
   `model` and `reasoning_effort` (the subagent inherits yours).
 
@@ -122,16 +153,16 @@ wrong one scores 0 and cannot be resubmitted. Be correct, then lose no minute.
    incident facts (logs, monitoring, tickets, standards), `worktree create`, fixer with the `backlog-pi` skill.
    `start_work` fetches the remote first: `remote.newCommits` (merged into main when possible) are the prime
    suspects; pass `remote` as `<recent_changes>`.
-2. The fixer returns `partial` at `checkpoint_by` (no hypothesis confirmed), or the gate says
+2. The fixer returns `partial` at `checkpoint_by` (no hypothesis confirmed), or the verifier's gate says
    `original_still_failing`: in one step, spawn one `team_pi_hypothesis` per `open` hypothesis of its fix-result
    (top 3; first line `Item <ID> (PI). Stack notes: …`, then `<hypothesis>` = that entry with its check and evidence,
    `<item>`, `<company_facts>`, `<materials>`, `<worktree>`, `<results_path>` `<ID>-pi_hypothesis-<n>.json`) and
    the next fixer attempt (new spawn, fresh `returnBy`/`checkpointBy` from `match_state`) with the whole list in
    `<previous_attempt>`. Send each checker verdict to that fixer as it arrives (`send_message` "<hypothesis>
    verdict: …": the one exception to the stop-only rule).
-3. The fixer returns `fixed`: start `run_gate` and spawn `team_reviewer` in the same step (same first line,
-   `<item>`, `<fix_result>`, `<diff>` commands, `<results_path>`; no gate findings yet), then wait for both. The
-   gate requires a new test that fails on the unfixed code (`not_reproduced` → new attempt that only adds it).
+3. The fixer returns `fixed`: spawn `team_verifier` and `team_reviewer` in the same step (One item, step 5), then
+   wait for both. The gate requires a new test that fails on the unfixed code (`not_reproduced` → new attempt that
+   only adds it).
    Then `decide root_cause_confirmed {fixResultFile}`; `false` or a reviewer `high` → one more attempt.
 4. Publish the moment the gate has passed and the reviewer raised no `high`: a PI goes first in the publish queue.
    No time left for another attempt: build and regression passing is enough (last-chance rule), even with
@@ -154,39 +185,20 @@ wrong one scores 0 and cannot be resubmitted. Be correct, then lose no minute.
 - Never edit `exam-info.json`, `env-require/` or files outside the match folder.
 
 ## Screenshots and the running app
-- Never use computer use or the operator's windows.
-- Start the app from the worktree on a free port and record its PID; stop it after (`taskkill /PID <pid> /T /F`).
-  pnpm passes `--` literally: use `pnpm exec next start -p 3100` (after a build), not `pnpm run start -- -p 3100`.
-  Seeded login users are in the repo's seed script.
-- Screenshots: `capture_evidence` (any agent; headless Edge, loopback URLs only). Typical steps:
-  goto login → fill user/password → click "Sign in" → waitFor a page text → goto the screen → MVS steps →
-  assertText the expected value → screenshot `answers/<ID>/evidence/<exact MVS file name>.png`.
-  `selector` is plain CSS: Playwright `:has-text()`, `>>`, `text=` fail with `INVALID_SELECTOR`. Pick by
-  label with `{selector, text}` (`{selector:"[role=tab]", text:"Invoices"}`); a custom select (Radix) is a click
-  on its trigger, then a click on `{selector:"[role=option]", text:"<name>"}`.
-  `ELEMENT_OBSCURED` means something covers the target: for UI-layout bugs that is the "before" evidence;
-  otherwise retry with `force: true` (Practice #5: BUG-01's sidebar covers the Accounting tabs in every other
-  item's worktree, so other items' scenarios need `force: true` on those clicks).
-- Once such a shared-UI fix is integrated, `worktree sync` every other item whose fixer has not reached its
-  evidence yet (between attempts, or before the spawn): the worktree moves onto main and keeps its own
-  uncommitted work, so screenshots show the fixed layout. Never copy another item's files into a worktree.
-  `WORKTREE_CONFLICT` leaves the worktree unchanged: carry on with `force: true`.
-  A failed step returns `error.details` (`failedStep`, `url`, `visibleText`, `candidates`): fix the steps from it;
-  a `url` on `/login` means the session is gone, so put the login steps back in.
-- Evidence budget (Practice #2: one fixer made 27 single-step calls, another rewrote a Playwright script
-  ~40 times): **one `capture_evidence` call per MVS scenario** with the whole flow in `steps` (max 60) and a
-  `browserProfile` to keep the login. A failed call → fix the steps, at most 2 retries per scenario, then
-  mark it `NOT_RUN` with the reason and move on. Evidence gets at most a third of the item's time. Own
-  Playwright/CDP scripts only for what `capture_evidence` cannot do (file download, API-only check), kept
-  outside the match folder under `<checkoutRoot>/.team-work/scratch/<ID>/`. Tell the fixer this budget.
-- An MVS that asks how the app reacts to a failing server (500, timeout, offline, slow): the fixer uses a `route`
-  step of `capture_evidence` to simulate it in the browser and says so in the answer; never change code or stop
-  shared services to cause the failure.
-- Scenario data (Practice #2: a misclick voided the BUG-02 invoice and the later scenarios failed on it): all
-  worktrees share one app database, and organizer seeds wipe and recreate data (CR-01's deletes every invoice).
-  The fixer takes `app_data` lock before seeding or creating data and releases it after the report; seed, then
-  the data scenarios in MVS order in one pass; damaged data → re-seed (if the script says it is safe to re-run)
-  and redo from the first data scenario. Do not run two items' data scenarios at the same time.
+The fixer starts the app, captures screenshots and runs data scenarios itself, following
+`.agents/skills/backlog-references/evidence-playbook.md` (its prompt points there: ports, app log outside the worktree,
+`capture_evidence` flow and selectors, `force: true`, `route` for a failing server, `app_data` lock and re-seeding).
+Do not repeat that in the brief. Your part:
+- Never use computer use or the operator's windows, and never take screenshots yourself.
+- A fix to something every screen shares (layout, sidebar, header, navigation, login) covers targets in the other
+  worktrees (Practice #5: BUG-01's sidebar covered the Accounting tabs; their fixers click through with `force: true`).
+  Once that fix is integrated, `worktree sync` every other item whose fixer has not reached its evidence yet (between
+  attempts, or before the spawn): the worktree moves onto main and keeps its own uncommitted work. Never copy another
+  item's files into a worktree. `WORKTREE_CONFLICT` leaves the worktree unchanged: the fixer carries on with
+  `force: true`. Never sync under a running fixer (sync resets its files; Practice HIET12OA: CR-01's fixer was told to
+  pause and polled `wait_agent` for 2.5 minutes): the next attempt gets the sync.
+- `worktree remove` may return `leftover` (files locked on Windows): the worktree is gone for git, leave the folder.
+- Two items' data scenarios never run at the same time: the `app_data` lock enforces it; do not work around it.
 
 ## Answers
 `answers/<ID>/submit.json` keeps every template key, satisfies `files/challenge/<ID>-submit.schema.json`
@@ -218,7 +230,13 @@ all tokens, and the Codex quota ran out with 2 items unfinished). So:
   `followup_task` to the old fixer (Practice BC3JL6ZC: BUG-01's 3 tries in one thread grew to 146K context,
   9.5M tokens, 22% of the match).
 - Do not redo subagent work: do not read the item's code or diff, trace git history or re-run checks
-  yourself. The gate and the reviewer check the fixer; when in doubt spawn the reviewer.
+  yourself. The verifier (gate) and the reviewer check the fixer; when in doubt spawn the reviewer. Never call
+  `run_gate` on a worktree while its verifier runs.
+- Do not debug the helper: when a `team_runtime` tool returns an error, act on its `code`/`hint` only. Never read
+  the helper's source, run git by hand in a worktree or the main checkout, kill processes, or move/delete folders
+  under `.team-work/` (Practice HIET12OA: root spent 30 calls and 3.6M tokens hand-recovering a `worktree sync` and a
+  `worktree remove`, and killed the team's codegraph server). If the error has no way forward, record it with
+  `report_progress` and move on to other items; the item keeps its worktree.
 - Read the fix-result JSON once per attempt. Keep tool output short (`max_output_tokens` in the exec pragma).
 - Combine independent helper calls in one `exec` script.
 
@@ -228,19 +246,21 @@ starts with the pragma line `// @exec: {"yield_time_ms": 240000, "max_output_tok
 yields after 30 s and every `wait` is one more model call over your whole context (Practice BC3JL6ZC: 0 of 71
 `exec` had it; 46 `wait` calls of 1-10 s cost 4.4M tokens, a third of the root). If an `exec` still yields, call
 `wait` once with `yield_time_ms: 240000`, never less than 60000.
-- **Subagents running:** `wait_agent` with `timeout_ms: 180000`, or less so that it returns by the earliest
+- **Subagents running:** `wait_agent` with `timeout_ms: 180000` (never 60000 "to check in": Practice HIET12OA had 11
+  empty 60 s timeouts, each one a full-context call, ~2M tokens; say nothing between waits), or less so that it returns by the earliest
   running fixer's `return_by` + 1 minute, and by 20 s after `releases.next.at` from `match_state` (the next time the
   organizers release items; `wait_for_update` repeats it as `state.nextReleaseAt`), so a PI released then is started
   at once. It returns as soon as any agent messages or finishes, so a long timeout costs nothing. A fixer still running 1 minute past its `return_by`: `send_message` "Time is up: stop
   now, mark unfinished scenarios NOT_RUN, write submit.json and your fix-result, reply." Still no reply 2 minutes
-  later: `interrupt_agent` it and run the gate on what its worktree holds (last-chance rule in **Answers**). After it returns, drain helper events with one
+  later: `interrupt_agent` it; then spawn the verifier if it wrote its fix-result, otherwise run `run_gate` on what its worktree holds yourself (job pattern below; last-chance rule in **Answers**). After it returns, drain helper events with one
   `wait_for_update {timeoutMs: 1000, cursor}` and act on `ITEM_NEW`, `ITEM_CHANGED`, `ITEM_CLOSING`,
   `MATCH_STATUS`.
-- **Background job** (worktree setup, gate): wait inside one `exec`, not with repeated `job_status`/`wait`:
+- **Background job** (worktree setup; a gate only when the verifier answered `orchestrator_gate`, or on main inside
+  the publish `exec`): wait inside one `exec`, not with repeated `job_status`/`wait`:
   ```
   // @exec: {"yield_time_ms": 240000, "max_output_tokens": 3000}
   const t = "mcp__team_runtime__", call = async (n, a) => JSON.parse((await tools[t + n](a)).content[0].text);
-  let r = await call("run_gate", { backlogItemKey: "<ID>", testsAdded: [], waitSeconds: 45 });
+  let r = await call("run_gate", { backlogItemKey: "<ID>", fixResultFile: "<fix-result path>", waitSeconds: 45 });
   while (r.state === "running" && !r.newPI) r = await call("job_status", { jobId: r.jobId, waitSeconds: 110 });
   text(r);
   ```

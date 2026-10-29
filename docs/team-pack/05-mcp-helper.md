@@ -20,9 +20,10 @@ không tự `git push`.
 
 - Khai trong `TeamWorkspace/.codex/config.toml` (installer sinh từ `config/codex.toml`, [09 §3](09-dong-goi-va-van-hanh.md#3-configcodextoml-và-file-đăng-ký)):
   `command = "node"`, `args = ["<TeamWorkspace>/team-sdlc-pack/runtime/bin/runtime-server.mjs"]`.
-- Codex khởi chạy helper khi thread nạp cấu hình MCP. Root có một tiến trình helper. Subagent có thể có
-  tiến trình riêng (**Spike S4**). Chỉ tiến trình đã `configure_session` mới làm việc có trạng thái; tiến
-  trình khác chỉ trả lời tool không trạng thái, còn tool khác trả `NOT_CONFIGURED`.
+- Codex khởi chạy helper khi thread nạp cấu hình MCP. Root có một tiến trình helper. **Mỗi subagent có tiến
+  trình riêng** (đã thấy 27/10: `/root/bug02_fix1` gọi `read_item` nhận `NOT_CONFIGURED`). Chỉ tiến trình đã
+  `configure_session` mới làm việc có trạng thái; tiến trình khác chỉ trả lời tool không trạng thái, còn tool
+  khác trả `NOT_CONFIGURED`. Đây là lựa chọn cài đặt, không phải luật BTC ([01 D4](01-kien-truc.md#5-quyết-định-thiết-kế)).
 - Helper tự suy ra **TeamWorkspace** từ vị trí file của nó (`bin/` → `runtime/` → `team-sdlc-pack/` →
   TeamWorkspace), kiểm có `TeamWorkspace/.mtm/team-runtime.json`. Đây là mốc tin cậy để kiểm mọi path
   trong descriptor ("preparation derives paths from trusted cwd").
@@ -112,7 +113,8 @@ không tự `git push`.
 > `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
 >
 > **28/10:** codegraph (§5.21): MCP server ngoài `@colbymchenry/codegraph` thay cho CodeGraph của kiến trúc cũ (chưa từng
-> dựng); helper chỉ dựng index. Bỏ "system map".
+> dựng); helper chỉ dựng index. Bỏ "system map". Cùng ngày: proxy cho subagent (§5.22), để `team_verifier` chạy
+> gate thay root; `run_gate` nhận thêm `fixResultFile`.
 
 Ký hiệu: **R** = chỉ root (cần đã configure); **A** = mọi agent. "Job" = trả `jobId` ngay nếu chưa xong
 trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) hoặc `job_status`.
@@ -138,6 +140,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.17 | `detect_profile` | A | mọi | Nhận diện stack và lệnh build/test cho một path |
 | 5.20 | `app_data` | A | mọi | Khoá database dùng chung của app khi seed / tạo dữ liệu kịch bản (mục 8) |
 | 5.21 | (codegraph) | A | mọi | Không phải tool của helper: MCP server thứ hai, helper chỉ dựng index |
+| 5.22 | (proxy) | subagent | GAME | Không phải tool mới: helper của subagent chuyển `read_item`, `run_gate {fixResultFile}`, `job_status`, `worktree status` sang helper của root |
 | 5.18 | `condense_log` | A | mọi | Rút gọn log lỗi, trả chữ ký |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 
@@ -264,12 +267,16 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     với `journal.items[ID].lastGate.tree`. Chưa có gate nào build + test pass → `GATE_REQUIRED`; nội dung khác
     → `GATE_STALE` kèm danh sách file khác. Chặn trường hợp code sửa sau gate (fixer chạy tiếp, reviewer lỡ ghi,
     root vá) lọt vào bản nộp mà không ai kiểm.
-- `sync {backlogItemKey}`: worktree chưa có commit riêng → `git stash -u`, `reset --hard <HEAD chính>`,
-  `stash pop`, `worktreeBase` = HEAD chính. Pop xung đột thì trả worktree về nguyên trạng và báo
-  `WORKTREE_CONFLICT` kèm file. Dependency hoặc schema Prisma đổi thì bắt đầu lại job cài (`setupJobId`).
+- `sync {backlogItemKey}`: worktree chưa có commit riêng → lưu thay đổi file đã track bằng `git diff --binary HEAD`
+  (vào `.team-work/scratch/`), `reset --hard <HEAD chính>`, `apply --3way`, `worktreeBase` = HEAD chính. Không stash:
+  file chưa track (log của app đang chạy, bị khoá trên Windows) không bị đụng tới; trùng với file main vừa thêm thì
+  `WORKTREE_CONFLICT` trước khi đổi gì (Practice #6, L40). Apply xung đột hay bước nào hỏng thì trả worktree về base cũ
+  và báo `WORKTREE_CONFLICT` kèm file. Dependency hoặc schema Prisma đổi thì bắt đầu lại job cài (`setupJobId`).
   Dùng khi item khác đã tích hợp bản sửa giao diện dùng chung (Practice #5, L38). **Output**:
   `{synced, baseRevision, changedFiles, setupJobId?}`.
-- `remove {backlogItemKey}`: `git worktree remove --force` + xoá branch cục bộ `team/<ID>`.
+- `remove {backlogItemKey}`: `git worktree remove --force` + xoá branch cục bộ `team/<ID>`. File bị khoá (codegraph.db,
+  log của app) thì xoá `.git` của worktree, `worktree prune`, trả `leftover` và để lại thư mục. Mọi tool coi worktree là
+  còn khi có file `.git`; `commit_and_push` cho sửa `answers/<ID>/` trên main dù worktree còn (Practice #6, L41).
 - Branch `team/<ID>` **chỉ** tồn tại cục bộ, không bao giờ push.
 - `.env` của worktree: `TEST_DATABASE_URL` có hậu tố `_<matchid>_<item>` (checkout chính `_<matchid>`), để test DB
   luôn mới theo trận (Practice #5, L34).
@@ -566,6 +573,38 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `.codex/config.toml` có được không.
 - Test: `tests/pack/codegraph.test.mjs` (bản codegraph giả: khối config theo trạng thái cài, checker, `init` rồi
   `sync`, lỗi không ném ra).
+
+### 5.22 Proxy cho subagent (mới 28/10, D4)
+
+- **Vì sao**: ở HIET12OA root tự chạy gate cho từng lượt fixer. Mỗi lần nó ngồi trong một vòng `job_status` tới 3
+  phút, không thấy được fixer khác vừa xong, và mỗi bước sau đó là một lượt model trên context 100K+. Guide §2 giao
+  việc chạy regression và kiểm kết quả cho Tester, còn integrate và quyết định cuối cho Orchestrator. Subagent
+  `team_verifier` làm phần Tester, nhưng tiến trình helper của subagent chưa `configure_session` (§2), và credential
+  không được vào prompt của worker (guide §4), nên subagent cần đường gọi sang helper của root.
+- **Phía root**: lần `configure_session` đầu tiên trong GAME mở một named pipe (`\\.\pipe\team-runtime-<hex>`; Unix
+  socket trong thư mục tạm ở nơi khác), không dùng TCP. Helper ghi `{path, token, pid, playerSessionId}` vào
+  `TeamWorkspace/team-sdlc-pack/local/runtime-endpoint.json` (ngoài checkout, không vào commit). Token 24 byte ngẫu
+  nhiên, so bằng `timingSafeEqual`. Kết quả `configure_session` có `proxy: {ready}`; lỗi mở pipe không chặn root.
+  Server `unref`, chết cùng tiến trình; lần RESUME ghi đè endpoint.
+- **Phía subagent**: tool trong `PROXY_TOOLS` gọi khi helper chưa configure thì được chuyển nguyên văn qua pipe,
+  một lời gọi một kết nối, chờ tối đa 118 s (dưới `tool_timeout_sec`). Không có endpoint hoặc không kết nối được
+  thì trả `NOT_CONFIGURED` như trước. Tool khác vẫn chạy cục bộ (`capture_evidence`, `app_data`, `detect_profile`)
+  hoặc trả `NOT_CONFIGURED`.
+- **Root tự kiểm từng lời gọi** (`Runtime.proxyCall`), không tin phía gửi:
+  - `read_item`: như root.
+  - `run_gate`: bắt buộc `fixResultFile` = `<checkoutRoot>/.team-work/results/<ID>-fixer-<n>.json` (đúng thư mục,
+    đúng item, nếu không thì `PATH_NOT_ALLOWED`). Gate chạy trên worktree, với `testsAdded`, `needsDependency`,
+    `allowTestChange` lấy từ file. Mỗi file chỉ một gate: gọi lại trả job cũ với `reused: true` (journal
+    `proxiedGates`). Fixer vì thế không tự chạy gate lặp lại được, và `repeat` cùng thang model chỉ đếm lượt thật.
+  - `job_status`: không trả sớm vì `newPI`, vì bắt PI là việc của root.
+  - `worktree`: chỉ `status`.
+  - Mọi tool khác: `PROXY_DENIED`. Không bao giờ có Game Master, `integrate`, `commit_and_push`, `submit_work` hay
+    `report_progress`.
+- Lời gọi qua proxy không lấy `networkActivity` của root: request HTTP của poller vẫn báo trong kết quả tool kế tiếp
+  của chính root. Journal và progress log vẫn chỉ có một writer.
+- Root cũng gọi được `run_gate {fixResultFile}` (khi verifier trả `orchestrator_gate`); khi đó vẫn trả sớm vì PI.
+- Test: `tests/pack/e2e.test.mjs` (tiến trình helper thứ hai: các lời gọi bị chặn, file sai, gate qua proxy, gọi lại
+  ra cùng job, root thấy cùng job).
 
 ### 5.19 `decide` (R, mới, D9)
 

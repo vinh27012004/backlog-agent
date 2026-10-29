@@ -25,11 +25,17 @@ const ROLES = [
     description: 'Developer: analyses and implements one backlog item (TASK, CR, BUG or PI) inside the worktree named in the brief, then writes a fix-result JSON.',
     reads: ['Before you start, read the skill named in the brief (`.agents/skills/backlog-<type>/SKILL.md`) and the stack notes;',
       `a BUG also \`${REF}/bug-patterns.md\`, a PI also \`${REF}/pi-triage.md\`.`,
-      `When the brief has \`<previous_attempt>\`, read \`${REF}/retry-playbook.md\` first and follow the row for its failKind.`] },
+      `When the brief has \`<previous_attempt>\`, read \`${REF}/retry-playbook.md\` first and follow the row for its failKind.`,
+      // CV8WV1JM, BC3JL6ZC, HIET12OA: mẹo chụp evidence chỉ nằm trong skill root, fixer không thấy.
+      `Before the first MVS scenario that needs a screenshot, a running app or scenario data, read \`${REF}/evidence-playbook.md\`.`] },
   { role: 'reviewer', file: 'reviewer.md', schema: 'review', readOnly: true,
     description: 'Read-only reviewer: checks a candidate change for problems that build, tests and MVS cannot see, then writes a review JSON.',
     reads: ['Before you start, read the skill named in the brief (`.agents/skills/backlog-<type>/SKILL.md`): its done-conditions',
       'and traps are what R1, R2 and R5 judge against. Read the stack notes when the brief names them.'] },
+  // Tester của guide (§2): chạy gate qua proxy tới helper của root (05 §5.22), chỉ được sửa answers/<ID>/submit.json.
+  { role: 'verifier', file: 'verifier.md', schema: 'verification', readOnly: false,
+    description: 'Tester: runs the team gate on one fixer attempt through team_runtime, checks the answer against the MVS, then writes a verification JSON.',
+    reads: ['You change no code, tests or evidence; the only file you may edit is `answers/<ID>/submit.json` (step 3 below).'] },
   { role: 'pi-hypothesis', file: 'pi-hypothesis.md', schema: 'hypothesis', readOnly: true,
     description: 'Read-only investigator for a stuck production incident: checks exactly one hypothesis, then writes a hypothesis JSON.',
     reads: [`Before you start, read \`${REF}/pi-triage.md\` (what evidence decides each kind of cause) and the stack notes`,
@@ -144,7 +150,7 @@ for (const type of readdirSync(join(SRC, 'skills'))) {
 
 const refs = readdirSync(join(SRC, 'references')).filter(f => f.endsWith('.md'));
 outputs.set(join(PACK, 'skills', 'backlog-references', 'SKILL.md'), [
-  '---', 'name: backlog-references', 'description: Reference notes for fixers: bug patterns, PI triage checklist and the retry playbook.', '---', '',
+  '---', 'name: backlog-references', 'description: Reference notes for fixers: bug patterns, PI triage checklist, the retry playbook and the evidence playbook.', '---', '',
   `<!-- ${HEADER} -->`, '', ...refs.map(f => `- \`${f}\``), ''].join('\n'));
 for (const f of refs) outputs.set(join(PACK, 'skills', 'backlog-references', f), rewrite(readFileSync(join(SRC, 'references', f), 'utf8')));
 

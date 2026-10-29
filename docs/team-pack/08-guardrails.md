@@ -130,6 +130,15 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 > đúng trên 2 đề; `difficulty` thường dưới ngưỡng 0.7 nên rơi về luật; `score` là số thực và được làm tròn. Cần đo thêm
 > (credit Codex bật/tắt Jev, `decisions.ndjson` so với kết quả chấm) trước khi tin hơn.
 >
+> **Đặc trưng item (29/10, `pack/src/signals.mjs`):** trước khi hỏi Jev, helper đếm số tiêu chí chấp nhận, số kịch bản
+> MVS, số từ, các cờ (`externalSpec`, `dependencies`, `data`, `tricky`, `security`, `ui`, `answerOnly`), điểm, deadline,
+> và chạy `git grep` (từ khoá dáng code: `backtick`, **nhãn UI**, camelCase, snake_case, tên file; bỏ từ khớp hơn 40 file)
+> trên checkout chính để ra số file, module, file test liên quan. Phần `signals` đứng trước đề trong state gửi Jev, lưu ở
+> `journal.items[<ID>].signals`. Jev dưới ngưỡng thì `difficulty` theo `difficultyFromSignals` (trước đây luôn `medium`):
+> cộng điểm theo cờ và kích thước; `hard` (≥ 3) đẩy item lên tier `strong`, tức lần 1 effort high
+> ([06 §9](06-agents-va-skills.md#9-chọn-model)); `easy` chỉ khi đề là câu trả lời thuần hoặc grep thấy ≤ 3 file. Root không
+> tốn thêm lượt gọi nào. Sau trận tập: so `rule`/`jev` trong `decisions.ndjson` với số lần thử thật để chỉnh trọng số.
+>
 > Quan sát của Player 0.9.33: request Jev được khai trong `networkActivity` nên **hiện** ở bảng Network & API của
 > dashboard với origin `https://api.typesafe.ai`. Bước gắn cờ `UNEXPECTED_NETWORK_ORIGIN` chỉ xét event trong progress
 > log (`progress.mjs:670`), còn telemetry của MCP gộp vào sau (`progress.mjs:1104`), nên hiện chưa bị gắn cờ tự động.

@@ -80,17 +80,16 @@ start_work ─► company_call (test data, chuẩn công ty…) ─► worktree 
      │                  status cannot_fix? ── có ─► retry (brief mới) hoặc bỏ
      │                                   │ không
      │                                   ▼
-     │                        run_gate(where=worktree): diff, file cấm, tests-guard, build, test đã khai,
-     │                         fail │       regression so baseline, submit.json theo schema của item
-     │◄──── retry (failKind) ───────┘            │ pass
-     │                                           ▼
-     │                        BUG/CR/TASK, còn ≥ 6': spawn team_reviewer (<item> <fix_result> <diff>)
-     │◄──── retry (issue high, còn thời gian) ───┘            │ approve
-     │                                                        ▼
-     │                        record_verification → BACKLOG_TESTS (PASSED chỉ khi mọi kịch bản bắt buộc pass)
-     │                                                        ▼
-     │                        publish (một item mỗi lúc): worktree integrate → [base đổi? run_gate main]
-     │                        → commit_and_push → submit_work → SUBMITTED → worktree remove
+     │                        cùng một lượt root: spawn team_verifier  ║  team_reviewer (BUG/CR/TASK còn ≥ 6', PI luôn)
+     │                          run_gate {fixResultFile} qua proxy:      ║  (<item> <fix_result> <diff>)
+     │                          diff, file cấm, tests-guard, build,      ║
+     │                          test đã khai, regression, submit.json;   ║
+     │                          đối chiếu MVS → verification JSON        ║  review JSON
+     │                        root làm item khác trong lúc chờ (wait_agent trả về khi có agent xong)
+     │◄── retry (retry_brief, issue high) ──┘            │ publish, không có high
+     │                                                   ▼
+     │                        publish trong MỘT exec (một item mỗi lúc): record_verification → worktree integrate
+     │                        → [base đổi? run_gate main] → commit_and_push → submit_work → worktree remove
 ```
 
 - **Đã sửa sẵn** (Q&A #20): worker trả `already_fixed` kèm bằng chứng (test pass trên base, evidence theo
@@ -99,8 +98,12 @@ start_work ─► company_call (test data, chuẩn công ty…) ─► worktree 
   build + regression **đều pass**, thì được nộp bản có MVS chưa đạt hết. Lý do: FAILED = 0 điểm, bằng
   không nộp; nhưng nộp sớm một bản kém sẽ chặn lượt nộp tốt hơn. Không bao giờ nộp bản làm hỏng build hay
   regression, vì mọi item nộp sau đều chứa commit đó (D6).
-- **Retry**: tối đa 2 lượt (PI 3). Brief mới gồm `failKind`, `signature`, log rút gọn và skill
-  `retry-playbook`. Worktree được làm lại từ HEAD chính mới nhất.
+- **Verifier thay root chạy gate** (28/10, sau HIET12OA: root kẹt trong vòng chờ gate tới 3 phút trong khi fixer
+  khác đã xong, và mỗi bước publish là một lượt model trên context 100K+). Root không gọi `run_gate` trên worktree
+  nữa, trừ khi verifier trả `orchestrator_gate` (không tới được helper của root) hoặc fixer bị `interrupt_agent` mà
+  chưa ghi fix-result.
+- **Retry**: tối đa 2 lượt (PI 3). Brief mới gồm `retry_brief` của verifier (`failKind`, `signature`, log rút gọn)
+  và skill `retry-playbook`. Worktree được làm lại từ HEAD chính mới nhất.
 
 ## 6. Luồng PI
 
@@ -123,7 +126,7 @@ deployment" là nghi phạm đầu tiên) và cách kiểm patch của Agentless
    trong cùng một bước, spawn một `team_pi_hypothesis` (tier `strong`, chỉ đọc) cho mỗi giả thuyết `open` (tối đa 3) và
    fixer lượt sau với cả danh sách; verdict của checker tới đâu `send_message` cho fixer tới đó. Gate
    `original_still_failing` cũng đi nhánh này. Mỗi lượt fixer PI tối đa 12 phút (`returnBy`), 4 lượt, lượt cuối model `top`.
-4. **Fixer xong**: `run_gate` và `team_reviewer` chạy **cùng lúc** (reviewer xét R2/R4: nguyên nhân có bằng chứng, bản
+4. **Fixer xong**: `team_verifier` (chạy gate qua proxy) và `team_reviewer` chạy **cùng lúc** (reviewer xét R2/R4: nguyên nhân có bằng chứng, bản
    sửa đúng cho mọi trường hợp). Gate đòi test mới fail trên code chưa sửa (`not_reproduced`), cộng build + regression
    như mọi item. Rồi `decide root_cause_confirmed` (cần một giả thuyết `confirmed` khi có danh sách).
 5. **Publish ngay** khi gate pass và reviewer không có `high`; PI đứng đầu hàng publish. Hết thời gian cho lượt nữa thì

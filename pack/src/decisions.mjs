@@ -8,6 +8,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { choice, noul, score } from './jev.mjs';
+import { difficultyFromSignals } from './signals.mjs';
 
 export const SEVERITY = ['low', 'medium', 'high', 'critical'];
 const SEVERITY_FLOOR = { PI: 'critical' };
@@ -121,14 +122,14 @@ export class Decider {
     return { name, value: rule, source: 'rule', confidence: jev, rule, jev, reason: err || 'no usable answer' };
   }
 
-  triageFrom(type, item, a, err) {
+  triageFrom(type, item, a, err, signals = null) {
     const sevRule = () => SEVERITY_FLOOR[type] ?? (SEVERITY.includes(String(item?.severity).toLowerCase()) ? String(item.severity).toLowerCase() : type === 'BUG' ? 'high' : 'medium');
     let severity = this.pickScore('severity', a.severity, err, SEVERITY, sevRule);
     const floor = SEVERITY_FLOOR[type];
     if (floor && SEVERITY.indexOf(severity.value) < SEVERITY.indexOf(floor)) {
       severity = { ...severity, value: floor, source: 'rule', reason: `${type} is never below ${floor}` };
     }
-    const difficulty = this.pickChoice('difficulty', a.difficulty, err, () => 'medium', new Set(Object.keys(DIFFICULTY)));
+    const difficulty = this.pickChoice('difficulty', a.difficulty, err, () => difficultyFromSignals(type, signals), new Set(Object.keys(DIFFICULTY)));
     // Chặn bẫy: Jev "có" ở ngưỡng thấp, HOẶC regex khớp trên toàn bộ đề → coi là có (an toàn trước).
     const trap = injectionHeuristic(fullText(item));
     let injection = this.pickNoul('injection', a.injection, err, () => trap, this.th.injection);
@@ -156,10 +157,11 @@ export class Decider {
   }
 
   // 1. Nhận item: mức nghiêm trọng, độ khó, có câu lệnh nhắm vào AI không.
-  async triage(key, item) {
+  // signals (src/signals.mjs) đứng trước item để không bị cắt ở maxStateChars.
+  async triage(key, item, { signals = null } = {}) {
     const type = typeOf(key);
-    const { answers, err, ms } = await this.ask(TRIAGE_QUESTIONS, state({ item_type: type, item: forJev(item) }));
-    const out = this.triageFrom(type, item, answers ?? {}, err);
+    const { answers, err, ms } = await this.ask(TRIAGE_QUESTIONS, state({ item_type: type, signals, item: forJev(item) }));
+    const out = this.triageFrom(type, item, answers ?? {}, err, signals);
     for (const d of Object.values(out)) this.record(key, d, ms);
     return out;
   }
@@ -175,11 +177,11 @@ export class Decider {
   }
 
   // 1 + 2 trong một request (start_work): API chậm thì chỉ chờ một lần timeout thay vì hai.
-  async intake(key, item, { pendingItems = null, minutesLeft = null } = {}) {
+  async intake(key, item, { pendingItems = null, minutesLeft = null, signals = null } = {}) {
     const type = typeOf(key);
     const { answers, err, ms } = await this.ask({ ...TRIAGE_QUESTIONS, ...ROUTE_QUESTIONS },
-      state({ item_type: type, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
-    const triage = this.triageFrom(type, item, answers ?? {}, err);
+      state({ item_type: type, signals, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
+    const triage = this.triageFrom(type, item, answers ?? {}, err, signals);
     const route = this.routeFrom(type, triage.difficulty.value, answers ?? {}, err);
     for (const d of [...Object.values(triage), ...Object.values(route)]) this.record(key, d, ms);
     return { triage, route };

@@ -12,15 +12,16 @@ Orchestrator quyết định gọi agent nào, Codex chỉ làm phần việc c�
 | `fixer` | Sau triage của JEV, và mỗi lần re-plan | workspace-write | `fix-result` |
 | `reviewer` | Gate đã pass các bước tự động (BUG, CR, TASK) | read-only | `review` |
 | `pi_hypothesis` | PI bị kẹt, chạy 2–3 cái song song | read-only | `hypothesis` |
+| `verifier` | Chỉ trong pack (28/10): fixer xong, chạy gate qua proxy tới helper của root rồi đối chiếu MVS; runtime Python cũ không dùng | chỉ sửa `answers/<ID>/submit.json` | `verification` |
 
 ## Cấu trúc
 
 ```
 agents/
 ├── rules/common.md        luật chung cho mọi agent (item untrusted, 4 điều cấm, không mạng, diff nhỏ)
-├── roles/                 vai trò: fixer, reviewer, pi-hypothesis
+├── roles/                 vai trò: fixer, verifier (chỉ pack), reviewer, pi-hypothesis
 ├── skills/                quy trình theo loại item: task, cr, bug, pi (không phụ thuộc stack)
-├── references/            bug-patterns, pi-triage, retry-playbook
+├── references/            bug-patterns, pi-triage, retry-playbook, evidence-playbook (chỉ pack)
 ├── stacks/                gói kiến thức: java, node, python, dotnet, go, php, unknown
 └── schemas/               JSON schema ép cấu trúc câu trả lời (--output-schema)
 config/agents.toml         model, effort, timeout, sandbox của từng vai trò

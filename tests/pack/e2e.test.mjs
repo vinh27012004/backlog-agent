@@ -124,10 +124,10 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // key không lọt ra.
     assert.equal(work.triage.difficulty, 'easy');           // Jev giả chọn phương án đầu với độ tin 0.9
     assert.equal(work.triage.modelTier, 'small');
-    // Model cho spawn lấy trong allowedModels: TASK-01 có deadline nên mạnh ngay, TASK-02 lần 1 rẻ.
-    assert.deepEqual(work.triage.models.fixer.map(m => m.model), ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
+    // Model cho spawn lấy trong allowedModels: lần 1 luôn rẻ, kể cả TASK-01 có deadline.
+    assert.deepEqual(work.triage.models.fixer.map(m => m.model), ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol']);
     assert.deepEqual(work2.triage.models.fixer.map(m => m.model), ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol']);
-    assert.equal(work2.triage.models.reviewer.model, 'gpt-6.1-sol');
+    assert.equal(work2.triage.models.reviewer.model, 'gpt-6-luna');
     assert.match(work.triage.by, /difficulty:jev/);
     assert.equal(jevCalls.length, 2);
     assert.equal(work2.triage.injection, true, 'regex sees the end of a long item');
@@ -158,6 +158,43 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
 
     // "fixer" TASK-02 sửa dở trong worktree của nó (không tích hợp)
     writeFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'module.exports = () => "bye";\n');
+
+    // team_verifier: subagent có tiến trình helper riêng chưa configure_session. run_gate từ file fix-result, job_status,
+    // worktree status và read_item đi qua proxy tới helper của root (05 §5.22); các tool khác vẫn bị chặn.
+    const sub = new McpClient(join(packWs, 'runtime', 'bin', 'runtime-server.mjs'), env);
+    try {
+      await sub.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'sub', version: '1' } });
+      const fix2 = join(tw, 'matches', MATCH, '.team-work', 'results', 'TASK-02-fixer-1.json');
+      mkdirSync(dirname(fix2), { recursive: true });
+      writeFileSync(fix2, JSON.stringify({ status: 'fixed', summary: 'bye()', tests_added: [], needs_dependency: [], test_change: null }));
+      // Build hỏng lúc gate chạy: TASK-02 vẫn chưa có gate pass (integrate bên dưới phải GATE_REQUIRED).
+      const lib2 = join(wt2.matchRoot, 'src', 'lib.js');
+      const lib2Text = readFileSync(lib2, 'utf8');
+      writeFileSync(lib2, 'module.exports = {;\n');
+      await assert.rejects(sub.call('run_gate', { backlogItemKey: 'TASK-02' }), /PROXY_DENIED/);
+      await assert.rejects(sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: join(tw, 'AGENTS.md') }), /PATH_NOT_ALLOWED/);
+      await assert.rejects(sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: fix2.replace('TASK-02-fixer', 'TASK-01-fixer') }), /PATH_NOT_ALLOWED/);
+      await assert.rejects(sub.call('worktree', { action: 'integrate', backlogItemKey: 'TASK-02', message: 'x' }), /PROXY_DENIED/);
+      await assert.rejects(sub.call('submit_work', { backlogItemKey: 'TASK-02', gitRevision: 'a'.repeat(40) }), /NOT_CONFIGURED/);
+      await assert.rejects(sub.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'x' } }), /NOT_CONFIGURED/);
+      assert.equal((await sub.call('read_item', { backlogItemKey: 'TASK-02' })).untrusted, true);
+      assert.equal((await sub.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).exists, true);
+      let viaProxy = await sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: fix2, waitSeconds: 45 });
+      while (viaProxy.state === 'running') viaProxy = await sub.call('job_status', { jobId: viaProxy.jobId, waitSeconds: 45 });
+      assert.equal(viaProxy.kind, 'run_gate');
+      assert.equal(viaProxy.result.where, 'worktree');
+      assert.equal(viaProxy.result.passed, false);
+      assert.equal(viaProxy.result.failKind, 'compile', JSON.stringify(viaProxy.result.checks));
+      writeFileSync(lib2, lib2Text);
+      assert.equal(viaProxy.networkActivity, undefined, 'the root reports its own HTTP activity');
+      const again = await sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: fix2 });
+      assert.equal(again.jobId, viaProxy.jobId, 'one gate per fix-result file');
+      assert.equal(again.reused, true);
+      // Root thấy cùng job (JOB_DONE, job_status) như khi tự gọi run_gate.
+      assert.equal((await client.call('job_status', { jobId: viaProxy.jobId })).state, viaProxy.state);
+    } finally {
+      sub.close();
+    }
     // "fixer" TASK-01: sửa code + điền answer + evidence trong worktree của nó
     writeFileSync(join(wt1.evidenceDir, 'TASK-01-TC-01.json'), JSON.stringify({ scenario: 'greet', result: 'passed' }));
     writeFileSync(wt1.answerFile, JSON.stringify({ backlogId: 'TASK-01', status: 'SUBMITTED',
@@ -240,7 +277,11 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(journal.items['TASK-02'].endedAt, undefined);
     assert.equal(journal.preparation.jobs[0].kind, 'setup_environment');
     // sync: TASK-02 (còn sửa dở) nhận bản sửa TASK-01 đã lên main, giữ nguyên việc của mình (Practice #5, CR-01).
+    // Không stash: log của app chưa track ở gốc worktree không bị đụng tới (Practice HIET12OA: app giữ app.log, stash hỏng).
+    const appLog = join(wt2.worktreeRoot, 'app.log');
+    writeFileSync(appLog, 'listening on 3103\n');
     const synced = await client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' });
+    assert.equal(readFileSync(appLog, 'utf8'), 'listening on 3103\n');
     assert.equal(synced.synced, true);
     assert.equal(synced.baseRevision, pushed.revision);
     assert.equal(synced.setupJobId, undefined, 'no dependency changed, no reinstall');
@@ -259,11 +300,25 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(JSON.parse(readFileSync(wt2.answerFile, 'utf8')).status, 'DRAFT');
     assert.equal((await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).baseRevision, pushed.revision);
     sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout, env);   // cùng cấu hình git với helper (không autocrlf của hệ thống)
+    // Main thêm đúng file mà item cũng tạo (chưa track): báo xung đột trước khi đụng vào worktree.
+    writeFileSync(join(mainCheckout, MATCH, 'src', 'bye.js'), 'module.exports = "main bye";\n');
+    sh('git', ['add', '-A'], mainCheckout, env);
+    sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-q', '-m', 'other item adds bye'], mainCheckout, env);
+    await assert.rejects(client.call('worktree', { action: 'sync', backlogItemKey: 'TASK-02' }), /WORKTREE_CONFLICT.*bye\.js.*unchanged/);
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'utf8'), /"hi"/);
+    assert.match(readFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'utf8'), /=> "bye"/);
+    sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout, env);
     // Root bỏ item (skill root, bước 9): BACKLOG_STATUS FAILED ghi mốc kết thúc.
     await client.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'Dropped: no time left.' } });
     const dropped = JSON.parse(readFileSync(join(tw, 'matches', MATCH, '.team-work', 'journal.json'), 'utf8')).items['TASK-02'];
     assert.equal(dropped.outcome, 'FAILED');
     assert.ok(dropped.endedAt);
+    // remove: worktree hết đăng ký với git, status báo không còn.
+    const removed = await client.call('worktree', { action: 'remove', backlogItemKey: 'TASK-02' });
+    assert.equal(removed.removed, true);
+    assert.equal(removed.leftover, undefined);
+    assert.equal((await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).exists, false);
+    assert.doesNotMatch(String(sh('git', ['worktree', 'list'], mainCheckout, env)), /TASK-02/);
 
     // ---------------- PI (Game Rules §6: đua tốc độ, bấm giờ từ lúc đề hiện)
     // Giả định để kiểm luồng fetch: một commit được đẩy lên remote lúc sự cố xảy ra.

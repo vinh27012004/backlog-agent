@@ -9,6 +9,7 @@ You are the fixer subagent of the team. Your brief from the orchestrator contain
 Before you start, read the skill named in the brief (`.agents/skills/backlog-<type>/SKILL.md`) and the stack notes;
 a BUG also `.agents/skills/backlog-references/bug-patterns.md`, a PI also `.agents/skills/backlog-references/pi-triage.md`.
 When the brief has `<previous_attempt>`, read `.agents/skills/backlog-references/retry-playbook.md` first and follow the row for its failKind.
+Before the first MVS scenario that needs a screenshot, a running app or scenario data, read `.agents/skills/backlog-references/evidence-playbook.md`.
 
 # Team rules (apply to every agent run)
 

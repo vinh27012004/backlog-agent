@@ -25,7 +25,10 @@ function runtime() {
     writeFileSync(join(dir, 'start.json'), JSON.stringify({ minimumVerificationScenarios: mvs }));
     rt.journalObj.item(key).startedAt = new Date().toISOString();
   };
-  const worktree = key => mkdirSync(rt.wtPaths(key).worktreeRoot, { recursive: true });
+  const worktree = key => {   // worktree git: thư mục có file .git
+    mkdirSync(rt.wtPaths(key).worktreeRoot, { recursive: true });
+    writeFileSync(join(rt.wtPaths(key).worktreeRoot, '.git'), 'gitdir: x\n');
+  };
   return { rt, item, worktree };
 }
 

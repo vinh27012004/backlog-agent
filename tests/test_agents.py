@@ -214,7 +214,7 @@ class SchemaTest(unittest.TestCase):
 
     def test_all_schemas_strict(self):
         files = list((ROOT / "agents" / "schemas").glob("*.schema.json"))
-        self.assertEqual(len(files), 3)
+        self.assertEqual(len(files), 4)
         for f in files:
             self._check(json.loads(f.read_text(encoding="utf-8")), f.name)
 

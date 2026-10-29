@@ -15,7 +15,7 @@ test('pack agents and skills are in sync with agents/', () => {
 test('every subagent is told which skills and references to read', () => {
   const prompt = role => readFileSync(join(REPO, 'pack', 'agents', `team-${role}.toml`), 'utf8');
   const fixer = prompt('fixer');
-  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/retry-playbook.md']) {
+  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/retry-playbook.md', 'backlog-references/evidence-playbook.md']) {
     assert.ok(fixer.includes(f), `fixer prompt names ${f}`);
   }
   assert.match(prompt('reviewer'), /read the skill named in the brief/);
