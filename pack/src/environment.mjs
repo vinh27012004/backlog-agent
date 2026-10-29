@@ -42,6 +42,8 @@ export function detectProfile(matchRoot) {
     return {
       root, relRoot: rel, stack: 'node', packageManager: pm, testRunner: runner, testScript: scripts.test ?? null,
       prisma: Boolean(deps.prisma || deps['@prisma/client']),
+      // Gate chạy build song song với test, trừ khi script test tự build (pretest, "build && jest") hay đọc thứ build ra.
+      parallelBuild: Boolean(scripts.build) && !scripts.pretest && !/\bbuild\b|\bdist\b/.test(scripts.test ?? ''),
       commands: {
         install,
         build: scripts.build ? `${pm} run build` : null,

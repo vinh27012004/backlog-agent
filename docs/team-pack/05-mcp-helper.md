@@ -311,6 +311,11 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 - **Thứ tự check của bản đã dựng** (27/10, mục 5–10 lấy từ harness mẫu; tên check trong `checks[]`):
   `diff` → `forbidden` → `tests-guard` → `test-quality` → `code-scan` → `typecheck`/`build` → `tests-added` →
   `regression` → `tests-kept` → (tính `tree`) → `fail-before` → `answer`. MVS chưa có lệnh chạy nên không có `mvs_fail`.
+  - Build song song với test (29/10, sau TOKXKPBV: `next build` 31–49 s, khoảng 65% thời gian gate): khi profile có
+    `parallelBuild` (stack node có script `build`, script `test` không tự build hay đọc `dist`, không có `pretest`),
+    `build` chạy cùng lúc với `tests-added` + `regression` + `tests-kept`. Kết quả vẫn ráp theo thứ tự trên: build fail
+    thì trả `compile` và bỏ kết quả test như thể chưa chạy, nên `failKind`, `signature` và `checks[]` giống chạy tuần
+    tự. `typecheck` (vài giây) vẫn chạy trước. Stack khác (mvn/gradle cùng ghi `target/`) vẫn tuần tự.
   - `code-scan` (mục 4, rubric dev V2/V3 và `security_rules_core.py` của harness; chỉ cảnh báo, chỉ dòng thêm, tối đa
     15): `TODO`/`FIXME` viết hoa, hàm "not implemented", debug output (`console.log`, `debugger`,
     `System.out.println`; bỏ qua test và thư mục `prisma/`, `scripts/`, `seeds/`, `migrations/`…), SQL viết hoa ghép

@@ -452,82 +452,113 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   const cwd = profile.root;
   const logSignature = (kind, res, name) => (res.timedOut ? `timeout:${name}`
     : signature(res.tail, { root: cwd }) ?? fallbackSignature(kind, res.tail, cwd));
-  for (const name of ['typecheck', 'build']) {
-    if (!c[name]) continue;
+  const compileStep = async name => {
     job.progress.push(name);
     const res = await runPwsh(c[name], { cwd, timeoutMs: limits.buildMs, logFile: log(name), tailBytes: 64 * 1024 });
-    checks.push({ name, status: res.code === 0 ? 'ok' : 'fail', seconds: Math.round(res.ms / 1000),
-      ...(res.code ? { tail: excerpt(res.tail) } : {}) });
-    if (res.code !== 0) return done('compile', `${name} failed`, logSignature('compile', res, name));
+    return { res, check: { name, status: res.code === 0 ? 'ok' : 'fail', seconds: Math.round(res.ms / 1000),
+      ...(res.code ? { tail: excerpt(res.tail) } : {}) } };
+  };
+  if (c.typecheck) {
+    const tc = await compileStep('typecheck');
+    checks.push(tc.check);
+    if (tc.res.code !== 0) return done('compile', 'typecheck failed', logSignature('compile', tc.res, 'typecheck'));
   }
 
-  // Test fixer khai: phải pass với bản sửa. Fail thì chạy lại một lần (mục 10, như gate Python cũ): pass lần hai là flaky.
+  // Test fixer khai và regression. Ghi check và kết quả vào `out` chứ không vào `checks`/`result`: khi chạy song song
+  // với build mà build fail thì bỏ cả phần này, kết quả giống hệt chạy tuần tự (test chưa chạy).
   const targets = testsAdded.filter(t => SAFE_TARGET.test(t));
-  let addedRun = null;
-  if (targets.length && c.test_one) {
-    job.progress.push('tests-added');
-    addedRun = await runTests(profile, 'test_one', { targets, logFile: log('tests-added'), timeoutMs: limits.testMs });
-    let flaky = false;
-    if (addedRun.res.code !== 0 && !addedRun.res.timedOut) {
-      const again = await runTests(profile, 'test_one', { targets, logFile: log('tests-added-rerun'), timeoutMs: limits.testMs });
-      if (again.res.code === 0) { flaky = true; addedRun = again; }
-    }
-    const res = addedRun.res;
-    result.testsAdded = addedRun.counts;
-    checks.push({ name: 'tests-added', status: res.code !== 0 ? 'fail' : flaky ? 'warn' : 'ok', counts: result.testsAdded, source: addedRun.source,
-      ...(flaky ? { warnings: ['failed once, then passed on rerun (flaky)'] } : {}), ...(res.code ? { tail: excerpt(res.tail) } : {}) });
-    if (res.code !== 0) return done('original_still_failing', 'declared tests fail', logSignature('original_still_failing', res, 'tests-added'));
-  }
+  const testPhase = async () => {
+    const out = { checks: [], result: {}, stop: null, addedRun: null };
+    const stop = (kind, detail, sig) => { out.stop = [kind, detail, sig]; return out; };
 
-  if (c.test_all) {
-    job.progress.push('regression');
-    const run = await runTests(profile, 'test_all', { logFile: log('regression'), timeoutMs: limits.testMs });
-    const { res } = run;
-    const known = new Set(baseline?.failing ?? []);
-    let fresh = run.failing.filter(t => !known.has(t));
-    let flaky = [];
-    // Mục 10: test mới fail được chạy lại một lần; lần hai pass thì là flaky (cảnh báo), không tốn một lượt fixer.
-    if (fresh.length && !res.timedOut && c.test_one) {
-      const again = rerunTargets(fresh, profile);
-      if (again.length) {
-        job.progress.push('regression-rerun');
-        const rerun = await runTests(profile, 'test_one', { targets: again, logFile: log('regression-rerun'), timeoutMs: limits.testMs });
-        const still = rerun.report ? fresh.filter(id => rerun.report.tests.get(id) !== 'passed') : rerun.res.code === 0 ? [] : fresh;
-        flaky = fresh.filter(id => !still.includes(id));
-        fresh = still;
+    // Test fixer khai: phải pass với bản sửa. Fail thì chạy lại một lần (mục 10, như gate Python cũ): pass lần hai là flaky.
+    if (targets.length && c.test_one) {
+      job.progress.push('tests-added');
+      let addedRun = await runTests(profile, 'test_one', { targets, logFile: log('tests-added'), timeoutMs: limits.testMs });
+      let flaky = false;
+      if (addedRun.res.code !== 0 && !addedRun.res.timedOut) {
+        const again = await runTests(profile, 'test_one', { targets, logFile: log('tests-added-rerun'), timeoutMs: limits.testMs });
+        if (again.res.code === 0) { flaky = true; addedRun = again; }
       }
-    }
-    result.regression = run.counts;
-    // Test fail sẵn từ lúc chuẩn bị: không phải do bản sửa, root không được tính vào kịch bản fail.
-    result.baselineFailures = run.failing.filter(t => known.has(t));
-    const regressed = res.timedOut || fresh.length > 0 || (res.code !== 0 && run.failing.length === 0);
-    checks.push({ name: 'regression', status: regressed ? 'fail' : flaky.length ? 'warn' : 'ok', counts: run.counts, source: run.source,
-      timedOut: res.timedOut, ...(flaky.length ? { warnings: [`failed, then passed on rerun (flaky): ${flaky.slice(0, 5).join('; ')}`] } : {}),
-      ...(regressed ? { newFailures: fresh.slice(0, 20), tail: excerpt(res.tail, 20) } : {}) });
-    // Chữ ký regression theo tên các test mới fail: log còn có lỗi của test fail sẵn, lấy theo log sẽ lẫn.
-    if (regressed) {
-      const sig = res.timedOut ? 'timeout:regression'
-        : fresh.length ? `regression:${[...fresh].sort().slice(0, 3).join(' | ').slice(0, 200)}` : logSignature('regression', res, 'regression');
-      return done(res.timedOut ? 'timeout' : 'regression', fresh.slice(0, 5).join('; ') || 'test command failed', sig);
+      out.addedRun = addedRun;
+      const res = addedRun.res;
+      out.result.testsAdded = addedRun.counts;
+      out.checks.push({ name: 'tests-added', status: res.code !== 0 ? 'fail' : flaky ? 'warn' : 'ok', counts: addedRun.counts, source: addedRun.source,
+        ...(flaky ? { warnings: ['failed once, then passed on rerun (flaky)'] } : {}), ...(res.code ? { tail: excerpt(res.tail) } : {}) });
+      if (res.code !== 0) return stop('original_still_failing', 'declared tests fail', logSignature('original_still_failing', res, 'tests-added'));
     }
 
-    // Mục 7 (test_case_disappeared của harness mẫu): test chạy ở baseline mà nay biến mất hay bị skip trông y như pass.
-    const gone = disappearedTests(baseline, run, acceptedRemovals);
-    checks.push({ name: 'tests-kept', status: !gone.length ? 'ok' : justified ? 'warn' : 'fail',
-      compared: baseline?.tests && run.report ? 'ids' : 'counts', ...(gone.length ? { problems: gone.slice(0, 20) } : {}) });
-    if (gone.length && justified) result.removedTests = gone;
-    if (gone.length && !justified) {
-      return done('forbidden_change', `tests that ran at baseline no longer run: ${gone.slice(0, 5).join('; ')}. ${testChangeHint}`, `tests-removed:${gone[0]}`);
+    if (c.test_all) {
+      job.progress.push('regression');
+      const run = await runTests(profile, 'test_all', { logFile: log('regression'), timeoutMs: limits.testMs });
+      const { res } = run;
+      const known = new Set(baseline?.failing ?? []);
+      let fresh = run.failing.filter(t => !known.has(t));
+      let flaky = [];
+      // Mục 10: test mới fail được chạy lại một lần; lần hai pass thì là flaky (cảnh báo), không tốn một lượt fixer.
+      if (fresh.length && !res.timedOut && c.test_one) {
+        const again = rerunTargets(fresh, profile);
+        if (again.length) {
+          job.progress.push('regression-rerun');
+          const rerun = await runTests(profile, 'test_one', { targets: again, logFile: log('regression-rerun'), timeoutMs: limits.testMs });
+          const still = rerun.report ? fresh.filter(id => rerun.report.tests.get(id) !== 'passed') : rerun.res.code === 0 ? [] : fresh;
+          flaky = fresh.filter(id => !still.includes(id));
+          fresh = still;
+        }
+      }
+      out.result.regression = run.counts;
+      // Test fail sẵn từ lúc chuẩn bị: không phải do bản sửa, root không được tính vào kịch bản fail.
+      out.result.baselineFailures = run.failing.filter(t => known.has(t));
+      const regressed = res.timedOut || fresh.length > 0 || (res.code !== 0 && run.failing.length === 0);
+      out.checks.push({ name: 'regression', status: regressed ? 'fail' : flaky.length ? 'warn' : 'ok', counts: run.counts, source: run.source,
+        timedOut: res.timedOut, ...(flaky.length ? { warnings: [`failed, then passed on rerun (flaky): ${flaky.slice(0, 5).join('; ')}`] } : {}),
+        ...(regressed ? { newFailures: fresh.slice(0, 20), tail: excerpt(res.tail, 20) } : {}) });
+      // Chữ ký regression theo tên các test mới fail: log còn có lỗi của test fail sẵn, lấy theo log sẽ lẫn.
+      if (regressed) {
+        const sig = res.timedOut ? 'timeout:regression'
+          : fresh.length ? `regression:${[...fresh].sort().slice(0, 3).join(' | ').slice(0, 200)}` : logSignature('regression', res, 'regression');
+        return stop(res.timedOut ? 'timeout' : 'regression', fresh.slice(0, 5).join('; ') || 'test command failed', sig);
+      }
+
+      // Mục 7 (test_case_disappeared của harness mẫu): test chạy ở baseline mà nay biến mất hay bị skip trông y như pass.
+      const gone = disappearedTests(baseline, run, acceptedRemovals);
+      out.checks.push({ name: 'tests-kept', status: !gone.length ? 'ok' : justified ? 'warn' : 'fail',
+        compared: baseline?.tests && run.report ? 'ids' : 'counts', ...(gone.length ? { problems: gone.slice(0, 20) } : {}) });
+      if (gone.length && justified) out.result.removedTests = gone;
+      if (gone.length && !justified) {
+        return stop('forbidden_change', `tests that ran at baseline no longer run: ${gone.slice(0, 5).join('; ')}. ${testChangeHint}`, `tests-removed:${gone[0]}`);
+      }
+      // Test fail ở baseline mà nay pass (không phải vì bị bỏ): item này sửa được chúng. tools.mjs ghi lại khi integrate
+      // để gợi ý sync các worktree khác (Practice #6: một test fail sẵn làm ba item mất điểm "existing tests").
+      // ZVUYZ41V BUG-02: fixer viết lại test fail sẵn dưới tên mới (allowTestChange); test cũ không còn chạy cũng là đã
+      // sửa, kể cả khi item trước đã được chấp nhận bỏ nó (acceptedRemovals, gate main sau integrate).
+      const passedNow = id => (run.report ? run.report.tests.get(id) === 'passed' : res.code === 0);
+      const accepted = new Set(acceptedRemovals);
+      out.result.fixesBaseline = (baseline?.failing ?? []).filter(t => !run.failing.includes(t)
+        && (gone.includes(t) ? justified : accepted.has(t) || passedNow(t)));
     }
-    // Test fail ở baseline mà nay pass (không phải vì bị bỏ): item này sửa được chúng. tools.mjs ghi lại khi integrate
-    // để gợi ý sync các worktree khác (Practice #6: một test fail sẵn làm ba item mất điểm "existing tests").
-    // ZVUYZ41V BUG-02: fixer viết lại test fail sẵn dưới tên mới (allowTestChange); test cũ không còn chạy cũng là đã
-    // sửa, kể cả khi item trước đã được chấp nhận bỏ nó (acceptedRemovals, gate main sau integrate).
-    const passedNow = id => (run.report ? run.report.tests.get(id) === 'passed' : res.code === 0);
-    const accepted = new Set(acceptedRemovals);
-    result.fixesBaseline = (baseline?.failing ?? []).filter(t => !run.failing.includes(t)
-      && (gone.includes(t) ? justified : accepted.has(t) || passedNow(t)));
+    return out;
+  };
+
+  // Build song song với test khi profile cho phép (node: `next build` ~40 s, 65% thời gian gate ở TOKXKPBV, mà vitest
+  // không đọc gì build sinh ra). Stack khác (mvn package / mvn test cùng ghi target/) vẫn tuần tự: build trước, fail thì
+  // không chạy test.
+  let build = null;
+  let tests = null;
+  if (c.build && profile.parallelBuild) {
+    const settled = await Promise.allSettled([compileStep('build'), testPhase()]);
+    for (const s of settled) if (s.status === 'rejected') throw s.reason;
+    [build, tests] = settled.map(s => s.value);
+  } else {
+    if (c.build) build = await compileStep('build');
+    if (!build || build.res.code === 0) tests = await testPhase();
   }
+  if (build) checks.push(build.check);
+  if (build && build.res.code !== 0) return done('compile', 'build failed', logSignature('compile', build.res, 'build'));
+  checks.push(...tests.checks);
+  Object.assign(result, tests.result);
+  if (tests.stop) return done(...tests.stop);
+  const { addedRun } = tests;
 
   // Build và test đã pass: lưu tree của đúng nội dung vừa kiểm (trừ answers/<ID>/, còn được sửa tiếp). worktree
   // integrate và commit_and_push chỉ nhận nội dung có tree này (hard gate). Tính sau khi build/test chạy để file

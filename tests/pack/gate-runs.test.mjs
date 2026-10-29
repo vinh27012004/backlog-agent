@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { detectProfile } from '../../pack/src/environment.mjs';
 import { runGate } from '../../pack/src/gate.mjs';
 import { Probe } from '../../pack/src/probe.mjs';
 import { sh, tempDir } from './support.mjs';
@@ -94,6 +95,56 @@ test('regression by test id: a flaky failure is rerun once, a test that no longe
   assert.deepEqual(ok.removedTests, ['tests/money.test.js > old name']);
   assert.ok(ok.findings.some(f => f.startsWith('tests-kept: ')));
   assert.deepEqual(ok.regression, { total: 3, passed: 3, failed: 0, skipped: 0 });
+});
+
+// TOKXKPBV: `next build` chiếm ~65% thời gian gate; stack node cho build chạy song song với test (profile.parallelBuild).
+test('build runs in parallel with the tests only when the profile allows it, and a failing build still wins', { timeout: 120_000 }, async () => {
+  const r = appRepo();
+  writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
+  writeFileSync(join(r.root, 'M1', 'answers', 'BUG-09', 'submit.json'), '{"status":"DONE"}');
+  // Build giả nằm ngoài diff (.logs/ bị exclude): pass khi log regression xuất hiện lúc nó còn chạy, tức test chạy cùng lúc.
+  const logs = join(r.root, '.logs');
+  mkdirSync(logs, { recursive: true });
+  const buildScript = (jobId, waitMs) => {
+    const file = join(logs, `build-${jobId}.cjs`);
+    const regressionLog = join(logs, `BUG-09-gate-${jobId}-regression.log`);
+    writeFileSync(file, `const fs = require('fs'); const end = Date.now() + ${waitMs};
+const tick = () => { if (fs.existsSync(${JSON.stringify(regressionLog)})) process.exit(0);
+  if (Date.now() > end) { console.error('regression did not start while the build ran'); process.exit(2); } setTimeout(tick, 50); };
+tick();\n`);
+    return `node "${file}"`;
+  };
+  const run = (jobId, parallelBuild, build) => runGate({ id: jobId, progress: [] }, {
+    key: 'BUG-09', checkoutRoot: r.root, matchRoot: join(r.root, 'M1'), folder: 'M1', base: r.base, baseline: BASELINE, template: null,
+    profile: { ...r.profile, parallelBuild, commands: { ...r.profile.commands, build } }, logDir: logs,
+    limits: { maxFiles: 25, buildMs: 60_000, testMs: 60_000 } });
+
+  const sequential = await run('job-seq', false, buildScript('job-seq', 1500));
+  assert.equal(sequential.failKind, 'compile', 'without parallelBuild the tests wait for the build');
+  assert.equal(sequential.checks.some(c => c.name === 'regression'), false);
+
+  const parallel = await run('job-par', true, buildScript('job-par', 30_000));
+  assert.equal(parallel.passed, true, JSON.stringify(parallel.checks));
+  const names = parallel.checks.map(c => c.name);
+  assert.ok(names.indexOf('build') < names.indexOf('regression'), 'checks keep the sequential order');
+  assert.equal(parallel.regression.total, 3, 'test results of a passing build are kept');
+
+  writeFileSync(join(logs, 'broken.cjs'), "console.error('src/lib.ts(3,1): error TS1005: expected'); process.exit(1);\n");
+  const broken = await run('job-broken', true, `node "${join(logs, 'broken.cjs')}"`);
+  assert.equal(broken.failKind, 'compile');
+  assert.equal(broken.detail, 'build failed');
+  assert.equal(broken.regression, null, 'test results of a failed build are dropped, as if they never ran');
+  assert.equal(broken.checks.some(c => c.name === 'regression'), false);
+});
+
+test('parallelBuild only for a node build that the test script does not depend on', () => {
+  const cases = [[{ build: 'next build', test: 'vitest run' }, true], [{ build: 'tsc', pretest: 'npm run build', test: 'jest' }, false],
+    [{ build: 'tsc', test: 'node --test dist/' }, false], [{ build: 'tsc', test: 'npm run build && jest' }, false], [{ test: 'vitest run' }, false]];
+  for (const [scripts, expected] of cases) {
+    const dir = tempDir('mtm-profile-');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts }));
+    assert.equal(detectProfile(dir).parallelBuild, expected, JSON.stringify(scripts));
+  }
 });
 
 // Practice #6 (HIET12OA): một test fail sẵn trái ý định hiện tại của app làm mọi item có "pnpm test exits 0" mất điểm.

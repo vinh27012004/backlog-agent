@@ -34,7 +34,7 @@ test('installer declares the codegraph MCP server only when the pinned version i
   assert.doesNotMatch(plain, /codegraph|__CODEGRAPH/);
   assert.match(plain, /\[mcp_servers\.team_runtime\][\s\S]*\[shell_environment_policy\]/);
   // L48: giới hạn subagent đủ cho 4 item cùng lúc kèm verifier + reviewer (Codex mặc định từ chối subagent thứ tư).
-  assert.match(plain, /\[agents\]\nmax_concurrent_threads_per_session = 8\n/);
+  assert.match(plain, /\[agents\]\nmax_concurrent_threads_per_session = 16\n/);
 
   const shim = fakeCodegraph(tw);
   const withIt = install(tw);

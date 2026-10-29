@@ -62,7 +62,7 @@ Mốc ZVUYZ41V: TASK-01 ra lúc 02:49:49, root thấy lúc 03:02; `spawn_agent` 
 
 - [ ] Kết quả tool của root có `notice {newItems, freeSlots}` khi item mới ra; root `start_work` item đó trong vòng
       1 phút.
-- [ ] `TeamWorkspace/.codex/config.toml` có `[agents] max_concurrent_threads_per_session = 8`; Player khởi động
+- [ ] `TeamWorkspace/.codex/config.toml` có `[agents] max_concurrent_threads_per_session = 16`; Player khởi động
       root bình thường và checker không báo lỗi với khoá này.
 - [ ] Số subagent chạy cùng lúc lớn nhất (mong đợi trên 3), và có `agent thread limit reached` không. Nếu có: root
       chờ rồi spawn lại, không bỏ reviewer hay verifier.
