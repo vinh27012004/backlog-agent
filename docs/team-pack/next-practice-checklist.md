@@ -65,8 +65,8 @@ nhưng chuẩn CSV của CR-01 không lưu ở đâu nên không đối chiếu 
 Mốc ZVUYZ41V: 30,29 credit; fixer 25,41, trong đó 17,8 là lượt 6.1-sol thứ 2–3. TASK-02 luna 15,6 phút rồi sol 3,8
 phút; BUG-02 luna 7,1 phút rồi sol 2 phút; CR-01 luna 14 phút.
 
-- [ ] Item tier `strong` (BUG-02, CR-01, TASK-02) chạy `gpt-6.1-sol` ngay lượt 1; item `small` chạy `gpt-6-luna`
-      medium. Tìm trong transcript root: `"spawn_agent"` rồi xem `model`, `reasoning_effort`.
+- [ ] Item tier `strong` (BUG-02, CR-01, TASK-02) chạy `gpt-6.1-sol` high ngay lượt 1; item `small` lượt 1, reviewer
+      và verifier chạy `gpt-6.1-terra` (medium; reviewer high); lượt 2 trở đi `gpt-6.1-sol` high; không lượt nào `gpt-6-sol`. Tìm trong transcript root: `"spawn_agent"` rồi xem `model`, `reasoning_effort`.
 - [ ] Thời gian mỗi item và tổng credit so với ZVUYZ41V: sol từ lượt 1 có rút ngắn thời gian mà không đẩy credit vượt
       quá mức đã tiết kiệm không.
 - [ ] Lần cuối của item có deadline hoặc PI dùng `gpt-6-astra`: ghi số lần và credit (một lượt ≈ 158 credit). #7 không

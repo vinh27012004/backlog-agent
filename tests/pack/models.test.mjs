@@ -10,17 +10,17 @@ const names = plan => plan.fixer.map(m => `${m.model}/${m.reasoning_effort}`);
 
 test('a plain item starts cheap and moves to the strong tier on retries', () => {
   const plan = modelPlan({ type: 'TASK', modelTier: 'small', deadline: false, allowed: ENTERPRISE });
-  assert.deepEqual(names(plan), ['gpt-6-sol/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
-  assert.deepEqual(plan.reviewer, { model: 'gpt-6-sol', reasoning_effort: 'high', tier: 'review' });
+  assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
+  assert.deepEqual(plan.reviewer, { model: 'gpt-6.1-terra', reasoning_effort: 'high', tier: 'review' });
   // Checker giả thuyết chỉ chạy khi PI đã kẹt: dùng tier strong.
   assert.deepEqual(plan.piHypothesis, { model: 'gpt-6.1-sol', reasoning_effort: 'high', tier: 'strong' });
   // Verifier chỉ chạy gate và đối chiếu MVS: tier small.
-  assert.deepEqual(plan.verifier, { model: 'gpt-6-sol', reasoning_effort: 'medium', tier: 'small' });
+  assert.deepEqual(plan.verifier, { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' });
 });
 
 test('a deadline item still starts cheap and gets the top model on its last try', () => {
   const plan = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: ENTERPRISE });
-  assert.deepEqual(names(plan), ['gpt-6-sol/medium', 'gpt-6.1-sol/high', 'gpt-6-astra/high']);
+  assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6.1-sol/high', 'gpt-6-astra/high']);
 });
 
 test('a strong-tier item starts on the strong model; a PI ends on top, a CR without deadline never does', () => {
@@ -33,7 +33,7 @@ test('a strong-tier item starts on the strong model; a PI ends on top, a CR with
 
 test('on the free account each tier falls back to an allowed model', () => {
   const plan = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: FREE });
-  assert.deepEqual(names(plan), ['gpt-6-luna/medium', 'gpt-5.6-terra/high', 'gpt-5.6-terra/high']);
+  assert.deepEqual(names(plan), ['gpt-6-luna/medium', 'gpt-6-luna/high', 'gpt-6-luna/high']);
   const plain = modelPlan({ type: 'TASK', modelTier: 'small', deadline: false, allowed: FREE });
   assert.equal(plain.fixer[0].model, 'gpt-6-luna');
   assert.equal(plain.reviewer.model, 'gpt-6-luna');

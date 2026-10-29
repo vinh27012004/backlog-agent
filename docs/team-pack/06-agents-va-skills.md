@@ -154,21 +154,23 @@ loopback, ảnh chỉ vào `answers/<ID>/evidence/`) và hướng dẫn trong sk
 
   | Tier | Thứ tự ưu tiên | Dùng cho |
   |---|---|---|
-  | `small` | 6-luna, 5.6-luna, 6.1-terra (medium) | Lần 1 của item tier `small`, kể cả item có deadline |
-  | `strong` | 6.1-sol, 6-sol, 5.6-terra, 5.6-sol, 6-luna (high) | Lần 1 của item tier `strong` (PI, CR, item `hard`, item chỉ cần câu trả lời có cờ `tricky` (từ 29/10, sau TOKXKPBV), hoặc Jev chọn `strong`); từ lần 2 mọi item; `team_pi_hypothesis` (PI đã kẹt, từ 28/10; hoặc reviewer chỉ cãi đáp án của item trả lời thuần, từ 29/10) |
+  | `small` | 6.1-terra, 6.1-sol, 6-sol, 6-luna (medium) | Lần 1 của item tier `small`, kể cả item có deadline |
+  | `strong` | 6.1-sol, 6.1-terra, 6-sol, 6-luna (high) | Lần 1 của item tier `strong` (PI, CR, item `hard`, item chỉ cần câu trả lời có cờ `tricky` (từ 29/10, sau TOKXKPBV), hoặc Jev chọn `strong`); từ lần 2 mọi item; `team_pi_hypothesis` (PI đã kẹt, từ 28/10; hoặc reviewer chỉ cãi đáp án của item trả lời thuần, từ 29/10) |
   | `top` | 6-astra, rồi như `strong` (high) | Lần cuối (3, PI 4) của item có deadline hoặc PI |
-  | `review` | 6-luna, 5.6-luna (high), 6.1-terra (medium) | `team_reviewer` |
+  | `review` | 6.1-terra, 6.1-sol, 6-sol, 6-luna (high) | `team_reviewer` |
   | `small` | như trên | `team_verifier` (chỉ chạy gate và đối chiếu MVS, `triage.models.verifier`) |
 
-  Từ 29/10 lần 1 luôn chạy 6-luna và reviewer cũng 6-luna (theo dashboard credit 22–28/10: root, fixer và reviewer
-  chạy 6.1-sol chiếm gần hết 225,79 credit). Từ 29/10 (sau ZVUYZ41V) item tier `strong` lại chạy 6.1-sol ngay lần 1:
-  BTC xếp hạng theo điểm, rồi thời gian, rồi mới tới credit, mà 6-luna lần 1 trên item khó tốn thời gian rồi vẫn phải
-  lên sol (TASK-02: 15,6 phút luna fail gate, sol 3,8 phút; BUG-02: 7,1 phút luna, sol 2 phút). Item tier `small`,
-  reviewer, verifier và root vẫn chạy 6-luna.
+  Từ 29/10 (sau ZVUYZ41V) item tier `strong` chạy 6.1-sol ngay lần 1: BTC xếp hạng theo điểm, rồi thời gian, rồi mới
+  tới credit, mà 6-luna lần 1 trên item khó tốn thời gian rồi vẫn phải lên sol (TASK-02: 15,6 phút luna fail gate, sol
+  3,8 phút; BUG-02: 7,1 phút luna, sol 2 phút). Từ 29/10 (sau TOKXKPBV) thang xếp theo giá: tier `small`
+  (lần 1 item dễ, verifier) và `review` chạy 6.1-terra, giá bằng nửa 6.1-sol (25 / 1,25 / 125 credit mỗi 1M input /
+  cached / output, 6.1-sol 50 / 2,5 / 250); `strong` (item khó, lần thử lại, checker PI) chạy 6.1-sol; astra, đắt
+  nhất, chỉ ở lần cuối của item có deadline hoặc PI. 6-sol giá như 6.1-sol mà cũ hơn, kém cả 6.1-terra, nên đứng sau cả hai; các model còn lại
+  trong mỗi tier chỉ là dự phòng khi tài khoản không có model đứng trước.
 
-  Thứ tự theo giá chính thức và số token thật của các trận tập (27/10): một lượt fixer điển hình (4M input,
-  cache 97%, 25K output) tốn khoảng $0,06 trên 6-luna, $0,44 trên 6.1-terra, $0,88 trên 6.1-sol và $6,33 trên astra.
-  6-sol, 5.6-sol, 5.6-terra đắt hơn 6.1-sol mà cũ hơn, nên chỉ là dự phòng khi tài khoản không có model mới
-  (tài khoản free chỉ có 6-luna, 5.6-terra, 5.6-luna). Effort tối đa là `high`: `ultra` tự spawn thêm agent.
+  Một lượt fixer điển hình (4M input, cache 97%, 25K output, giá 27/10) tốn khoảng $0,06 trên 6-luna, $0,44 trên
+  6.1-terra, $0,88 trên 6.1-sol và $6,33 trên astra. Các model 5.6 không có trong danh sách vì lúc thi không dùng;
+  tài khoản free (6-luna, 5.6-terra, 5.6-luna) nên rơi về 6-luna ở mọi tier. Effort tối đa là `high`: `ultra` tự
+  spawn thêm agent.
 - Không bao giờ thử model ngoài danh sách. Không model nào trong tier khớp `allowedModels`, hoặc provider từ chối
   (`MODEL_UNAVAILABLE`), thì spawn không truyền model: subagent dùng model của root.
