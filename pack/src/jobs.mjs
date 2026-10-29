@@ -13,7 +13,7 @@ export function childEnv(extra = {}) {
     CHECKPOINT_DISABLE: '1', NEXT_TELEMETRY_DISABLED: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
 }
 
-function killTree(pid) {
+export function killTree(pid) {
   if (!pid) return;
   if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
   else try { process.kill(-pid, 'SIGKILL'); } catch { /* đã chết */ }

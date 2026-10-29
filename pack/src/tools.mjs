@@ -1,6 +1,7 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
+import { app, stopApp } from './app.mjs';
 import { captureEvidence } from './browser.mjs';
 import { indexCodegraph } from './codegraph.mjs';
 import { CompanyTools } from './company.mjs';
@@ -191,11 +192,16 @@ export class Runtime {
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
         inputSchema: obj({ path: str('Absolute folder; default matchRoot.') }), readOnly: true, handler: a => this.detectProfile(a) },
-      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key}, waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
+      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost (the `app` tool gives its url) and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key}, waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
         inputSchema: obj({ steps: { type: 'array', items: { type: 'object' }, description: 'Ordered actions, max 60.' },
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
         handler: a => this.captureEvidence(a) },
+      { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
+        inputSchema: obj({ action: { type: 'string', enum: ['start', 'status', 'stop'] }, backlogItemKey: str('Item key.'),
+          matchRoot: str('start: absolute matchRoot of the worktree (from the brief).'), build: bool('start: build first (default true).'),
+          waitSeconds: num('start/status: seconds to wait for the app to answer (max 50, default 50).') }, ['action', 'backlogItemKey']),
+        handler: a => app({ teamWorkspace: this.teamWorkspace, ...a }) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
       // lặp lại khi chờ khoá, qua auto_review mỗi lần thì tốn token vô ích.
       { name: 'app_data', description: 'Any agent: lock for the app database that every worktree shares. lock before running a seed script or creating data through the app for MVS evidence; unlock once the evidence/report that reads that data is written. While another item holds it, lock returns locked:false: call again (waitSeconds up to 50) and do not seed or create data meanwhile. Expires after `minutes` (default 15, max 30); lock again to renew.',
@@ -769,6 +775,8 @@ export class Runtime {
     }
     if (!this.liveWorktree(key)) fail('WORKTREE_MISSING', `${key} has no worktree`);
     if (action === 'remove') {
+      // App do tool `app` chạy giữ file trong worktree (Windows): dừng trước khi xoá.
+      const stoppedApp = stopApp(this.teamWorkspace, key).stopped;
       await git(['worktree', 'remove', '--force', wt.worktreeRoot], { cwd: checkoutRoot, timeoutMs: 120_000, allowFail: true });
       // Windows: file bị khoá làm `worktree remove` bỏ dở (Practice HIET12OA: codegraph.db của TASK-02, root kill server
       // codegraph của cả đội để xoá). Xoá phần còn lại được bao nhiêu thì xoá; đăng ký worktree phải mất, thư mục sót thì kệ.
@@ -781,7 +789,7 @@ export class Runtime {
       delete ji.worktreeBase;
       j.save();
       const leftover = existsSync(wt.worktreeRoot);
-      return { removed: true, ...(leftover ? { leftover: wt.worktreeRoot,
+      return { removed: true, ...(stoppedApp ? { stoppedApp } : {}), ...(leftover ? { leftover: wt.worktreeRoot,
         hint: 'Some files are locked (app, codegraph). The worktree is unregistered and no longer blocks anything: leave the folder, do not kill processes.' } : {}) };
     }
     // Đưa worktree lên HEAD của main, giữ thay đổi chưa commit của item (Practice #5: sidebar lỗi của BUG-01 che màn

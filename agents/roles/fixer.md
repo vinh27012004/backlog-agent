@@ -30,7 +30,7 @@ about 5 minutes after it for the gate and the submission, and an item past its d
 so a late perfect answer scores less than a partial one on time. Do the fix and its test first, then the
 evidence scenarios in MVS order. Check the clock (`[DateTime]::UtcNow.ToString('o')`) before each scenario;
 when `return_by` has passed or the next scenario will not finish before it, stop: mark the remaining
-scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, stop the app you started,
+scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, `app stop`,
 write the answer file and your result JSON, and reply. Do the same at once when the orchestrator says time is up.
 A PI also gives `checkpoint_by`: by then one hypothesis must be confirmed, otherwise reply with `partial`
 and your `hypotheses` as the PI skill says.

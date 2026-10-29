@@ -46,7 +46,7 @@ No human will answer questions during the match. Never ask for confirmation; dec
   use `rg` for those, for text that is not a symbol (messages, config keys, SQL, CSS classes), and when codegraph
   says the project is not indexed.
 - Never use computer use, desktop control or the operator's browser windows. For screenshots use the
-  `capture_evidence` tool against an app you started yourself.
+  `capture_evidence` tool against the app that the `app` tool started for your worktree.
 - Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,
   actions, `assertText`, `screenshot`) in its `steps` and a `browserProfile` to keep the login; never drive
   the UI one step per call. A failed call: fix the steps, at most 2 retries per scenario, then record that
@@ -116,7 +116,7 @@ about 5 minutes after it for the gate and the submission, and an item past its d
 so a late perfect answer scores less than a partial one on time. Do the fix and its test first, then the
 evidence scenarios in MVS order. Check the clock (`[DateTime]::UtcNow.ToString('o')`) before each scenario;
 when `return_by` has passed or the next scenario will not finish before it, stop: mark the remaining
-scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, stop the app you started,
+scenarios `NOT_RUN` with the reason "time box", release the `app_data` lock, `app stop`,
 write the answer file and your result JSON, and reply. Do the same at once when the orchestrator says time is up.
 A PI also gives `checkpoint_by`: by then one hypothesis must be confirmed, otherwise reply with `partial`
 and your `hypotheses` as the PI skill says.

@@ -62,7 +62,7 @@ const COMMON_SECTIONS = {
     '  use `rg` for those, for text that is not a symbol (messages, config keys, SQL, CSS classes), and when codegraph',
     '  says the project is not indexed.',
     '- Never use computer use, desktop control or the operator\'s browser windows. For screenshots use the',
-    '  `capture_evidence` tool against an app you started yourself.',
+    '  `capture_evidence` tool against the app that the `app` tool started for your worktree.',
     '- Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,',
     '  actions, `assertText`, `screenshot`) in its `steps` and a `browserProfile` to keep the login; never drive',
     '  the UI one step per call. A failed call: fix the steps, at most 2 retries per scenario, then record that',

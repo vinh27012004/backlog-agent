@@ -199,11 +199,12 @@ wrong one scores 0 and cannot be resubmitted. Be correct, then lose no minute.
 - Never edit `exam-info.json`, `env-require/` or files outside the match folder.
 
 ## Screenshots and the running app
-The fixer starts the app, captures screenshots and runs data scenarios itself, following
-`.agents/skills/backlog-references/evidence-playbook.md` (its prompt points there: ports, app log outside the worktree,
+The fixer starts the app (the `app` tool: production build, own port, log outside the worktree), captures screenshots
+and runs data scenarios itself, following `.agents/skills/backlog-references/evidence-playbook.md` (its prompt points there:
 `capture_evidence` flow and selectors, `force: true`, `route` for a failing server, `app_data` lock and re-seeding).
 Do not repeat that in the brief. Your part:
 - Never use computer use or the operator's windows, and never take screenshots yourself.
+- `worktree remove` stops the item's app (`stoppedApp`). Never kill app processes yourself.
 - A fix to something every screen shares (layout, sidebar, header, navigation, login) covers targets in the other
   worktrees (Practice #5: BUG-01's sidebar covered the Accounting tabs; their fixers click through with `force: true`).
   Once that fix is integrated, `worktree sync` every other item whose fixer has not reached its evidence yet (between

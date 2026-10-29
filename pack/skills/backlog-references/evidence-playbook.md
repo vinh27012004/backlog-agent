@@ -11,19 +11,25 @@ reason.
 of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
 scored 0 of 200 although all 3 scenarios passed). Every listed file must exist in `answers/<ID>/evidence/` and appear
 in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
-- `beforeFix: true`: capture it **first**, before you change any code, on the unfixed app (build, start, one
-  `capture_evidence` call, stop). It shows the defect, so take it even though the screen looks broken.
+- `beforeFix: true`: capture it **first**, before you change any code, on the unfixed app (`app start`, one
+  `capture_evidence` call, `app stop`). It shows the defect, so take it even though the screen looks broken.
 - Code already changed (a retry): save your change as a patch, undo it, capture, re-apply it:
-  `git diff HEAD --binary > <checkoutRoot>/.team-work/scratch/<ID>/fix.patch`, `git apply -R <that file>`, restart the
-  app, capture, `git apply <that file>`, check `git status`. Never `git stash`: the stash is shared by every worktree.
+  `git diff HEAD --binary > <checkoutRoot>/.team-work/scratch/<ID>/fix.patch`, `git apply -R <that file>`, `app start`
+  again (it rebuilds), capture, `git apply <that file>`, check `git status`. Never `git stash`: the stash is shared by every worktree.
 
-## 1. Start the app from your worktree
-- Build first, then start it on a free port (3100, 3101, …; another item's app may hold 3000) and record its PID.
-  Stop it when your evidence is written: `taskkill /PID <pid> /T /F`.
-- Send its output to `<checkoutRoot>/.team-work/logs/<ID>-app.log`, never into the worktree: a running app locks its
-  log file on Windows and the orchestrator can no longer sync or remove the worktree (Practice HIET12OA).
-- pnpm passes `--` literally: `pnpm exec next start -p 3100`, not `pnpm run start -- -p 3100`.
-- `EADDRINUSE`: take the next port; never kill a process you did not start.
+## 1. Start the app from your worktree: the `app` tool
+- `app {action: "start", backlogItemKey: "<ID>", matchRoot: "<worktree matchRoot>"}` builds the production version,
+  starts it detached on a free port (3100+) with its log in `<checkoutRoot>/.team-work/logs/<ID>-app.log`, and waits
+  until it answers. `state: "ready"` gives the `url` for `capture_evidence`; `"starting"`: call
+  `app {action: "status", backlogItemKey, waitSeconds: 50}`; `"failed"`: read `tail`, fix the cause, start again.
+- Never run `pnpm dev`, `next start` or `taskkill` yourself (Practice TOKXKPBV: BUG-01's fixer started the dev
+  server 4 times, killed processes by port and lost 6 minutes to a dev server that served stale CSS).
+- Changed code since the last start: `app start` again; it stops the old app and rebuilds. Pass `build: false` only
+  right after a build you ran yourself.
+- `app {action: "stop", backlogItemKey}` once your evidence is written (also on a time box stop).
+- `UNSUPPORTED_APP` (not a node app): build, then start it yourself on a free port from 3100, output to the log path
+  above (never into the worktree: Windows locks a running app's log and the worktree can no longer be synced or
+  removed), and stop it with `taskkill /PID <pid> /T /F`. Never kill a process you did not start.
 - Seeded login users and passwords are in the repo's seed script; use the ones the MVS names.
 - Never use computer use, desktop control or the operator's browser windows.
 

@@ -625,6 +625,29 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Test: `tests/pack/e2e.test.mjs` (tiến trình helper thứ hai: các lời gọi bị chặn, file sai, gate qua proxy, gọi lại
   ra cùng job, root thấy cùng job).
 
+### 5.23 `app` (A, mới 29/10, sau TOKXKPBV)
+
+- **Vì sao**: fixer BUG-01 của TOKXKPBV mất khoảng 6 trong 11 phút để tự chạy `pnpm dev` 4 lần, `taskkill` theo port,
+  và gỡ một dev server trả CSS cũ (class Tailwind mới không có), rồi mới build bản production. Các trận trước cũng tốn
+  thời gian và token cho port bận, log khoá worktree (HIET12OA), app chưa chạy khi chụp (ZVUYZ41V `chrome-error`).
+- `{action: "start", backlogItemKey, matchRoot, build? (mặc định true), waitSeconds? (≤ 50, mặc định 50)}`:
+  `matchRoot` tuyệt đối trong `TeamWorkspace/matches/` (helper của subagent chưa configure nên không tự biết worktree).
+  Dừng app cũ của item, chọn port trống 3100–3199 (bỏ port của app item khác đang sống), rồi chạy build và start
+  trong **một tiến trình tách rời**: vỏ `node` (detached) gọi `pwsh` với `stdio: inherit`, vì `pwsh` detached trên
+  Windows không có console và không ghi gì ra file log. App sống tiếp khi helper của subagent kết thúc. Log ở
+  `<checkoutRoot>/.team-work/logs/<ID>-app.log`; trạng thái `{pid, port, mode, log, matchRoot}` ở
+  `team-sdlc-pack/local/apps/<ID>.json`. Chờ tới khi `http://localhost:<port>/` trả lời (mã nào cũng được).
+- Kết quả: `ready {url, port, pid, mode, log}`; `starting` (chưa xong trong `waitSeconds`: gọi `status`); `failed
+  {tail}` (tiến trình thoát, file trạng thái bị xoá).
+- Lệnh (chỉ stack node; stack khác trả `UNSUPPORTED_APP` và playbook giữ cách tự chạy): có script `start` thì build
+  rồi start, `mode: production`; script là `next start` thì `<pm> exec next start -p <port>` (PORT trong `.env` của
+  app có thể đè biến môi trường), còn lại `<pm> run start` với `PORT`. Không có `start` thì `dev`, không build.
+- `status {backlogItemKey, waitSeconds?}`, `stop {backlogItemKey}` (`taskkill /T /F` theo pid trong file trạng
+  thái). `worktree remove` của root gọi `stop` trước khi xoá và trả `stoppedApp`.
+- Không `readOnlyHint`: chạy tiến trình nên qua `auto_review`.
+- Test: `tests/pack/app.test.mjs` (start qua MCP rồi đóng helper mà app vẫn chạy, hai item hai port, start lại thì
+  build lại, build fail trả `tail`, đường dẫn ngoài `matches/` bị chặn, lệnh cho Next/dev/java).
+
 ### 5.19 `decide` (R, mới, D9)
 
 - **Input**: `{point: "triage"|"route"|"root_cause_confirmed"|"next_action", backlogItemKey, context?}`.
