@@ -1,30 +1,30 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
-import { app, stopApp } from './app.mjs';
-import { captureEvidence } from './browser.mjs';
-import { indexCodegraph } from './codegraph.mjs';
-import { CompanyTools } from './company.mjs';
-import { appDataLock } from './datalock.mjs';
-import { Decider } from './decisions.mjs';
-import { JevClient, loadJevConfig } from './jev.mjs';
-import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './environment.mjs';
-import { modelPlan } from './models.mjs';
-import { answerOnlyText, itemSignals } from './signals.mjs';
-import { EventQueue } from './events.mjs';
-import { GameMaster } from './game.mjs';
-import { answerAgreement, answerCheck, answerFields, changedFiles, itemEvidence, itemRequirements, runGate, scenarioCounts } from './gate.mjs';
-import { contentTree, git, normalizeRepoUrl, revParse, treeChanges } from './git.mjs';
-import { HttpClient } from './http.mjs';
-import { Jobs } from './jobs.mjs';
-import { Journal } from './journal.mjs';
-import { Probe } from './probe.mjs';
-import { PREPARATION_STAGES, ProgressWriter } from './progress.mjs';
-import { PROXY_TOOLS, forward, startProxyServer } from './proxy.mjs';
-import { redactDeep } from './redact.mjs';
-import { Session } from './session.mjs';
-import { trustedTeamWorkspace } from './paths.mjs';
-import { HelperError, fail, isId, oneLine, writeFileAtomic } from './util.mjs';
+import { app, stopApp } from './env/app.mjs';
+import { captureEvidence } from './env/browser.mjs';
+import { indexCodegraph } from './env/codegraph.mjs';
+import { CompanyTools } from './match/company.mjs';
+import { appDataLock } from './env/datalock.mjs';
+import { Decider } from './decide/decisions.mjs';
+import { JevClient, loadJevConfig } from './decide/jev.mjs';
+import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
+import { modelPlan } from './decide/models.mjs';
+import { answerOnlyText, itemSignals } from './decide/signals.mjs';
+import { EventQueue } from './core/events.mjs';
+import { GameMaster } from './match/game.mjs';
+import { answerAgreement, answerCheck, answerFields, changedFiles, itemEvidence, itemRequirements, runGate, scenarioCounts } from './gate/gate.mjs';
+import { contentTree, git, normalizeRepoUrl, revParse, treeChanges } from './core/git.mjs';
+import { HttpClient } from './core/http.mjs';
+import { Jobs } from './core/jobs.mjs';
+import { Journal } from './core/journal.mjs';
+import { Probe } from './gate/probe.mjs';
+import { PREPARATION_STAGES, ProgressWriter } from './match/progress.mjs';
+import { PROXY_TOOLS, forward, startProxyServer } from './core/proxy.mjs';
+import { redactDeep } from './core/redact.mjs';
+import { Session } from './core/session.mjs';
+import { trustedTeamWorkspace } from './core/paths.mjs';
+import { HelperError, fail, isId, oneLine, writeFileAtomic } from './core/util.mjs';
 
 const PREPARE_BUDGET_MS = 8 * 60_000;
 const GATE_LIMITS = { maxFiles: 25, buildMs: 300_000, testMs: 300_000 };
@@ -1490,7 +1490,7 @@ export class Runtime {
     }
   }
 
-  // Đặc trưng khách quan cho Jev và luật difficulty (src/signals.mjs); không có checkout thì bỏ phần grep code.
+  // Đặc trưng khách quan cho Jev và luật difficulty (src/decide/signals.mjs); không có checkout thì bỏ phần grep code.
   async itemSignals(key, item) {
     const root = this.session.paths?.matchRoot;
     let scenarios = 0;
@@ -1502,7 +1502,7 @@ export class Runtime {
     return { ...ji.triage, ...ji.route, by: ji.triageSource, models: this.spawnModels(key, ji.route?.modelTier) };
   }
 
-  // Model cho từng lần spawn (src/models.mjs), tính lại mỗi lần vì allowedModels có thể đổi khi Resume; null khi Player
+  // Model cho từng lần spawn (src/decide/models.mjs), tính lại mỗi lần vì allowedModels có thể đổi khi Resume; null khi Player
   // không gửi MTM_MODEL_POLICY_V1.
   spawnModels(key, modelTier) {
     const item = this.gm.view?.items.find(i => i.key === key);

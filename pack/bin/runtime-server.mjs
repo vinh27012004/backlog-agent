@@ -3,8 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from '../src/mcp.mjs';
-import { redact } from '../src/redact.mjs';
+import { createServer } from '../src/core/mcp.mjs';
+import { redact } from '../src/core/redact.mjs';
 import { Runtime } from '../src/tools.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -1,7 +1,7 @@
 // Validator log của đội phải cho cùng kết quả với validateProgressEvent của Player 0.9.33.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { eventProblem, ProgressWriter } from '../../pack/src/progress.mjs';
+import { eventProblem, ProgressWriter } from '../../pack/src/match/progress.mjs';
 import { hasPlayer, player, tempDir } from './support.mjs';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';

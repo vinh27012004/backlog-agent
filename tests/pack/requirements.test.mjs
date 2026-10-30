@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Journal } from '../../pack/src/journal.mjs';
+import { Journal } from '../../pack/src/core/journal.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
 import { tempDir } from './support.mjs';
 

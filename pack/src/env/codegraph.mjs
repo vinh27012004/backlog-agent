@@ -5,9 +5,9 @@
 // và cho worktree ngay trong `worktree create`, trước khi root kịp giao việc cho fixer.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, run } from './jobs.mjs';
+import { childEnv, run } from '../core/jobs.mjs';
 
-export const CODEGRAPH = JSON.parse(readFileSync(new URL('../config/codegraph.json', import.meta.url), 'utf8'));
+export const CODEGRAPH = JSON.parse(readFileSync(new URL('../../config/codegraph.json', import.meta.url), 'utf8'));
 
 // Telemetry tắt; không tự tải bundle từ GitHub giữa trận khi bản cài thiếu (shim tự làm vậy nếu không cấm).
 export const CODEGRAPH_ENV = { CODEGRAPH_TELEMETRY: '0', DO_NOT_TRACK: '1', CODEGRAPH_NO_DOWNLOAD: '1' };

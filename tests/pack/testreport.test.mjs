@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { disappearedTests } from '../../pack/src/gate.mjs';
-import { baselineOf, fillTargets, readReport, rerunTargets, scriptEndsWithRunner, testCommand } from '../../pack/src/testreport.mjs';
+import { disappearedTests } from '../../pack/src/gate/gate.mjs';
+import { baselineOf, fillTargets, readReport, rerunTargets, scriptEndsWithRunner, testCommand } from '../../pack/src/gate/testreport.mjs';
 import { tempDir } from './support.mjs';
 
 test('vitest JSON report (format of a real vitest 3.2 run) gives one id per test', () => {

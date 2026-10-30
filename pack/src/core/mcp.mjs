@@ -1,5 +1,5 @@
 // Server MCP tối thiểu qua stdio (05 §3): mỗi message một dòng JSON-RPC 2.0, stdout chỉ chứa JSON-RPC.
-import { callTool } from './tools.mjs';
+import { callTool } from '../tools.mjs';
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
 

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { mockTransport } from '../../pack/src/jev.mjs';
+import { mockTransport } from '../../pack/src/decide/jev.mjs';
 import { fakeGameMaster, hasPlayer, install, makeRemote, McpClient, player, sh, tempDir } from './support.mjs';
 
 const MATCH = 'TEST1234';

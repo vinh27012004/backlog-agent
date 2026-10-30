@@ -4,9 +4,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { answerAgreement, answerCheck, answerFields, baselineTestFiles, changedFiles, codeScan, itemEvidence, itemRequirements, mvsEvidence,
-  requirementsCheck, runGate, scenarioCounts } from '../../pack/src/gate.mjs';
-import { contentTree, treeChanges } from '../../pack/src/git.mjs';
-import { validateSchema } from '../../pack/src/jsonschema.mjs';
+  requirementsCheck, runGate, scenarioCounts } from '../../pack/src/gate/gate.mjs';
+import { contentTree, treeChanges } from '../../pack/src/core/git.mjs';
+import { validateSchema } from '../../pack/src/core/jsonschema.mjs';
 import { sh, tempDir } from './support.mjs';
 
 // Rút gọn từ BUG-02-submit.schema.json thật của Practice #1.

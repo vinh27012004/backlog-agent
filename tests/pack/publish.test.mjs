@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { contentTree } from '../../pack/src/git.mjs';
-import { Journal } from '../../pack/src/journal.mjs';
+import { contentTree } from '../../pack/src/core/git.mjs';
+import { Journal } from '../../pack/src/core/journal.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
 import { sh, tempDir } from './support.mjs';
 

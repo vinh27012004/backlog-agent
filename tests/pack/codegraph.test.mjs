@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CODEGRAPH, indexCodegraph } from '../../pack/src/codegraph.mjs';
+import { CODEGRAPH, indexCodegraph } from '../../pack/src/env/codegraph.mjs';
 import { install, tempDir } from './support.mjs';
 
 // Shim giả: ghi lại lệnh nhận được, `init`/`sync` tạo .codegraph/, `version` in phiên bản, `fail` trong path thì lỗi.

@@ -2,9 +2,9 @@
 // (so baseline) → answer. Dừng ở lỗi đầu tiên; số test là số thật đã chạy.
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix, relative } from 'node:path';
-import { contentTree, git } from './git.mjs';
-import { runPwsh } from './jobs.mjs';
-import { validateSchema } from './jsonschema.mjs';
+import { contentTree, git } from '../core/git.mjs';
+import { runPwsh } from '../core/jobs.mjs';
+import { validateSchema } from '../core/jsonschema.mjs';
 import { condense, signature } from './logs.mjs';
 import { SAFE_TARGET, rerunTargets, runTests } from './testreport.mjs';
 

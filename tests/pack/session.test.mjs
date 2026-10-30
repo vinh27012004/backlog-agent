@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Session } from '../../pack/src/session.mjs';
-import { sha256 } from '../../pack/src/util.mjs';
+import { Session } from '../../pack/src/core/session.mjs';
+import { sha256 } from '../../pack/src/core/util.mjs';
 import { tempDir } from './support.mjs';
 
 const MATCH = 'TEST1234';

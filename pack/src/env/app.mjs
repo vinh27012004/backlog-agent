@@ -9,9 +9,9 @@ import { createServer } from 'node:net';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
-import { childEnv, killTree } from './jobs.mjs';
-import { redact } from './redact.mjs';
-import { fail, sleep, writeFileAtomic } from './util.mjs';
+import { childEnv, killTree } from '../core/jobs.mjs';
+import { redact } from '../core/redact.mjs';
+import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const FIRST_PORT = 3100;
 const LAST_PORT = 3199;

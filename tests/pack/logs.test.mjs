@@ -1,7 +1,7 @@
 // Log Condenser (port tests/test_gate.py LogsTest): chữ ký lỗi ổn định qua các lần thử, rút gọn log.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compileErrors, condense, failingTestNames, signature } from '../../pack/src/logs.mjs';
+import { compileErrors, condense, failingTestNames, signature } from '../../pack/src/gate/logs.mjs';
 
 const MAVEN_FAIL = `[INFO] Scanning for projects...
 [ERROR] Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.2 s <<< FAILURE! - in com.shop.order.OrderServiceTest

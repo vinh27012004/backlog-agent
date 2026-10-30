@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { appDataLock, lockFile } from '../../pack/src/datalock.mjs';
+import { appDataLock, lockFile } from '../../pack/src/env/datalock.mjs';
 import { tempDir } from './support.mjs';
 
 test('app_data lock is exclusive, renewable by its holder and expires', async () => {

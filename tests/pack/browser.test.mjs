@@ -4,8 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { seededAccount } from '../../pack/src/applogin.mjs';
-import { captureEvidence, findBrowser } from '../../pack/src/browser.mjs';
+import { seededAccount } from '../../pack/src/env/applogin.mjs';
+import { captureEvidence, findBrowser } from '../../pack/src/env/browser.mjs';
 import { install, McpClient, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;

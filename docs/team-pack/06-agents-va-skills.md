@@ -148,7 +148,7 @@ loopback, ảnh chỉ vào `answers/<ID>/evidence/`) và hướng dẫn trong sk
 
 - Root dùng `orchestratorModel` (operator chọn ở trang Init) với effort đã chọn.
 - Khi spawn: `spawn_agent` nhận `model` và `reasoning_effort` (đã thấy trong transcript ngày 26/10). Helper chọn sẵn
-  trong `start_work` (`triage.models`, `src/models.mjs`). Mỗi tier trong `config/models.json` là một danh sách ưu
+  trong `start_work` (`triage.models`, `src/decide/models.mjs`). Mỗi tier trong `config/models.json` là một danh sách ưu
   tiên, và helper lấy model đầu tiên có trong `allowedModels`:
 
   | Tier | Thứ tự ưu tiên | Dùng cho |

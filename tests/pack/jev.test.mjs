@@ -5,8 +5,8 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Decider, injectionHeuristic } from '../../pack/src/decisions.mjs';
-import { JevClient, mockTransport } from '../../pack/src/jev.mjs';
+import { Decider, injectionHeuristic } from '../../pack/src/decide/decisions.mjs';
+import { JevClient, mockTransport } from '../../pack/src/decide/jev.mjs';
 
 const CONFIG = { enabled: true, baseUrl: 'http://127.0.0.1:9', model: 'jev-test', apiKeyEnv: 'MTM_TEST_NO_SUCH_KEY', apiKeyFile: null,
   timeoutMs: 2000, retries: 1, maxStateChars: 4000, thresholds: { choice: 0.7, noulYes: 0.8, noulNo: 0.2, injection: 0.5 } };

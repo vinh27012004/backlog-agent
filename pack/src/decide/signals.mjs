@@ -5,8 +5,8 @@
 // phần đó, không chặn start_work.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { findAppRoot } from './environment.mjs';
-import { git } from './git.mjs';
+import { findAppRoot } from '../env/environment.mjs';
+import { git } from '../core/git.mjs';
 
 const MAX_TERMS = 12;
 // Từ khoá khớp quá nhiều file là từ chung chung (Dashboard, invoice…), không cho biết vùng code cần sửa.
@@ -264,7 +264,7 @@ export async function codeTopology(root, { terms = [], grepFiles = [], budgetMs 
 }
 
 // ---- Tri thức từ KB của pack (skills/stack-notes, skills/backlog-references/bug-patterns.md) ----
-const SKILLS = new URL('../skills/', import.meta.url);
+const SKILLS = new URL('../../skills/', import.meta.url);
 
 // npm: so tên dependency (một tên mỗi dòng); manifest khác (pom.xml, build.gradle, requirements.txt, pyproject.toml,
 // composer.json, go.mod, *.csproj): tìm chữ.

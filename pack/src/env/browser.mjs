@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { locate as locateMatchRoot } from './app.mjs';
 import { seededAccount } from './applogin.mjs';
-import { fail, HelperError, sleep } from './util.mjs';
+import { fail, HelperError, sleep } from '../core/util.mjs';
 
 const MAX_TOTAL_MS = 50_000;
 

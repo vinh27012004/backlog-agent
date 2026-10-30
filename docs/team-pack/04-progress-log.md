@@ -1,7 +1,7 @@
 # 04 · Progress log NDJSON
 
 Nguồn chuẩn: `validateProgressEvent()` và `reduceProgressEvents()` trong
-`vendor/mtm-player-0.9.41/app/src/progress.mjs` (dòng 215–555), và
+`vendor/mtm-player-0.9.41/app/src/match/progress.mjs` (dòng 215–555), và
 `vendor/team-orchestrator-pack-0.5.1/contracts/progress-event.schema.json`. Schema JSON **không** diễn đạt hết các
 luật liên field; Player kiểm thêm bằng code. Helper phải kiểm **cả hai**.
 
@@ -197,7 +197,7 @@ Không bao giờ bỏ event bắt buộc của một lần nộp. Summary viết
 
 ## 10. Validator của helper
 
-`src/progress.mjs` của đội phải tái hiện:
+`src/match/progress.mjs` của đội phải tái hiện:
 1. Tập key chính xác theo type, `schemaVersion`, `playerSessionId`.
 2. Pattern id, summary/title (độ dài, ký tự cấm, regex credential), revision, origin, path, method, số đếm.
 3. Luật liên field §4.

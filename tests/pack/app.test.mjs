@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { app, appCommand, appsDir, authUrlEnv, stopApp } from '../../pack/src/app.mjs';
+import { app, appCommand, appsDir, authUrlEnv, stopApp } from '../../pack/src/env/app.mjs';
 import { install, McpClient, tempDir } from './support.mjs';
 
 // App node nhỏ trong matches/M1/<wt>/src: build ghi built.txt, server trả nội dung đó trên PORT.

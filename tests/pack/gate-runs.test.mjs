@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { detectProfile } from '../../pack/src/environment.mjs';
-import { runGate } from '../../pack/src/gate.mjs';
-import { Probe } from '../../pack/src/probe.mjs';
+import { detectProfile } from '../../pack/src/env/environment.mjs';
+import { runGate } from '../../pack/src/gate/gate.mjs';
+import { Probe } from '../../pack/src/gate/probe.mjs';
 import { sh, tempDir } from './support.mjs';
 
 // Runner giả: nạp tests/*.test.js (CommonJS), chạy từng it(), ghi JSON như `vitest --reporter=json --outputFile.json=`.

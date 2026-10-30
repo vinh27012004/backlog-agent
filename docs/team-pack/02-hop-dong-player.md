@@ -212,7 +212,7 @@ Nguồn: `src/team-install.mjs`, `src/team-runtime.mjs:30`. Sai bất kỳ đi�
 ## 8. `ENVIRONMENT_READY` → Preparation Complete
 
 - Player đọc lại log (giới hạn 4 MB cho bước này), lấy dòng `ENVIRONMENT_READY` hợp lệ
-  (`src/progress.mjs:310`). Có hai dòng `ENVIRONMENT_READY` khác nội dung → `ENVIRONMENT_READY_CONFLICT`.
+  (`src/match/progress.mjs:310`). Có hai dòng `ENVIRONMENT_READY` khác nội dung → `ENVIRONMENT_READY_CONFLICT`.
   Vì vậy **không bao giờ** ghi lại với revision hoặc requestId khác.
 - Player kiểm (`src/preparation.mjs:65`): `requestId` = `requestId` của PREPARE; `repository` trùng
   descriptor sau chuẩn hoá (url `https://`, không có user/pass); `revision` là hex thường 40–64 ký tự;
@@ -230,7 +230,7 @@ Nguồn: `src/team-install.mjs`, `src/team-runtime.mjs:30`. Sai bất kỳ đi�
 | Network | **Chỉ** từ `structuredContent.networkActivity` mà MCP helper tự khai: `[{url, method, httpStatus}]` (`src/cli-activity.mjs`), cộng với event `GAME_MASTER_API`/`NETWORK_ACTIVITY` trong log |
 | Model usage | Token theo model, cho root và subagent |
 
-Suspected Violations (`src/progress.mjs:650-705`, `src/model-policy.mjs`): `UNEXPECTED_NETWORK_ORIGIN`
+Suspected Violations (`src/match/progress.mjs:650-705`, `src/model-policy.mjs`): `UNEXPECTED_NETWORK_ORIGIN`
 (event mạng có origin ngoài danh sách); `RISKY_GIT_OR_CREDENTIAL_OPERATION` (tên operation trong
 `TOOL_ACTIVITY` khớp `FORCE_PUSH`, `REMOTE_SET/ADD/REMOVE`, `CREDENTIAL_READ/EXPORT`);
 `OUTSIDE_TEAM_WORKSPACE_ACCESS`; `TEAM_RUNTIME_INTEGRITY_ACCESS` (ghi vào `…\.mtm\…` hoặc
@@ -255,7 +255,7 @@ Nút *Show full details* trên dashboard dành cho organizer.
 ## 12. Khi Player ra bản mới
 
 Diff các file sau với bản cũ, rồi chạy lại contract test ([10 §3](10-kiem-thu.md#3-contract-test-dùng-source-player-làm-oracle)):
-`src/team-runtime.mjs`, `src/team-install.mjs`, `src/progress.mjs` (validate, transition, giới hạn kích
+`src/team-runtime.mjs`, `src/team-install.mjs`, `src/match/progress.mjs` (validate, transition, giới hạn kích
 thước), `src/cli-supervisor.mjs` (`protocolPrompt`), `src/codex-app-server.mjs`,
 `src/local-app-lifecycle.mjs`, `src/submission-policy.mjs`, `src/model-policy.mjs`,
 `src/workspace-paths.mjs`, `src/workspace-instructions.mjs`, `src/preparation.mjs`, và
@@ -268,7 +268,7 @@ sách trên chỉ `progress.mjs` và `codex-app-server.mjs` đổi, không đổ
 cũ (`approvalPolicy: 'on-request'`, `approvalsReviewer` mặc định `auto_review`, tức guardian của Codex); contract test
 chạy lại trên source 0.9.41. Thay đổi:
 
-- `src/codex-subagent-usage.mjs` (mới), `src/progress.mjs`, `src/codex-app-server.mjs`: dashboard cộng token của
+- `src/codex-subagent-usage.mjs` (mới), `src/match/progress.mjs`, `src/codex-app-server.mjs`: dashboard cộng token của
   subagent, đọc từ file session Codex (cùng `session_id` với root) vài giây một lần; thread guardian bị loại vì "Codex
   does not charge for them". `tools/judge/usage.mjs` vẫn cần để xem guardian và thời gian job.
 - `src/local-app.mjs`, `src/manage-web.mjs`: Shut down chờ agent dừng rồi tự đóng, không phải bấm lần hai.
@@ -285,7 +285,7 @@ Bản `mtm-player-0.9.39-local-windows`. Trong danh sách trên có `team-instal
 - `src/codex-price-card.mjs`: price card `codex-standard-2026-10-28` có giá **gpt-6.1-sol** (50 / 2,5 / 250 credit mỗi
   1M input / cached / output) và **gpt-6.1-terra** (25 / 1,25 / 125), cùng `serviceTierMultipliers`: Fast (`priority`)
   ×2, Ultrafast ×6. Giá khớp với ước tính trong [06 §9](06-agents-va-skills.md#9-chọn-model), nên thang model giữ nguyên.
-- `src/progress.mjs`, `src/codex-app-server.mjs`: dashboard ghi service tier của root (`thread/settings/updated`),
+- `src/match/progress.mjs`, `src/codex-app-server.mjs`: dashboard ghi service tier của root (`thread/settings/updated`),
   thêm cột Mode, tính credit theo hệ số tier. Các trận tập tới 28/10 đều chạy `default` (Standard), không có Fast.
 - `src/dashboard-streaming.mjs`: snapshot đẩy lên Game Master tối đa 1 lần / 15 s (trước là 10 s).
 - Lỗi khởi động local app và desktop kèm `detail`; form duyệt quyền (approval) không còn tự submit.

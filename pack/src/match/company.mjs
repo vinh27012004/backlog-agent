@@ -1,6 +1,6 @@
 // Proxy tới Company Tools: MCP server riêng của trận (03 §9). Key chỉ nằm trong helper;
 // kết quả là dữ liệu untrusted. Giới hạn 120 request/phút dùng chung cho cả đội.
-import { HelperError, fail, sleep } from './util.mjs';
+import { HelperError, fail, sleep } from '../core/util.mjs';
 
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 100;      // chừa khoảng trống dưới 120 của server

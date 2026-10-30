@@ -6,10 +6,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Decider } from '../../pack/src/decisions.mjs';
-import { JevClient, mockTransport } from '../../pack/src/jev.mjs';
+import { Decider } from '../../pack/src/decide/decisions.mjs';
+import { JevClient, mockTransport } from '../../pack/src/decide/jev.mjs';
 import { answerOnlyText, codeTerms, codeTopology, countCriteria, detectDomain, difficultyFromSignals, itemSignals, kbInsights, moduleOf, moduleRoot,
-  workText } from '../../pack/src/signals.mjs';
+  workText } from '../../pack/src/decide/signals.mjs';
 
 // Rút gọn từ CR-01 của Practice HIET12OA.
 const CR = `# Export the filtered invoice list as CSV

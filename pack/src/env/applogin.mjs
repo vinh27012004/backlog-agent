@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { detectProfile } from './environment.mjs';
-import { fail } from './util.mjs';
+import { fail } from '../core/util.mjs';
 
 const ENV_FILES = ['.env', '.env.local', '.env.development', '.env.development.local'];
 const SKIP_DIRS = new Set(['node_modules', '.next', 'dist', 'build', '.git', 'coverage', '.turbo', '.codegraph']);

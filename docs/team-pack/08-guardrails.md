@@ -116,7 +116,7 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 
 ## 8. Jev (TypeSafe)
 
-> **Đã dựng (26/10, pack 0.1.0):** `pack/src/jev.mjs`, `pack/src/decisions.mjs`, tool `decide`
+> **Đã dựng (26/10, pack 0.1.0):** `pack/src/decide/jev.mjs`, `pack/src/decide/decisions.mjs`, tool `decide`
 > (`triage`, `route`, `next_action`, `root_cause_confirmed`; `claims_supported` bỏ ngày 27/10); cấu hình `pack/config/jev.json`
 > (bật mặc định), ghi đè trên máy ở `team-sdlc-pack/local/jev.json`. Key: biến môi trường `TYPESAFE_API_KEY` trong
 > **môi trường của Player** (đặt biến User của Windows rồi khởi động lại Player; Codex chuyển cho helper qua `env_vars`),
@@ -130,7 +130,7 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 > đúng trên 2 đề; `difficulty` thường dưới ngưỡng 0.7 nên rơi về luật; `score` là số thực và được làm tròn. Cần đo thêm
 > (credit Codex bật/tắt Jev, `decisions.ndjson` so với kết quả chấm) trước khi tin hơn.
 >
-> **Đặc trưng item (29/10, `pack/src/signals.mjs`):** trước khi hỏi Jev, helper đếm số tiêu chí chấp nhận, số kịch bản
+> **Đặc trưng item (29/10, `pack/src/decide/signals.mjs`):** trước khi hỏi Jev, helper đếm số tiêu chí chấp nhận, số kịch bản
 > MVS, số từ, các cờ (`externalSpec`, `dependencies`, `data`, `tricky`, `security`, `ui`, `answerOnly`), điểm, deadline,
 > và chạy `git grep` (từ khoá dáng code: `backtick`, **nhãn UI**, camelCase, snake_case, tên file; bỏ từ khớp hơn 40 file)
 > trên checkout chính để ra số file, module, file test liên quan. Phần `signals` đứng trước đề trong state gửi Jev, lưu ở

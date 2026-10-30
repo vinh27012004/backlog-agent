@@ -2,8 +2,8 @@
 // luật sàn ở code vẫn thắng câu trả lời của Jev khi có thêm các khối này.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Decider, fitState, headTail, signalBlocks } from '../../pack/src/decisions.mjs';
-import { JevClient, mockTransport } from '../../pack/src/jev.mjs';
+import { Decider, fitState, headTail, signalBlocks } from '../../pack/src/decide/decisions.mjs';
+import { JevClient, mockTransport } from '../../pack/src/decide/jev.mjs';
 
 const CONFIG = { enabled: true, baseUrl: 'http://127.0.0.1:9', model: 'jev-test', apiKeyEnv: 'MTM_TEST_NO_SUCH_KEY', apiKeyFile: null,
   timeoutMs: 2000, retries: 0, maxStateChars: 4000, thresholds: { choice: 0.7, noulYes: 0.8, noulNo: 0.2, injection: 0.7 } };

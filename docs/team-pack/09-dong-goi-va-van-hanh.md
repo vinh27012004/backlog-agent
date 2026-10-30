@@ -17,7 +17,7 @@ pack/
 ├── contracts/                   progress-event.schema.json (của BTC), agent-result.schema.json (của BTC),
 │                                worker-result / checker-result / scout-result .schema.json
 ├── bin/runtime-server.mjs       điểm vào MCP helper
-├── src/*.mjs                    module helper (05 §11)
+├── src/                         module helper: tools.mjs + core/ match/ env/ gate/ decide/ (05 §11)
 ├── scripts/install.mjs          installer (§4)
 ├── scripts/check-distribution.mjs   checker chỉ đọc (§5)
 └── docs/                        README.md (hướng dẫn vận hành đi kèm ZIP), CHECKSUMS.json (do build sinh)

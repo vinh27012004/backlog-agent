@@ -100,8 +100,8 @@ không tự `git push`.
 > `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9;
 > từ 29/10 `company_call {backlogItemKey}` tự lưu kết quả vào `.team-work/items/<ID>/company/<nn>-<tool>.json` và trả
 > `savedTo`, vì ở TOKXKPBV chuẩn xuất CSV của CR-01 chỉ nằm trong brief, reviewer và người chấm không đối chiếu được).
-> `decide` (Jev, mới: `pack/src/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log` (chữ ký lỗi và rút log đã có
-> bên trong gate, `pack/src/logs.mjs`). Code: `pack/src/tools.mjs`.
+> `decide` (Jev, mới: `pack/src/decide/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log` (chữ ký lỗi và rút log đã có
+> bên trong gate, `pack/src/gate/logs.mjs`). Code: `pack/src/tools.mjs`.
 >
 > **27/10 (ý tưởng từ harness mẫu, mục 1–3):** hard gate (integrate và `commit_and_push` chỉ nhận đúng nội dung gate
 > đã kiểm, §5.9, §5.12), gate kiểm `testResults` theo template/MVS/status (§5.10), `record_verification` đếm từ
@@ -114,7 +114,7 @@ không tự `git push`.
 > / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
 > `routed` và `note` nhắc ghi vào answer rằng lỗi được giả lập. Test: `browser.test.mjs` (500, TimedOut, mạng chậm).
 > **29/10 (Practice 9KNXREJ5, L60):** bước `login {url, matchRoot}` đăng nhập bằng tài khoản mà seed của app tạo
-> (`pack/src/applogin.mjs`: biến `process.env.X ?? "mặc định"` trong file seed, giá trị trong `.env` nếu có, không thì
+> (`pack/src/env/applogin.mjs`: biến `process.env.X ?? "mặc định"` trong file seed, giá trị trong `.env` nếu có, không thì
 > mặc định). Helper tự điền form và kiểm form đã biến mất; kết quả chỉ nêu tên biến và nguồn, không có giá trị. Lý do:
 > agent tự moi mật khẩu trong seed bị auto-review chặn như dò mật khẩu.
 >
@@ -353,7 +353,7 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     `except: pass` trong test, assertion cụ thể bị thay bằng `toBeDefined`/`toBeTruthy`/`assertNotNull`, thêm
     retry hoặc timeout dài hơn (cả trong `vitest/jest/playwright.config`). Chạy trên 6 file test thật của Solova:
     không báo nhầm.
-  - Kết quả test máy đọc (`pack/src/testreport.mjs`): vitest `--reporter=default --reporter=json
+  - Kết quả test máy đọc (`pack/src/gate/testreport.mjs`): vitest `--reporter=default --reporter=json
     --outputFile.json=<log>.json`, jest `--json --outputFile`, pytest `--junitxml`, phpunit `--log-junit`,
     maven/gradle đọc JUnit XML mới ghi trong `target/surefire-reports` / `build/test-results/test`. Với
     `test_all` của node chỉ thêm reporter khi script `test` kết thúc bằng chính runner (`vitest run`, `dotenv ...
@@ -386,7 +386,7 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   xong. Đây là nội dung mà integrate và `commit_and_push` đòi khớp.
 - Hết giờ → `timeout`. Log lệnh: `.team-work/logs/<ID>-gate-<n>-<check>.log`. Check fail có `tail` là log đã rút
   gọn (`condense`, ≤ 15–20 dòng đáng chú ý thay cho đuôi log).
-- **Chữ ký lỗi** (port `orchestrator/logs.py` sang `pack/src/logs.mjs`): `compile:<file>:<msg>`,
+- **Chữ ký lỗi** (port `orchestrator/logs.py` sang `pack/src/gate/logs.mjs`): `compile:<file>:<msg>`,
   `<Exception>@<frame dự án>` hoặc `<Exception>@test:<tên>`, không số dòng, không path worktree; regression
   dùng tên các test mới fail (`regression:<a> | <b>`), thay đổi cấm dùng `forbidden:<path>`, hết giờ
   `timeout:<check>`; `answer_invalid` không có chữ ký (sửa answer không cần lượt fixer). Helper giữ
@@ -486,7 +486,7 @@ Không trạng thái, không mạng.
 ### 5.18 `condense_log` (A)
 
 Port `orchestrator/logs.py`: `{path | text, maxLines}` → `{signature, lines}`. Chữ ký không chứa số dòng
-và path worktree, nên giữ nguyên qua các lần thử. Bản đã dựng: phần port nằm ở `pack/src/logs.mjs` và chỉ gate
+và path worktree, nên giữ nguyên qua các lần thử. Bản đã dựng: phần port nằm ở `pack/src/gate/logs.mjs` và chỉ gate
 dùng (§5.10); chưa mở thành tool riêng vì chưa agent nào cần.
 
 ## 6. Poller nền
@@ -542,28 +542,37 @@ nội dung `ENVIRONMENT_READY` đã ghi, kích thước file.
 ```
 pack/bin/runtime-server.mjs     # điểm vào MCP: đọc stdin NDJSON, dispatch, ghi stdout
 pack/src/
-  mcp.mjs                       # framing JSON-RPC, tools/list, tools/call, giới hạn
-  tools.mjs                     # định nghĩa 19 tool (schema + handler)
-  session.mjs                   # configure_session, parse frame + policy, secret store
-  paths.mjs                     # TeamWorkspace tin cậy, kiểm path, chặn symlink/junction
-  progress.mjs                  # validator (bản sao luật Player) + writer + ngân sách byte
-  http.mjs                      # fetch có allowlist, redirect, cookie jar, telemetry
-  match-page.mjs                # đăng nhập + parse trang -> MatchView (theo Spike S2)
-  game-client.mjs               # Start Work, Submit, bảng lỗi, idempotency
-  poller.mjs                    # poll nền, diff, hàng đợi sự kiện
-  journal.mjs                   # journal bền (ghi atomically)
-  git.mjs                       # wrapper git an toàn, worktree, commit, push, verify
-  profile.mjs                   # port profile.py
-  gate.mjs                      # port gate.py
-  logs.mjs                      # port logs.py (chữ ký lỗi, rút log)
-  codegraph.mjs                 # dựng index codegraph cho checkout chính và worktree (§5.21)
-  testreport.mjs                # chạy test với reporter JSON/JUnit, id từng test, baseline, test cần chạy lại
-  probe.mjs                     # worktree probe ở base cho check fail-before
-  jev.mjs decisions.mjs         # port jev.py + decisions.py (D9)
-  jobs.mjs                      # job nền (spawn, timeout, kill cây tiến trình con)
-  scheduler.mjs                 # thứ tự gợi ý (07 §4)
-  redact.mjs                    # che secret trong mọi chuỗi trả ra
-pack/config/runtime.json        # giới hạn gate, timeout, nhịp poll, ngưỡng byte
+  tools.mjs                     # danh mục tool (schema + handler), gọi xuống các thư mục dưới
+  core/                         # nền tảng của helper
+    mcp.mjs                     # framing JSON-RPC, tools/list, tools/call, giới hạn
+    session.mjs                 # configure_session, parse frame + policy, secret store
+    paths.mjs                   # TeamWorkspace tin cậy, kiểm path, chặn symlink/junction
+    util.mjs redact.mjs         # hàm chung; che secret trong mọi chuỗi trả ra
+    journal.mjs events.mjs      # journal bền (ghi atomically); hàng đợi sự kiện cho wait_for_update
+    jobs.mjs                    # lệnh con và job nền (spawn, timeout, kill cây tiến trình con)
+    http.mjs git.mjs            # fetch có allowlist; wrapper git an toàn (worktree, commit, push)
+    jsonschema.mjs              # kiểm submit.schema.json
+    proxy.mjs                   # named pipe từ helper của subagent tới helper root (§5.22)
+  match/                        # trận đấu
+    game.mjs                    # Game Master: đăng nhập, đọc trận, Start Work, Submit
+    company.mjs                 # proxy Company Tools
+    progress.mjs                # validator (bản sao luật Player) + writer + ngân sách byte
+  env/                          # môi trường và app
+    environment.mjs             # nhận diện stack, chuẩn bị môi trường (§5.3)
+    app.mjs applogin.mjs        # chạy app của worktree; tài khoản seed cho bước login
+    datalock.mjs                # khoá dữ liệu app (§5.20)
+    browser.mjs                 # capture_evidence qua CDP
+    codegraph.mjs               # dựng index codegraph cho checkout chính và worktree (§5.21)
+  gate/                         # kiểm tra trước khi nộp
+    gate.mjs                    # gate (§5.10)
+    probe.mjs                   # worktree probe ở base cho check fail-before
+    testreport.mjs              # chạy test với reporter JSON/JUnit, id từng test, baseline
+    logs.mjs                    # rút log build/test, chữ ký lỗi
+  decide/                       # ra quyết định
+    decisions.mjs jev.mjs       # điểm quyết định: Jev trước, luật code dự phòng (D9)
+    signals.mjs                 # đặc trưng item cho triage: grep, topology codegraph, KB
+    models.mjs                  # model cho từng lần spawn (06 §9)
+pack/config/                    # jev.json, models.json, codegraph.json, codex.toml
 pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, checker-result, agent-result
 ```
 
@@ -614,13 +623,13 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `codegraph_explore`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`,
   `codegraph_node` (mặc định chỉ có `explore`). Mọi tool có `readOnlyHint` nên không qua auto_review. Biến bí mật
   không tới server: Codex chỉ chuyển các biến trong `env_vars`.
-- **Index** (`pack/src/codegraph.mjs`): server không tự index, và gọi lên thư mục chưa index thì nó bảo agent thôi
+- **Index** (`pack/src/env/codegraph.mjs`): server không tự index, và gọi lên thư mục chưa index thì nó bảo agent thôi
   dùng codegraph cả phiên. Nên helper chạy `init -y` (lần sau `sync`) cho `matchRoot` song song với
   `setup_environment`, và cho `wt.matchRoot` ngay trong `worktree create` trước khi trả về (kết quả có
   `codegraph: indexed|failed|not installed`). Lỗi không bao giờ làm hỏng bước gọi nó. Index nằm ở `.codegraph/` trong
   thư mục trận; `prepare_checkout` thêm `.codegraph/` vào `.git/info/exclude` (dùng chung cho mọi worktree) nên không
   lọt vào diff, gate hay commit. Sau đó watcher của server tự `sync` khi agent sửa file (debounce 2 s).
-- **Helper đọc index cho triage** (30/10, `pack/src/signals.mjs` `codeTopology`): lúc `start_work`, helper mở
+- **Helper đọc index cho triage** (30/10, `pack/src/decide/signals.mjs` `codeTopology`): lúc `start_work`, helper mở
   `.codegraph/codegraph.db` của checkout chính bằng `node:sqlite` (built-in, chỉ đọc, không qua MCP server) để tính
   `impact_radius_files`, `call_depth`, `callers_count`, `callees_count`, `cross_module` cho Jev và luật `difficulty`
   ([08](08-guardrails.md)). Đọc thẳng bảng `nodes`/`edges`/`files`/`project_metadata` của bản 1.6.2 (cạnh: `source`
@@ -696,7 +705,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   Helper tự lấy dữ liệu cần thiết (đề, kết quả worker, số lần thử) rồi dựng câu hỏi
   (`noul` / `choice` / `score`) như `orchestrator/decisions.py`. `start_work` đã chạy triage + route trong một
   request (`Decider.intake`), root không gọi lại.
-- **Hành vi**: gọi Jev (`src/jev.mjs`, `fetch`, timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút,
+- **Hành vi**: gọi Jev (`src/decide/jev.mjs`, `fetch`, timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút,
   trong lúc nghỉ dùng luật code ngay). Lỗi hoặc dưới ngưỡng (`config/jev.json`) thì dùng luật code.
 - **Luật cứng là sàn hoặc điều kiện AND**, Jev không ghi đè được ([08 §8](08-guardrails.md#8-jev-typesafe)): PI luôn
   `critical`; PI, CR và item `hard` luôn `strong`; PI luôn có reviewer (chạy song song với gate), chỉ item `easy`

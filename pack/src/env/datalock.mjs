@@ -5,7 +5,7 @@
 // khác; tự hết hạn (mặc định 15 phút) để item bị kill giữa chừng không giữ khoá mãi.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fail } from './util.mjs';
+import { fail } from '../core/util.mjs';
 
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
 const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });

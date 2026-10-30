@@ -6,12 +6,12 @@ import { fail } from './util.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// bin/ hoặc src/ → runtime/ → team-sdlc-pack/ → TeamWorkspace
+// src/core/ → runtime/ → team-sdlc-pack/ → TeamWorkspace
 export function trustedTeamWorkspace() {
   if (process.env.MTM_TEAM_WORKSPACE_OVERRIDE && process.env.MTM_TEAM_TEST_MODE === '1') {
     return resolve(process.env.MTM_TEAM_WORKSPACE_OVERRIDE);
   }
-  const runtime = resolve(here, '..');
+  const runtime = resolve(here, '..', '..');
   const tw = resolve(runtime, '..', '..');
   if (!existsSync(join(tw, '.mtm', 'team-runtime.json'))) return null;
   return tw;

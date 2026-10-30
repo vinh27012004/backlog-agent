@@ -1,6 +1,6 @@
 // Game Master (docs/team-pack/03): đăng nhập trang, đọc trận qua JSON của chính trang,
 // Start Work và Submit. Mọi request tới Game Master được ghi GAME_MASTER_API.
-import { HelperError, deterministicUuid, fail, oneLine } from './util.mjs';
+import { HelperError, deterministicUuid, fail, oneLine } from '../core/util.mjs';
 
 const START_PATH = /^\/api\/v1\/matches\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/backlogs\/start$/i;
 const SUBMIT_PATH = /^\/api\/v1\/matches\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/submissions$/i;

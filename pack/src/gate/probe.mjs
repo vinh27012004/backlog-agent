@@ -4,8 +4,8 @@
 // tuần tự vì nhiều gate có thể chạy song song. Bị kill giữa chừng thì lần dùng sau tự dọn trước khi chạy.
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { prepareWorktreeEnv } from './environment.mjs';
-import { git } from './git.mjs';
+import { prepareWorktreeEnv } from '../env/environment.mjs';
+import { git } from '../core/git.mjs';
 
 export class Probe {
   constructor({ checkoutRoot, teamWork, folder, mainMatchRoot, logDir }) {

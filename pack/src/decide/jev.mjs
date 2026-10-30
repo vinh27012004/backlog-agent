@@ -5,8 +5,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { registerSecret } from './redact.mjs';
-import { HelperError, sleep } from './util.mjs';
+import { registerSecret } from '../core/redact.mjs';
+import { HelperError, sleep } from '../core/util.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -17,7 +17,7 @@ export const score = (instructions, levels) => ({ type: 'score', instructions, c
 
 // Cấu hình pack + ghi đè cục bộ team-sdlc-pack/local/jev.json (enabled, apiKeyFile; baseUrl chỉ khi test mode).
 export function loadJevConfig(localDir = null) {
-  const base = JSON.parse(readFileSync(join(here, '..', 'config', 'jev.json'), 'utf8'));
+  const base = JSON.parse(readFileSync(join(here, '..', '..', 'config', 'jev.json'), 'utf8'));
   let local = {};
   if (localDir && existsSync(join(localDir, 'jev.json'))) {
     try { local = JSON.parse(readFileSync(join(localDir, 'jev.json'), 'utf8')); } catch { local = {}; }

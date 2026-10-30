@@ -3,7 +3,7 @@
 // file báo cáo không được ghi) thì quay về đọc log như cũ. Định dạng JSON của vitest 3.2 đã đối chiếu bằng lần chạy thật.
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { runPwsh } from './jobs.mjs';
+import { runPwsh } from '../core/jobs.mjs';
 
 export const SAFE_TARGET = /^[A-Za-z0-9_./\\:#-]{1,200}$/;
 

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 
 export function loadModelsConfig() {
-  return JSON.parse(readFileSync(join(here, '..', 'config', 'models.json'), 'utf8'));
+  return JSON.parse(readFileSync(join(here, '..', '..', 'config', 'models.json'), 'utf8'));
 }
 
 export function pickModel(tier, allowed, cfg = loadModelsConfig()) {
