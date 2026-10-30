@@ -55,7 +55,7 @@ có `MTM_TEAM_TEST_MODE=1`.
 - **API**: Start Work và Submit đúng tài liệu: 201/200 replay, idempotency (cùng key + cùng body → 201
   `Idempotent-Replay`; cùng key, khác body → 409 `IDEMPOTENCY_CONFLICT`), toàn bộ mã lỗi, `X-Request-Id`, `Date`.
 - **Kịch bản**: đồng hồ điều khiển được (nhanh, dừng, tua), các đợt item (chuyển từ
-  `samples/scenarios/practice.json`), deadline, `PAUSED`/`FINISHED`.
+  `samples/scenarios/practice.json` cũ, đã xoá 30/10, còn ở commit `76d4807`), deadline, `PAUSED`/`FINISHED`.
 - **Chèn lỗi**: cắt kết nối **sau khi** đã xử lý (mô phỏng timeout mà server đã nhận), 5xx, 429 có
   `Retry-After`, cookie hết hạn, thu hồi bearer.
 - **Route điều khiển cho test** (chỉ ở mock): xem bài đã nhận, buộc trạng thái trận.
@@ -63,8 +63,8 @@ có `MTM_TEAM_TEST_MODE=1`.
 ## 5. Helper E2E không cần LLM (`tools/fake-root.mjs`)
 
 Chạy helper như Codex chạy (tiến trình con, MCP qua stdio), gọi tool theo đúng trình tự của skill. Một
-"worker giả" áp patch mẫu (`samples/mock/fixer/<ITEM>.patch`) vào worktree và ghi file kết quả. Workspace
-tạm có layout TeamWorkspace thật; repo là `samples/repo-template` với một bare remote cục bộ.
+"worker giả" áp patch mẫu vào worktree và ghi file kết quả. Workspace tạm có layout TeamWorkspace thật; repo là
+một repo mẫu nhỏ với một bare remote cục bộ (fixture `samples/` cũ đã xoá 30/10, còn ở commit `76d4807`).
 
 Kịch bản bắt buộc pass:
 1. Happy path: chuẩn bị → `ENVIRONMENT_READY` → 4 item → 4 `SUBMITTED`; log qua oracle của Player.

@@ -6,11 +6,6 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { REPO, hasPlayer, install, McpClient, player, tempDir } from './support.mjs';
 
-test('pack agents and skills are in sync with agents/', () => {
-  const res = spawnSync(process.execPath, [join(REPO, 'tools', 'sync-agents.mjs'), '--check'], { encoding: 'utf8' });
-  assert.equal(res.status, 0, `run node tools/sync-agents.mjs\n${res.stderr}`);
-});
-
 // Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
 test('every subagent is told which skills and references to read', () => {
   const prompt = role => readFileSync(join(REPO, 'pack', 'agents', `team-${role}.toml`), 'utf8');

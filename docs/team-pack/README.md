@@ -5,7 +5,7 @@
 > (`vendor/team-orchestrator-pack-0.5.1/`), tài liệu API *Digital Cuder: Start work và Submit*, slide Kick-off
 > 23/10, Game Rules, Q&A, và Codex CLI **0.163.0** trên máy dev.
 >
-> Bộ này **thay thế** kiến trúc trong [`docs/legacy/ARCHITECTURE.md`](../legacy/ARCHITECTURE.md) (Python orchestrator
+> Bộ này **thay thế** kiến trúc cũ `docs/legacy/ARCHITECTURE.md` (đã xoá 30/10, còn ở commit `76d4807`; Python orchestrator
 > gọi `codex exec`). Lý do ở [01-kien-truc.md §2](01-kien-truc.md#2-vì-sao-phải-đổi-kiến-trúc).
 
 ## Tóm tắt trong 1 phút

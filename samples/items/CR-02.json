@@ -1,5 +1,0 @@
-{
-  "id": "CR-02",
-  "title": "Thêm giới hạn 5 lần đổi mật khẩu mỗi ngày",
-  "description": "Người dùng chỉ được đổi mật khẩu tối đa 5 lần trong 24 giờ. Lần thứ 6 trả về HTTP 429 với mã lỗi PASSWORD_CHANGE_LIMIT."
-}

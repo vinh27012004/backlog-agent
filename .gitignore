@@ -1,12 +1,6 @@
 # kết quả chạy agent
 runs/
 
-# Codex tự sinh session, log, auth trong CODEX_HOME — chỉ giữ config.toml
-config/codex-home/*
-!config/codex-home/config.toml
-
-__pycache__/
-*.pyc
 key.txt
 
 # bí mật không thể bật mí

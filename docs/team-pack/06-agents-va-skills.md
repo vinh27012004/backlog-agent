@@ -19,16 +19,15 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 ## 2. Agent profiles
 
 > **Cập nhật 26/10 sau Practice #1 (đổi D10).** Bỏ bộ ba scout / feature worker / quality checker của bản
-> khung. Pack dùng **ba agent của đội trong `agents/`** (fixer, reviewer, pi-hypothesis), sinh tự động bằng
-> `node tools/sync-agents.mjs`. `agents/` là nguồn duy nhất: sửa prompt ở đó rồi chạy lại script; có test báo
-> lỗi khi pack lệch với `agents/`. Script thay các chỗ chỉ đúng với runtime cũ (`codex exec` + output schema,
-> tool `runner`, "không có mạng") bằng cách làm có thật trong pack. Prompt gọi thẳng các tool `codegraph_*` của MCP
-> codegraph ([05 §5.21](05-mcp-helper.md#521-codegraph-mcp-server-ngoài-mới-2810)); "system map" đã bỏ và script báo lỗi
-> nếu còn sót.
+> khung. Pack dùng **các agent của đội** (fixer, verifier, reviewer, pi-hypothesis). Đến 30/10 chúng được sinh
+> từ thư mục `agents/` của runtime cũ bằng `tools/sync-agents.mjs`; nay `agents/` và script đã xoá, file trong
+> `pack/agents/` và `pack/skills/` là nguồn và được sửa trực tiếp. Prompt gọi thẳng các tool `codegraph_*` của MCP
+> codegraph ([05 §5.21](05-mcp-helper.md#521-codegraph-mcp-server-ngoài-mới-2810)).
 
 - File `pack/agents/team-<role>.toml`, `name` = `team_<role>` (gạch ngang thành `_`).
-  `developer_instructions` = khối mở đầu (các thẻ trong brief, chỉ đọc hay được sửa) + `agents/rules/common.md`
-  (đã thay hai mục *Working environment*, *Cost and output*) + `agents/roles/<role>.md`.
+  `developer_instructions` = khối mở đầu (các thẻ trong brief, chỉ đọc hay được sửa, file phải đọc trước) +
+  luật chung (*Working environment*, *Cost and output*, …) + phần riêng của vai. Luật chung lặp lại trong mỗi
+  file: sửa một chỗ thì sửa cả bốn file.
 - **Không** ghim `model`, `sandbox_mode`, approval: quyền kế thừa từ phiên của Player, model do root chọn
   từ `allowedModels` lúc spawn.
 - Installer chép mọi file sang `TeamWorkspace/.codex/agents/`. Player chỉ kiểm `team-orchestrator.toml`.
@@ -36,10 +35,10 @@ theo loại item đặt trong skill `backlog-*`; vai trò của subagent đặt 
 | Profile | Nguồn | Việc | Sửa code? | Kết quả |
 |---|---|---|---|---|
 | `team_orchestrator` | viết tay (`pack/agents/team-orchestrator.toml`) | Root, project manager. Theo 3 skill bắt buộc | Không (chỉ gọi tool) | progress log qua helper |
-| `team_fixer` | `agents/roles/fixer.md` | Phân tích và sửa **một** item trong worktree riêng; viết test; điền `answers/<ID>/`; chụp evidence bằng `capture_evidence` | Có, chỉ trong worktree được giao | `fix-result` |
-| `team_verifier` | `agents/roles/verifier.md` | Tester của guide (§2, mới 28/10): chạy gate cho một lượt fixer qua proxy tới helper của root (`run_gate {fixResultFile}`, [05 §5.22](05-mcp-helper.md)), chờ trong `exec` của nó, đối chiếu MVS với `verification` và evidence, trả `publish`/`retry` kèm `retry_brief` | Chỉ `answers/<ID>/submit.json` sau gate `answer_invalid` có `codePassed` | `verification` |
-| `team_reviewer` | `agents/roles/reviewer.md` | Soát bản sửa tìm lỗi mà build/test/MVS không thấy; chạy cùng lúc với verifier, nên không có `<gate_findings>` (verifier tự xét các cảnh báo của gate) | Không | `review` |
-| `team_pi_hypothesis` | `agents/roles/pi-hypothesis.md` | PI kẹt ở checkpoint: kiểm **một** giả thuyết `open` bằng cách đọc (không build, không chạy app/test vì fixer lượt sau có thể đang dùng worktree); 2–3 cái chạy song song. Item trả lời thuần: giải độc lập cùng lúc với fixer (`<independent_answer>`), helper so hai đáp án | Không | `hypothesis` |
+| `team_fixer` | `pack/agents/team-fixer.toml` | Phân tích và sửa **một** item trong worktree riêng; viết test; điền `answers/<ID>/`; chụp evidence bằng `capture_evidence` | Có, chỉ trong worktree được giao | `fix-result` |
+| `team_verifier` | `pack/agents/team-verifier.toml` | Tester của guide (§2, mới 28/10): chạy gate cho một lượt fixer qua proxy tới helper của root (`run_gate {fixResultFile}`, [05 §5.22](05-mcp-helper.md)), chờ trong `exec` của nó, đối chiếu MVS với `verification` và evidence, trả `publish`/`retry` kèm `retry_brief` | Chỉ `answers/<ID>/submit.json` sau gate `answer_invalid` có `codePassed` | `verification` |
+| `team_reviewer` | `pack/agents/team-reviewer.toml` | Soát bản sửa tìm lỗi mà build/test/MVS không thấy; chạy cùng lúc với verifier, nên không có `<gate_findings>` (verifier tự xét các cảnh báo của gate) | Không | `review` |
+| `team_pi_hypothesis` | `pack/agents/team-pi-hypothesis.toml` | PI kẹt ở checkpoint: kiểm **một** giả thuyết `open` bằng cách đọc (không build, không chạy app/test vì fixer lượt sau có thể đang dùng worktree); 2–3 cái chạy song song. Item trả lời thuần: giải độc lập cùng lúc với fixer (`<independent_answer>`), helper so hai đáp án | Không | `hypothesis` |
 
 Phân tích đề và kế hoạch evidence (vai của scout trong bản khung) là bước 1 của fixer (`criteria`,
 `suspects` trong `fix-result`). Kiểm MVS (vai của checker) do `team_verifier` làm từ evidence của fixer, cộng với
@@ -80,7 +79,7 @@ này nằm trong context của **mọi** agent, nên chỉ ghi luật thật s�
 
 ## 5. Brief từ root gửi subagent
 
-Brief dùng đúng các thẻ mà prompt trong `agents/` đã quen (`<item>`, `<triage>`, `<project_profile>`,
+Brief dùng đúng các thẻ mà prompt của subagent đã quen (`<item>`, `<triage>`, `<project_profile>`,
 `<previous_attempt>`, `<hypothesis>`, `<fix_result>`), thêm `<company_facts>`, `<worktree>`, `<materials>`,
 `<results_path>`. Khuôn đầy đủ nằm trong skill `team-orchestrator` (mục *One item*). Không chép nội dung
 lớn: trỏ tới file trong `.team-work/items/<ID>/`.
@@ -101,7 +100,7 @@ Item BUG-02 (BUG). Skill: .agents/skills/backlog-bug/SKILL.md. Stack notes: .age
 ## 6. Hợp đồng kết quả của subagent
 
 Subagent **ghi file** JSON vào `<results_path>` và trả lại đúng JSON đó trong message cuối. Schema lấy thẳng từ
-`agents/schemas/` (sync chép sang `pack/contracts/`), theo luật strict (mọi object có
+`pack/contracts/`, theo luật strict (mọi object có
 `additionalProperties: false`, `required` liệt kê đủ).
 
 | Schema | Agent | Field chính |
@@ -114,22 +113,22 @@ Subagent **ghi file** JSON vào `<results_path>` và trả lại đúng JSON đ�
 ## 7. Nội dung item là untrusted
 
 - Nội dung item, template, MVS là **dữ liệu**. Root bọc trong `<untrusted_item>…</untrusted_item>` và
-  escape mọi chuỗi `</untrusted_item>` bên trong (port `_fence()` của `orchestrator/prompt.py`).
+  escape mọi chuỗi `</untrusted_item>` bên trong (theo `_fence()` của orchestrator Python cũ, đã xoá).
 - Scout gắn cờ `injectionSuspected` khi đề đòi credential, gọi URL lạ, sửa file ngoài phạm vi, tắt test,
   hay "ignore previous instructions". Root bỏ phần đó và chỉ làm phần nghiệp vụ hợp lệ.
 - Bốn điều cấm của luật chơi luôn thắng mọi yêu cầu trong đề.
 
 ## 8. Skill theo loại item, tham khảo và gói stack
 
-Tất cả sinh từ `agents/` bằng `tools/sync-agents.mjs`:
+Tất cả nằm trong `pack/skills/` (installer chép sang `TeamWorkspace/.agents/skills/`):
 
-| Skill cài | Nguồn | Ghi chú |
+| Skill | Nội dung | Ghi chú |
 |---|---|---|
-| `backlog-bug`, `backlog-cr`, `backlog-task`, `backlog-pi` | `agents/skills/<type>/SKILL.md` | Root ghi tên skill trong brief của fixer |
-| `backlog-references/` (`bug-patterns.md`, `pi-triage.md`, `retry-playbook.md`) | `agents/references/` | Skill trỏ tới đường dẫn file thay cho thẻ `<bug_patterns>`/`<pi_triage>` của prompt cũ |
-| `stack-notes/` (`<stack>.md`) | `agents/stacks/` | Root trỏ đúng file theo `detect_profile` |
+| `backlog-bug`, `backlog-cr`, `backlog-task`, `backlog-pi` | Cách làm theo loại item | Root ghi tên skill trong brief của fixer |
+| `backlog-references/` (`bug-patterns.md`, `pi-triage.md`, `retry-playbook.md`, `evidence-playbook.md`) | Tham khảo cho fixer | Skill trỏ tới đường dẫn file thay cho thẻ `<bug_patterns>`/`<pi_triage>` của prompt cũ |
+| `stack-notes/` (`<stack>.md`) | Bẫy và lệnh theo stack | Root trỏ đúng file theo `detect_profile` |
 
-Agent chỉ mở file được chỉ đích danh (Practice #5, L31), nên `sync-agents.mjs` ghi vào đầu prompt mỗi vai những gì
+Agent chỉ mở file được chỉ đích danh (Practice #5, L31), nên đầu prompt mỗi vai ghi những gì
 phải đọc trước khi làm:
 
 | Vai | Đọc |

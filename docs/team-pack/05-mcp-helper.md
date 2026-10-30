@@ -594,7 +594,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 
 - Thay "CodeGraph + bản đồ hệ thống" của kiến trúc cũ (chỉ có khai báo `enabled = false`, chưa dựng). Practice #4–#5:
   fixer tìm chỗ sửa mất khoảng 8–13 lượt model (0,25–0,46M input) bằng `rg` + đọc nguyên file, và còn đi tìm
-  "system map" không tồn tại. "System map" đã bỏ khỏi prompt; `sync-agents.mjs` báo lỗi nếu còn.
+  "system map" không tồn tại. "System map" đã bỏ khỏi prompt.
 - **Chọn `@colbymchenry/codegraph`** (MIT, ghim phiên bản trong `config/codegraph.json`) thay vì engine tự viết (đã thử
   rồi bỏ, commit 673f8f7): parser cho hơn 30 ngôn ngữ, BTC sẽ đưa repo nhiều stack. Đo 28/10: index Solova (TS, 156
   file) 4,4 s, Flask (Python, 83 file) 2,5 s, spring-petclinic (Java, 50 file) 1,8 s; mỗi truy vấn qua MCP 0,1–1 s;

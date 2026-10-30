@@ -4,7 +4,6 @@
 |---|---|---|
 | [`team-pack/`](team-pack/README.md) | **Thiết kế hiện hành**: team pack chạy trong MTM Player (kiến trúc, hợp đồng Player, Game Master, progress log, MCP helper, agent/skill, quy trình trận, guardrails, đóng gói, kiểm thử, lộ trình, rủi ro) | Đang dùng. Bắt đầu đọc từ đây |
 | [`btc/`](btc/) | Tài liệu của BTC: technical guide 0.5.1, luật chơi, Q&A, API Start work/Submit | Nguồn gốc, chỉ đọc. NDA, không công khai |
-| [`legacy/`](legacy/ARCHITECTURE.md) | Kiến trúc cũ (Python orchestrator gọi `codex exec`) và bản vẽ của nó | Đã thay thế; giữ để tham chiếu khi port code |
 
 ## Tài liệu của BTC
 

@@ -1,4 +1,0 @@
-{"type": "thread.started", "thread_id": "mock-rev-0001"}
-{"type": "turn.started"}
-{"type": "item.completed", "item": {"id": "item_final", "type": "agent_message", "text": "{\"verdict\": \"approve\", \"root_cause_addressed\": true, \"requirements\": [], \"issues\": [{\"severity\": \"low\", \"file\": \"src/main/java/com/shop/order/OrderService.java\", \"line\": 97, \"problem\": \"Tên biến 'tmp' khó hiểu\", \"suggestion\": \"Đổi thành subtotalBeforeTax\"}], \"summary\": \"Sửa đúng nguyên nhân, test bao phủ trường hợp mã %.\"}"}}
-{"type": "turn.completed", "usage": {"input_tokens": 9800, "cached_input_tokens": 6400, "output_tokens": 410}}

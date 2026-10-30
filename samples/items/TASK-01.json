@@ -1,5 +1,0 @@
-{
-  "id": "TASK-01",
-  "title": "API xuất danh sách khách hàng ra CSV",
-  "description": "Thêm endpoint GET /api/customers/export trả file CSV gồm id, họ tên, email, ngày tạo. Hỗ trợ lọc theo khoảng ngày tạo."
-}
