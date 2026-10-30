@@ -2,9 +2,10 @@
 // sống tiếp khi helper của subagent đóng, stop theo file trạng thái.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { app, appCommand, appsDir, stopApp } from '../../pack/src/app.mjs';
+import { app, appCommand, appsDir, authUrlEnv, stopApp } from '../../pack/src/app.mjs';
 import { install, McpClient, tempDir } from './support.mjs';
 
 // App node nhỏ trong matches/M1/<wt>/src: build ghi built.txt, server trả nội dung đó trên PORT.
@@ -25,11 +26,12 @@ function appFolder(tw, key, { buildExit = 0 } = {}) {
 const body = async url => (await fetch(url)).text();
 const closed = async url => { try { await fetch(url, { signal: AbortSignal.timeout(2000) }); return false; } catch { return true; } };
 
-test('app builds and starts on its own port, survives the helper that started it, restarts and stops', { timeout: 120_000 }, async () => {
+test('app builds and starts on its own port, survives the helper that started it, restarts and stops', { timeout: 120_000 }, async t => {
   const tw = join(tempDir('mtm-app-'), 'BUN');
   install(tw);
   const one = appFolder(tw, 'BUG-01');
   const two = appFolder(tw, 'CR-01');
+  t.after(() => { stopApp(tw, 'BUG-01'); stopApp(tw, 'CR-01'); });
   const client = new McpClient(join(tw, 'team-sdlc-pack', 'runtime', 'bin', 'runtime-server.mjs'), process.env);
   let first;
   try {
@@ -66,9 +68,10 @@ test('app builds and starts on its own port, survives the helper that started it
   assert.equal((await app({ teamWorkspace: tw, action: 'status', backlogItemKey: 'BUG-01' })).state, 'stopped');
 });
 
-test('a failing build returns failed with the log tail; paths outside the matches folder are refused', { timeout: 60_000 }, async () => {
+test('a failing build returns failed with the log tail; paths outside the matches folder are refused', { timeout: 60_000 }, async t => {
   const tw = join(tempDir('mtm-app-'), 'BUN');
   const broken = appFolder(tw, 'BUG-02', { buildExit: 1 });
+  t.after(() => stopApp(tw, 'BUG-02'));
   const res = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-02', matchRoot: broken });
   assert.equal(res.state, 'failed', JSON.stringify(res));
   assert.match(res.tail, /error TS1005: build broke/);
@@ -77,6 +80,64 @@ test('a failing build returns failed with the log tail; paths outside the matche
   await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-02', matchRoot: join(tw, 'elsewhere') }), /PATH_NOT_ALLOWED/);
   await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: '../x', matchRoot: broken }), /INVALID_ARGUMENT/);
   await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-02', matchRoot: broken, mode: 'staging' }), /INVALID_ARGUMENT/);
+});
+
+// L7TZXHII: một server bỏ lại giữ :::3100; helper dò 127.0.0.1 thấy trống, chọn 3100, rồi báo `ready` vì server lạ trả lời.
+test('a port held on :: is skipped and a stranger answering on the port is never reported ready', { timeout: 60_000 }, async t => {
+  const tw = join(tempDir('mtm-app-'), 'BUN');
+  const stranger = createServer((req, res) => res.end('stranger'));
+  let held;
+  for (held = 3100; held <= 3199; held++) {
+    if (await new Promise(ok => { stranger.once('error', () => ok(false)); stranger.listen({ port: held, host: '::' }, () => ok(true)); })) break;
+  }
+  t.after(() => { stopApp(tw, 'BUG-03'); stranger.close(); });
+  const res = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-03', matchRoot: appFolder(tw, 'BUG-03') });
+  assert.equal(res.state, 'ready', JSON.stringify(res));
+  assert.notEqual(res.port, held);
+  assert.equal(await body(res.url), 'BUG-03 built');
+});
+
+test('an app that dies on EADDRINUSE restarts on another port without building again', { timeout: 60_000 }, async t => {
+  const tw = join(tempDir('mtm-app-'), 'BUN');
+  const root = appFolder(tw, 'CR-02');
+  const src = join(root, 'src');
+  writeFileSync(join(src, 'build.cjs'), "const fs = require('fs'); fs.appendFileSync('builds.txt', 'x'); fs.writeFileSync('built.txt', 'CR-02 built');\n");
+  writeFileSync(join(src, 'server.cjs'), [
+    "const fs = require('fs');",
+    "if (!fs.existsSync('tried.txt')) { fs.writeFileSync('tried.txt', process.env.PORT); console.error('Error: listen EADDRINUSE: address already in use :::' + process.env.PORT); process.exit(1); }",
+    "require('http').createServer((req, res) => res.end(fs.readFileSync('built.txt', 'utf8'))).listen(Number(process.env.PORT));", ''].join('\n'));
+  t.after(() => stopApp(tw, 'CR-02'));
+  const res = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'CR-02', matchRoot: root });
+  assert.equal(res.state, 'ready', JSON.stringify(res));
+  assert.equal(await body(res.url), 'CR-02 built');
+  assert.equal(readFileSync(join(src, 'builds.txt'), 'utf8'), 'x', 'the retry does not build again');
+  const log = readFileSync(res.log, 'utf8');
+  assert.match(log, /EADDRINUSE/, 'the log keeps the first failure');
+  assert.equal(JSON.parse(readFileSync(join(appsDir(tw), 'CR-02.json'), 'utf8')).retries, 1);
+});
+
+test('a localhost AUTH_URL in .env follows the chosen port for the app process only; .env stays as it is', { timeout: 60_000 }, async t => {
+  const tw = join(tempDir('mtm-app-'), 'BUN');
+  const root = appFolder(tw, 'TASK-02');
+  const src = join(root, 'src');
+  const envText = 'AUTH_URL="http://localhost:3000"\nNEXTAUTH_URL=https://auth.example.com/api/auth\n';
+  writeFileSync(join(src, '.env'), envText);
+  writeFileSync(join(src, 'server.cjs'),
+    "require('http').createServer((req, res) => res.end(`${process.env.AUTH_URL}|${process.env.NEXTAUTH_URL}`)).listen(Number(process.env.PORT));\n");
+  t.after(() => stopApp(tw, 'TASK-02'));
+  const res = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'TASK-02', matchRoot: root });
+  assert.equal(res.state, 'ready', JSON.stringify(res));
+  assert.equal(await body(res.url), `http://localhost:${res.port}|undefined`, 'a non-local NEXTAUTH_URL is left alone');
+  assert.deepEqual(res.authEnv, { AUTH_URL: `http://localhost:${res.port}` });
+  assert.equal(readFileSync(join(src, '.env'), 'utf8'), envText);
+});
+
+test('authUrlEnv keeps the auth path and ignores apps without a local auth URL', () => {
+  const dir = tempDir('mtm-app-auth-');
+  assert.deepEqual(authUrlEnv(dir, 3101), {});
+  writeFileSync(join(dir, '.env'), 'NEXTAUTH_URL=http://127.0.0.1:3000/api/auth\nDATABASE_URL=postgres://localhost:5432/x\n');
+  writeFileSync(join(dir, '.env.local'), 'AUTH_URL=http://localhost:4000/\n');
+  assert.deepEqual(authUrlEnv(dir, 3101), { NEXTAUTH_URL: 'http://127.0.0.1:3101/api/auth', AUTH_URL: 'http://localhost:3101/' });
 });
 
 test('next apps get -p for the port; mode dev and no start script run dev; other stacks are unsupported', () => {

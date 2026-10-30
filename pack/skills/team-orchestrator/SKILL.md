@@ -118,8 +118,9 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    - `"retry"` or a reviewer `high` → new fixer attempt (step 4) with `<previous_attempt>` = the verdict's
      `retry_brief` plus the reviewer's `high` issues, model from `gate.next`. Max 2 retries (PI 3), within the
      item's time. `gate.repeat: 2` → tell the fixer `sameSignatureAsBefore` and to change the hypothesis, not the
-     details; `gate.repeat: 3` → drop the item (step 8). A `fail-before` note in `retry_brief` (BUG/PI: the new test
-     passes on the unfixed code, so it proves nothing) is worth one more attempt if time allows; flaky warnings
+     details; `gate.repeat: 3` → drop the item (step 8). A `fail-before` note in `retry_brief` (BUG/PI: no new test
+     fails on the unfixed code, so they prove nothing) is worth one more attempt if time allows; a new test that
+     passes before the fix next to one that fails is a control, never a reason to retry; flaky warnings
      need no action. `medium`/`low` review issues never block the submission.
    - `"orchestrator_gate"` (the verifier could not reach the gate): run `run_gate {backlogItemKey, fixResultFile}`
      yourself with the job pattern in **Waiting**, then decide as above.
@@ -301,7 +302,11 @@ yields after 30 s and every `wait` is one more model call over your whole contex
   now, mark unfinished scenarios NOT_RUN, write submit.json and your fix-result, reply." Still no reply 2 minutes
   later: `interrupt_agent` it; then spawn the verifier if it wrote its fix-result, otherwise run `run_gate` on what its worktree holds yourself (job pattern below; last-chance rule in **Answers**). After it returns, drain helper events with one
   `wait_for_update {timeoutMs: 1000, cursor}` and act on `ITEM_NEW`, `ITEM_CHANGED`, `ITEM_CLOSING`,
-  `MATCH_STATUS`.
+  `MATCH_STATUS`, `FIX_RESULT`.
+- **`notice.ungated` on any tool result, `state.ungated` or a `FIX_RESULT` event:** that fixer has returned and no
+  gate has checked its fix-result: do One item, step 5 for that file now, before anything else (Practice 803P85ZA:
+  `cr01_fix2` answered while root was submitting two other items; root never spawned its verifier and waited
+  6 minutes on `wait_agent` until the Codex quota ran out, so CR-01 (300 points) was never submitted).
 - **Background job** (worktree setup; a gate only when the verifier answered `orchestrator_gate`, or on main inside
   the publish `exec`): wait inside one `exec`, not with repeated `job_status`/`wait`:
   ```
@@ -320,10 +325,10 @@ yields after 30 s and every `wait` is one more model call over your whole contex
   ```
   // @exec: {"yield_time_ms": 600000, "max_output_tokens": 2000}
   const t = "mcp__team_runtime__", call = async (n, a) => JSON.parse((await tools[t + n](a)).content[0].text);
-  const wake = ["ITEM_NEW", "ITEM_CHANGED", "ITEM_CLOSING", "MATCH_STATUS"];
+  const wake = ["ITEM_NEW", "ITEM_CHANGED", "ITEM_CLOSING", "MATCH_STATUS", "FIX_RESULT"];
   let cursor = -1, r, start = Date.now();
   do { r = await call("wait_for_update", { timeoutMs: 55000, cursor }); cursor = r.cursor ?? cursor; }
-  while (!(r.events ?? []).some(e => wake.includes(e.type)) && !(r.state?.open ?? []).length
+  while (!(r.events ?? []).some(e => wake.includes(e.type)) && !(r.state?.open ?? []).length && !(r.state?.ungated ?? []).length
     && !["FINISHED", "CANCELLED"].includes(r.state?.status) && Date.now() - start < 540000);
   text(r);
   ```

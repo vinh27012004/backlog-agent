@@ -87,6 +87,7 @@ export class Runtime {
     this.company = new CompanyTools({ session: this.session, http: this.http });
     this.poller = null;
     this.closingWarned = new Set();
+    this.ungatedWarned = new Set();
     this.configuredAt = 0;
   }
 
@@ -187,7 +188,7 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key.'), gitRevision: str('Full SHA returned by commit_and_push.') }, ['backlogItemKey', 'gitRevision']), handler: a => this.submitWork(a) },
       { name: 'report_progress', description: 'Write a root-decided progress event: BLOCKER_OPENED, BLOCKER_RESOLVED, BACKLOG_STATUS (IN_PROGRESS/COMPLETED/BLOCKED/FAILED), ORCHESTRATOR_RESTARTED, ORCHESTRATOR_ENDED, or a BLOCKED/FAILED stage. No envelope fields.',
         inputSchema: obj({ event: { type: 'object', description: 'Event without schemaVersion/playerSessionId.' } }, ['event']), handler: a => this.reportProgress(a) },
-      { name: 'wait_for_update', description: 'Block up to timeoutMs (max 55000) for new events: ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, POLL_ERROR. Use instead of ending the turn.',
+      { name: 'wait_for_update', description: 'Block up to timeoutMs (max 55000) for new events: ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, FIX_RESULT (a fixer wrote a fix-result that no gate has checked yet; state.ungated lists them), POLL_ERROR. Use instead of ending the turn.',
         inputSchema: obj({ timeoutMs: num('Max wait in ms, up to 55000.'), cursor: num('Last seq you have seen; -1 = only events from now on.') }), readOnly: true, handler: (a, ctx) => this.waitForUpdate(a, ctx) },
       { name: 'job_status', description: 'State and result of a background job. Returns early with `newPI` (keys) while a revealed PI has not been started: start it, then wait again.',
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
@@ -531,8 +532,38 @@ export class Runtime {
     const freeSlots = MAX_ITEMS_IN_FLIGHT - rows.filter(r => r.local === 'started').length;
     const todo = new Set(rows.filter(r => r.local === 'todo' && (r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
     const newItems = this.matchState().suggestedOrder.filter(k => todo.has(k));
-    if (freeSlots <= 0 || !newItems.length) return null;
-    return { newItems, freeSlots, hint: `Not started yet with ${freeSlots} free slot(s): start ${newItems.slice(0, freeSlots).join(', ')} now (One item, step 1), then carry on.` };
+    const ungated = this.ungatedResults();
+    const hints = [];
+    if (ungated.length) hints.push(`Fix-result waiting for its gate: ${ungated.map(r => r.key).join(', ')}; spawn the verifier (and reviewer) for ${ungated.map(r => r.fixResultFile).join(', ')} now.`);
+    if (freeSlots > 0 && newItems.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${newItems.slice(0, freeSlots).join(', ')} now (One item, step 1), then carry on.`);
+    if (!hints.length) return null;
+    return { ...(freeSlots > 0 && newItems.length ? { newItems, freeSlots } : {}), ...(ungated.length ? { ungated } : {}), hint: hints.join(' ') };
+  }
+
+  // Fix-result mới nhất của item đang làm mà chưa gate nào chạy sau nó (803P85ZA: cr01_fix2 ghi CR-01-fixer-2.json lúc
+  // 17:51:35 trong lúc root submit TASK-01/TASK-02; root không spawn verifier, chờ wait_agent 6 phút tới khi hết hạn mức
+  // Codex, CR-01 300 điểm không nộp. BUG-02-fixer-1.json nằm 3,5 phút vì root chờ wait_for_update khi fixer còn chạy).
+  ungatedResults() {
+    if (this.session.phase !== 'GAME' || !this.session.paths?.teamWork) return [];
+    const dir = join(this.session.paths.teamWork, 'results');
+    let files;
+    try { files = readdirSync(dir); } catch { return []; }
+    const latest = new Map();
+    for (const f of files) {
+      const m = /^(.+)-fixer-(\d+)\.json$/i.exec(f);
+      if (m && Number(m[2]) > (latest.get(m[1])?.n ?? 0)) latest.set(m[1], { n: Number(m[2]), f });
+    }
+    const out = [];
+    for (const [key, { f }] of latest) {
+      const ji = this.journal.data.items[key];
+      if (!ji?.startedAt || ji.endedAt || ji.proxiedGates?.[f]) continue;
+      let written;
+      try { written = statSync(join(dir, f)).mtimeMs; } catch { continue; }
+      // Root tự chạy run_gate trên worktree (fixer bị ngắt, lượt chót) sau khi file được ghi: đã xử lý.
+      if ((ji.jobs ?? []).some(x => x.kind === 'run_gate' && Date.parse(x.startedAt) >= written)) continue;
+      out.push({ key, fixResultFile: join(dir, f) });
+    }
+    return out;
   }
 
   // Lượt chờ job của root (gate, chuẩn bị worktree) trả về sớm khi có PI chưa bắt đầu (`newPI`): điểm PI tính từ lúc đề
@@ -1010,6 +1041,12 @@ export class Runtime {
     return given ?? (inWorktree ? null : this.journal.item(key).testChange ?? null);
   }
 
+  // 803P85ZA TASK-02: gate main trong exec publish không mang needsDependency nên chặn package.json mà gate worktree đã
+  // chấp nhận, root chạy gate main lần nữa. Gate main lấy cờ của chính item như allowTestChange.
+  gateNeedsDependency(key, inWorktree, given) {
+    return Boolean(given) || (!inWorktree && Boolean(this.journal.item(key).needsDependency));
+  }
+
   async runGate({ backlogItemKey: key, where, needsDependency = false, testsAdded = [], allowTestChange = null, waitSeconds = 40 }, { pi = true, ledger } = {}) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -1031,6 +1068,7 @@ export class Runtime {
     const mvs = this.itemMvs(key);
     const requiredEvidence = this.itemEvidence(key);
     const testChange = this.gateTestChange(key, inWorktree, allowTestChange);
+    needsDependency = this.gateNeedsDependency(key, inWorktree, needsDependency);
     const job = this.jobs.start('run_gate', async job => {
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
         profile: detectProfile(matchRoot), base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence,
@@ -1050,6 +1088,8 @@ export class Runtime {
       if (inWorktree && result.codePassed) {
         if (result.testChangeJustification) ji.testChange = result.testChangeJustification;
         else delete ji.testChange;
+        if (needsDependency) ji.needsDependency = true;
+        else delete ji.needsDependency;
       }
       // Cùng chữ ký lỗi lần 2: lượt sau phải đổi giả thuyết; lần 3: bỏ item (next_action thôi đề xuất retry).
       ji.gateHistory = [...(ji.gateHistory ?? []), { jobId: job.id, where: result.where, failKind: result.failKind,
@@ -1297,6 +1337,7 @@ export class Runtime {
       state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), nextReleaseAt: this.gm.view ? this.releases()?.next?.at ?? null : null,
         open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
         working: rows.filter(r => ['started', 'published'].includes(r.local)).map(r => r.key),
+        ungated: this.ungatedResults(),
         submitted: rows.filter(r => r.local === 'submitted').map(r => r.key),
         jobs: [...this.jobs.jobs.values()].filter(x => x.state === 'running').map(x => x.id) } };
   }
@@ -1452,6 +1493,7 @@ export class Runtime {
           this.absorb(previous, next);
         }
         this.warnClosing();
+        this.warnUngated();
       } catch (error) {
         this.events.push('POLL_ERROR', { code: error.code ?? 'ERROR', message: oneLine(error.message, 160) });
       }
@@ -1472,6 +1514,15 @@ export class Runtime {
         this.closingWarned.add(row.key);
         this.events.push('ITEM_CLOSING', { key: row.key, minutesLeft: row.minutesLeft });
       }
+    }
+  }
+
+  // Mỗi fix-result chưa gate báo một lần, để vòng chờ wait_for_update của root thức dậy.
+  warnUngated() {
+    for (const r of this.ungatedResults()) {
+      if (this.ungatedWarned.has(r.fixResultFile)) continue;
+      this.ungatedWarned.add(r.fixResultFile);
+      this.events.push('FIX_RESULT', r);
     }
   }
 }

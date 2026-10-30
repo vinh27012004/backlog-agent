@@ -76,3 +76,14 @@ test('the main gate reuses the test change the worktree gate accepted for the sa
   assert.deepEqual(rt.gateTestChange('BUG-02', false, other), other, 'an explicit argument wins');
   assert.equal(rt.gateTestChange('CR-01', false, null), null, 'never borrowed from another item');
 });
+
+// 803P85ZA TASK-02: gate main chặn package.json vì exec publish không truyền needsDependency mà gate worktree đã nhận.
+test('the main gate reuses needsDependency from the worktree gate of the same item', () => {
+  const { rt } = runtime();
+  assert.equal(rt.gateNeedsDependency('TASK-02', false, false), false);
+  rt.journalObj.item('TASK-02').needsDependency = true;
+  assert.equal(rt.gateNeedsDependency('TASK-02', false, false), true, 'main gate');
+  assert.equal(rt.gateNeedsDependency('TASK-02', true, false), false, 'a worktree gate takes it from the fix-result only');
+  assert.equal(rt.gateNeedsDependency('BUG-01', false, false), false, 'never borrowed from another item');
+  assert.equal(rt.gateNeedsDependency('BUG-01', true, true), true, 'an explicit argument wins');
+});

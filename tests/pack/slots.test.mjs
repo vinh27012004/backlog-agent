@@ -1,6 +1,8 @@
 // Chỗ trống cho item mới (ZVUYZ41V: TASK-01 ra lúc 02:49:49, chờ tới 03:02 với 2 item đang chạy vì root không đọc
 // sự kiện giữa các wait_agent): mọi kết quả tool của root mang `notice` khi có item chưa bắt đầu mà còn chỗ.
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime, callTool } from '../../pack/src/tools.mjs';
 import { tempDir } from './support.mjs';
@@ -42,4 +44,37 @@ test('root tool results carry the notice; match_state, proxied calls and errors 
   assert.equal((await callTool(rt, tool('run_gate'), {}, {}, { activity: false })).structuredContent.notice, undefined);
   rt.itemNotice = () => { throw new Error('boom'); };
   assert.equal((await callTool(rt, tool('job_status'), {}, {})).isError, false, 'a broken notice never breaks the tool');
+});
+
+// 803P85ZA: cr01_fix2 ghi CR-01-fixer-2.json lúc root đang submit item khác; root không spawn verifier, CR-01 không nộp.
+test('the newest fix-result with no gate after it is reported once as FIX_RESULT and in every notice', async () => {
+  const rt = runtime([row('CR-01', 'started'), row('BUG-01', 'started'), row('TASK-02', 'started'), row('BUG-02', 'submitted')]);
+  const teamWork = tempDir('mtm-ungated-');
+  rt.session.paths = { teamWork };
+  rt.session.descriptor = { matchId: 'M1' };
+  const results = join(teamWork, 'results');
+  mkdirSync(results);
+  for (const f of ['CR-01-fixer-1.json', 'CR-01-fixer-2.json', 'CR-01-verifier-1.json', 'BUG-01-fixer-1.json', 'TASK-02-fixer-1.json', 'BUG-02-fixer-1.json']) {
+    writeFileSync(join(results, f), '{}');
+  }
+  const later = new Date(Date.now() + 60_000).toISOString();
+  rt.journalObj = { data: { items: {
+    'CR-01': { startedAt: 'x', proxiedGates: { 'CR-01-fixer-1.json': 'job-9-run_gate' } },
+    'BUG-01': { startedAt: 'x', proxiedGates: { 'BUG-01-fixer-1.json': 'job-3-run_gate' } },
+    'TASK-02': { startedAt: 'x', jobs: [{ id: 'job-5-run_gate', kind: 'run_gate', startedAt: later }] },   // root gated it itself
+    'BUG-02': { startedAt: 'x', endedAt: 'y' } } } };
+  const fileOf = key => join(results, `${key}-fixer-2.json`);
+  assert.deepEqual(rt.ungatedResults(), [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
+  const notice = rt.itemNotice();
+  assert.deepEqual(notice.ungated, [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
+  assert.equal(notice.newItems, undefined, 'no item waiting to start');
+  assert.match(notice.hint, /spawn the verifier .*CR-01-fixer-2\.json/);
+  const tool = { name: 'submit_work', handler: () => ({ status: 'SUBMITTED' }) };
+  assert.deepEqual((await callTool(rt, tool, {}, {})).structuredContent.notice.ungated.map(r => r.key), ['CR-01']);
+  rt.warnUngated();
+  rt.warnUngated();
+  assert.deepEqual(rt.events.since(0).filter(e => e.type === 'FIX_RESULT').map(e => e.key), ['CR-01']);
+  rt.journalObj.data.items['CR-01'].proxiedGates['CR-01-fixer-2.json'] = 'job-12-run_gate';
+  assert.deepEqual(rt.ungatedResults(), []);
+  assert.equal(rt.itemNotice(), null);
 });

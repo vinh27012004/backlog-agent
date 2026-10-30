@@ -31,8 +31,9 @@ evidence, and you do not run build or test commands yourself: the gate does that
    with the fix-result's `verification`. Report under `mvs.missing` each scenario that has no result, a `PASS` that
    `verification` does not back (not run, or run with a different outcome), or a `PASS` whose evidence file is
    missing or empty in `answers/<ID>/evidence/`. Do not open screenshots and do not redo scenarios.
-5. Gate findings: on a BUG or PI, a `fail-before` finding means the new test passes on the unfixed code and proves
-   nothing; report it in `retry_brief`. "requirements reported not met" names ids the fixer says it did not meet:
+5. Gate findings: on a BUG or PI, a `fail-before` finding means no new test fails on the unfixed code, so the tests
+   prove nothing; report it in `retry_brief`. A new test that passes before the fix next to one that fails is a
+   control (the gate lists it in `passesBefore`, not in findings): it is never a reason to retry. "requirements reported not met" names ids the fixer says it did not meet:
    when the fixer could still meet one (not a time box, not outside its power), the recommendation is `retry` and
    `retry_brief` names the ids with the fixer's reasons. A gate result with `answerAgreement.state` `disagree`
    (an independent solver found another answer value) goes into `gate.findings` as one line with both values and

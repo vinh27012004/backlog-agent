@@ -347,3 +347,53 @@ và `…-7c6a…` (guardian của nó).
 |---|---|---|---|
 | L60 | Fixer CR-01 đăng nhập app: lần 1 đọc `ADMIN_EMAIL`/`ADMIN_PASSWORD` bằng dotenv, `.env` không có nên form bị điền rỗng, đăng nhập hỏng; lần 2 regex mật khẩu mặc định trong `prisma/seed.ts`. Guardian từ chối (`high`/`deny`): "after normal authentication failed, extracts admin credentials from the seed source… credential probing". BUG-01 và BUG-02 lấy mật khẩu từ seed y như vậy mà được cho qua vì lần đầu đã đăng nhập được. Playbook còn dặn tự lấy mật khẩu trong seed | CR-01 thiếu mọi ảnh cần đăng nhập, `partial` | **Đã** sửa: `capture_evidence` có bước `login {url, matchRoot}`. Helper (`pack/src/applogin.mjs`) tìm tài khoản seed: biến môi trường mà file seed đọc (`process.env.X ?? "mặc định"`), lấy giá trị trong `.env` nếu có, không thì lấy mặc định; bỏ cặp của dịch vụ khác (SMTP, DB…). Helper tự điền form và kiểm form đã biến mất (`LOGIN_FAILED` kèm thông báo của app). Agent không thấy mật khẩu: kết quả chỉ nêu tên biến và nguồn. Playbook §1–2 cấm tự đọc mật khẩu seed và cấm thử nguồn khác sau khi đăng nhập hỏng. Test trong `browser.test.mjs`; trên worktree thật của trận tìm đúng `ADMIN_*` trong `src/prisma/seed.ts` |
 | L61 | Root nhận lời từ chối của CR-01 thì gọi `request_user_input_async` xin "organizer approval", ghi `BACKLOG_STATUS BLOCKED` cho CR-01, rồi đưa "do not bypass the rejected credential use" vào brief của TASK-02. Fixer TASK-02 tự bỏ bước smoke login (guardian chưa từng chặn nó), dù đề ghi "A valid seeded user can log in" | TASK-02 đã pass gate và review nhưng nằm `BLOCKED` chờ một approval không ai trả lời | **Đã** sửa skill root (§Screenshots): lời từ chối của auto-review chỉ áp cho đúng một hành động, không áp cho item hay cả trận; cấm `request_user_input`, cấm chuyển lời từ chối sang brief item khác, cấm `BLOCKED` vì lý do này; kịch bản thiếu evidence thì `NOT_RUN`, gate và luật answer quyết định. Playbook: hành động bị từ chối thì không thử lại, làm nốt phần khác, `NOT_RUN` đúng kịch bản cần nó, không xin approval |
+
+## #11 · 30/10/2026 · tự luyện `803P85ZA` (Player 0.9.39, cùng bộ item)
+
+4/5 item nộp (BUG-02, BUG-01, TASK-02, TASK-01); CR-01 không nộp vì hạn mức Codex hết lúc 18:01:39Z (root chạy từ
+17:08:23Z). Root `gpt-6-luna` medium. ≈122,58 credit theo price card: root 2,30, fixer 87,10, reviewer 20,33, verifier
+8,58, solver TASK-01 4,27; guardian 7,0M input (23,3%), nhiều nhất cho `app` (42 lượt review) và `capture_evidence`
+(35). Nguồn: `runs/judge/803P85ZA/_usage/usage.md`, `.team-work/journal.json`, `results/`, transcript root
+`~/.codex/sessions/2026/10/30/rollout-2026-10-30T00-08-23-…46546a8b.jsonl`.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L62 | Root quên fix-result đã xong. `cr01_fix2` ghi `CR-01-fixer-2.json` lúc 17:51:35Z, khi root đang publish TASK-01 và TASK-02; root không spawn verifier, rồi `wait_agent` 2 lần (17:55:09 → 18:00:52) khi không còn agent nào chạy. Trước đó `BUG-02-fixer-1.json` (17:20:55Z) nằm 3,5 phút vì root chờ bằng vòng `wait_for_update` trong lúc 2 fixer còn chạy (skill cấm) | CR-01 (300 điểm) không nộp trước khi hết hạn mức; BUG-02 (deadline 18') nộp khi còn 4,9 phút | **Đã** sửa: helper tìm fix-result mới nhất của item đang làm mà chưa gate nào chạy sau nó (`ungatedResults`), gắn vào `notice.ungated` của mọi tool của root, vào `state.ungated` của `wait_for_update`, và phát sự kiện `FIX_RESULT` một lần mỗi file (poller). Skill root: thấy một trong ba thì làm bước 5 cho file đó ngay; vòng chờ cuối trận thức khi có `FIX_RESULT`/`ungated`. Test trong `slots.test.mjs` |
+| L63 | TASK-02: gate main trong exec publish không mang `needsDependency`, nên chặn `package.json`/`pnpm-lock.yaml` mà gate worktree đã nhận (`forbidden_change`) | Thêm một gate main (66 s) và một lượt root | **Đã** sửa: gate main lấy `needsDependency` từ gate worktree đã pass code của chính item (`gateNeedsDependency`, như `allowTestChange`). Test trong `baseline.test.mjs` |
+| L64 | BUG-01 lượt 1 (tier small, `medium`) chạy 13m18s, quá `returnBy` 12 phút mà root không nhắc "time is up"; trả `partial` vì ảnh bản dev, root bỏ qua verifier và spawn lượt 2 (`high`), lượt này xong trong 6 phút | ~13 phút và 2,8M input cho một lượt không qua gate | Một phần: L62 nhắc root gate `BUG-01-fixer-1.json` (bước 5 đã đòi mọi status). Chưa đổi thang model |
+
+## #12 · 30/10/2026 · tự luyện `L7TZXHII` (Player 0.9.39, cùng bộ item, pack có commit `7db9c14`…`76d4807`)
+
+1/5 item nộp: TASK-01 (answer-only, 4m23s từ `start_work`). BUG-01, BUG-02, CR-01, TASK-02 `FAILED` sau 2–3 lượt, gate
+nào cũng `evidence_missing` cùng chữ ký. Root `gpt-6.1-terra` medium: 23,23 credit (803P85ZA với `gpt-6-luna`: 2,30);
+tổng ≈122,14 credit, hạn mức gói Plus 0% → 73%. Nguồn: `runs/judge/L7TZXHII/_usage/usage.md`,
+`.team-work/logs/*-app.log`, `.team-work/journal.json`.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L65 | `app.test.mjs` bỏ lại server giả (`node server.cjs` của fixture CR-01) mỗi khi một assert hỏng sau khi app thứ hai đã chạy: 2 lần chạy test lúc 17:34Z và 17:49Z (trước 2 commit) để lại 2 tiến trình giữ `:::3101` và `:::3100`. `freePort` chỉ thử bind `127.0.0.1`; trên Windows mỗi địa chỉ bind riêng, nên port đang bị giữ ở `::` vẫn được coi là trống. Helper chọn 3100 cho cả 4 item, `next start -p 3100` chết vì `EADDRINUSE`, còn `settle` hỏi HTTP trước khi xem tiến trình nên trả `ready` với server lạ (fixer: "App helper chose occupied localhost:3100; own app log EADDRINUSE despite helper ready") | Mọi kịch bản UI `NOT_RUN`, 3 gate `evidence_missing` mỗi item, 4 item `FAILED` (900 điểm) | **Đã** sửa (`pack/src/app.mjs`): port chỉ trống khi bind được trên `::`, `0.0.0.0`, `127.0.0.1` và `::1`; `ready` chỉ khi tiến trình của item còn sống; app chết vì `EADDRINUSE` thì start lại không build trên port khác (tối đa 3 lần, log ghi tiếp). `app.test.mjs` dừng app trong `t.after`; test mới cho port bị giữ ở `::` và cho lần start lại. Hai tiến trình mồ côi phải tự dừng tay trước trận sau |
+| L66 | Lỗi môi trường (app không lên) lặp cùng chữ ký `evidence_missing` 3 lần: root vẫn chạy đủ 3 lượt fixer cho mỗi item, không lượt nào sửa được | ~45 phút fixer, ≈75 credit không ra điểm | Chưa sửa: L65 bỏ nguyên nhân; nếu còn gặp thì cân nhắc dừng retry khi fixer báo lỗi môi trường |
+
+## #13 · 30/10/2026 · tự luyện `MZP27104` (Player 0.9.39, cùng bộ item, sau sửa L65)
+
+5/5 item nộp, Game Master `ACCEPTED` cả 5: BUG-02 12m38s, BUG-01 15m20s, CR-01 10m46s, TASK-02 16m39s, TASK-01 4m41s;
+từ item đầu đến item cuối 37m03s (chạy song song 2 item). Root `gpt-6.1-terra` medium. 29,9M input (93,6% cache), 140K
+output, ≈105,02 credit theo price card: root 21,81, fixer 60,49, reviewer 13,75, verifier 6,45, solver TASK-01 2,51;
+guardian 6,3M input (21,1%). Hạn mức gói Plus 73% → 57%. Sau item cuối (23:54:10Z) root chỉ gọi model 5 lần (≈0,82
+credit). Chưa chạy judge. Nguồn: `runs/judge/MZP27104/_usage/usage.md`, `.team-work/journal.json`,
+`.team-work/decisions.ndjson`, transcript root `~/.codex/sessions/2026/10/30/rollout-2026-10-30T06-14-11-…8317406e16f.jsonl`.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L67 | Root treo ở lượt cuối: 23:54:43Z gọi `wait` (`yield_time_ms` 20 s) trên `exec` của `wait_for_update {timeoutMs: 55000}`; lượt đó chỉ trả về lúc 00:55:08Z với `code-mode host timed out waiting for wait response`, rồi `turn_aborted`. Trận còn 22,4 phút lúc bắt đầu treo | Root không phản ứng được 22 phút cuối trận. Không mất điểm vì bộ đề chỉ có 5 item, nhưng một item ra muộn hoặc `ITEM_CHANGED` sẽ bị bỏ lỡ. Không tốn thêm credit | Chưa sửa. Lỗi host Codex, xảy ra đúng ở kiểu chờ skill cấm (L69) |
+| L68 | BUG-02: gate pass, reviewer approve, nhưng verifier `retry` vì test "USD control" pass trên code chưa sửa (9 test mới khác tái hiện lỗi). `failBefore` (`gate.mjs`) phát cảnh báo khi chỉ một test mới pass trước khi sửa, kể cả khi `reproduced: true`; `verifier.md` mục 5 coi cảnh báo đó là "proves nothing". Verifier lượt 2 vẫn `retry`; root phải `decide` (Jev `drop` 0,38, luật `submit`) mới nộp | Thêm `bug02_fix2` + verifier + reviewer, ≈2m16s và ≈0,76M input, không đổi gì; item deadline 18' nộp khi còn ≈4m55s | **Đã** sửa: `failBefore` chỉ `warn` (thành gate finding) khi không test mới nào fail trên code chưa sửa; có test fail thì test mới pass trước khi sửa là đối chứng, ghi vào `passesBefore`, check `ok`. `verifier.md` mục 5 và skill root: đối chứng không bao giờ là lý do retry. Luật PI `not_reproduced` không đổi. Test trong `gate-runs.test.mjs` |
+| L69 | Root không theo luật chờ của skill đã cài: `wait_agent` 60 s cả 44 lần (19 lần hết giờ rỗng) thay vì 180 s; pragma `yield_time_ms: 1000` rồi `wait` 20 s (15 lần) thay vì 240000; sau `wait_agent` chỉ gọi `wait_for_update {timeoutMs: 1000}` một lần (23:19) | Input của root sau `wait_agent` 3,8M và sau `wait` 1,4M (≈54% root), ≈5 credit phí. Item mới bắt đầu trễ dù còn slot: CR-01/TASK-02 ra 23:30:40, `start_work` 23:32:36 (≈2'); TASK-01 ra 23:45:44, `start_work` 23:49:26 (3m42s, 3 slot trống). `notice.newItems` (L45) chỉ đi theo tool của helper, `wait_agent`/`spawn_agent` không mang | Chưa sửa. Nhắc trong skill không đủ với `gpt-6.1-terra` medium |
+| L70 | TASK-02 fix1 ghi TC-05 `PASS` trong khi `smoke-notes.txt` của chính nó ghi logout redirect hỏng: `AUTH_URL` trỏ port khác port helper `app` chọn (3100). Reviewer bắt (`high`, R8) | Lượt fix2 chỉ để chạy lại smoke với `AUTH_URL` khớp port, ≈5 phút | **Đã** sửa (`pack/src/app.mjs`, `authUrlEnv`): `AUTH_URL`/`NEXTAUTH_URL` localhost trong `.env*` của app được đặt lại theo port đã chọn, giữ đường dẫn, chỉ trong env của tiến trình app (Next.js không ghi đè biến đã có bằng `.env`), không sửa file; URL không phải localhost giữ nguyên. Kết quả `ready` có `authEnv` và hint "đừng sửa .env". Test trong `app.test.mjs` |
+| L71 | Lỗi nhỏ đã được bắt: `configure_session` `INVALID_FRAME` một lần (escape trong template literal, root sửa bằng `String.raw`, ≈8 s); BUG-01 fix1 ghi evidence có tiền tố `answers/BUG-01/evidence/`, TASK-02 fix1 trỏ `evidence/development-audit.json` chưa có: gate `answer_invalid`, verifier tự sửa | Không đáng kể | Không cần |
+
+Rủi ro đã biết (judge trận trước cho pass), lần này vẫn y nguyên: BUG-02 viết lại test cascade fail sẵn (căn cứ
+migration `company_delete_cascades_financials` và seed BTC; `DECISIONS.md` vẫn ghi RESTRICT, tên test vẫn "…is
+RESTRICTED", reviewer chỉ nhắc low); TASK-02 zod 3 → 4 không có code tương thích, smoke có console error
+`accounting.balanceSheet` (có thể là query dở lúc logout, chưa đối chiếu baseline); TASK-01 `PARTIAL` với 98304 vì
+thiếu commit `571c531`. Jev: 26 quyết định, 6 lần dùng giá trị Jev; `next_action` BUG-02 Jev nói `drop` cho item đã qua
+gate và review, luật chặn đúng.

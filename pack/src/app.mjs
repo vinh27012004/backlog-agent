@@ -4,9 +4,10 @@
 // Trạng thái là file trong team-sdlc-pack/local/apps/ vì helper của subagent là tiến trình khác helper của root;
 // `worktree remove` của root dừng app của item qua file đó.
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
 import { childEnv, killTree } from './jobs.mjs';
 import { redact } from './redact.mjs';
@@ -15,6 +16,7 @@ import { fail, sleep, writeFileAtomic } from './util.mjs';
 const FIRST_PORT = 3100;
 const LAST_PORT = 3199;
 const MAX_WAIT_SECONDS = 50;
+const PORT_RETRIES = 3;
 const WRAPPER = "const [cmd, ...args] = JSON.parse(process.argv[1]); "
   + "const r = require('child_process').spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true }); process.exit(r.status ?? 1);";
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
@@ -42,11 +44,19 @@ export function locate(teamWorkspace, matchRoot) {
   return { matchRoot: abs, logDir: join(teamWorkspace, 'matches', rel.split(sep)[0], '.team-work', 'logs') };
 }
 
-const portFree = port => new Promise(ok => {
+// Trên Windows mỗi địa chỉ bind riêng: thử bind 127.0.0.1 vẫn được khi một app khác giữ `::` (next start, http.listen
+// không host). L7TZXHII: server của test bị bỏ lại giữ :::3100, helper vẫn chọn 3100 cho cả 4 item, app nào cũng
+// EADDRINUSE. Port chỉ trống khi bind được trên cả bốn; máy không có IPv6 thì bỏ qua lỗi họ địa chỉ.
+const bindable = (port, host) => new Promise(ok => {
   const srv = createServer();
-  srv.once('error', () => ok(false));
-  srv.listen({ port, host: '127.0.0.1', exclusive: true }, () => srv.close(() => ok(true)));
+  srv.once('error', error => ok(['EADDRNOTAVAIL', 'EAFNOSUPPORT'].includes(error.code)));
+  srv.listen({ port, host, exclusive: true }, () => srv.close(() => ok(true)));
 });
+
+const portFree = async port => {
+  for (const host of ['::', '0.0.0.0', '127.0.0.1', '::1']) if (!await bindable(port, host)) return false;
+  return true;
+};
 
 async function freePort(teamWorkspace) {
   const taken = new Set();
@@ -78,11 +88,39 @@ export function appCommand(matchRoot, port, mode = 'production') {
   return { profile, build: scripts.start && profile.commands.build ? profile.commands.build : null, start, mode: scripts.start ? 'production' : 'dev' };
 }
 
+// Auth.js/NextAuth chuyển hướng (logout, callback) theo AUTH_URL/NEXTAUTH_URL trong .env của app; port ở đó khác port
+// helper chọn thì logout đưa tới port không có app (Practice MZP27104, TASK-02: fixer ghi PASS cho smoke logout hỏng,
+// thêm một lượt fixer). Next.js không ghi đè biến môi trường đã có bằng .env, nên chỉ đặt cho tiến trình app, không
+// sửa file. Chỉ URL localhost; giữ đường dẫn (base path của auth).
+const AUTH_URL_KEYS = ['AUTH_URL', 'NEXTAUTH_URL'];
+const AUTH_ENV_FILES = ['.env', '.env.local', '.env.production', '.env.production.local', '.env.development', '.env.development.local'];
+
+export function authUrlEnv(appRoot, port) {
+  const out = {};
+  for (const file of AUTH_ENV_FILES) {
+    let env;
+    try { env = parseEnv(readFileSync(join(appRoot, file), 'utf8')); } catch { continue; }
+    for (const key of AUTH_URL_KEYS) {
+      let url;
+      try { url = new URL(env[key]); } catch { continue; }
+      if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) continue;
+      const path = url.pathname === '/' && !env[key].endsWith('/') ? '' : url.pathname;
+      out[key] = `${url.protocol}//${url.hostname}:${port}${path}${url.search}`;
+    }
+  }
+  return out;
+}
+
 function tail(file, bytes = 3000) {
   try {
     const text = readFileSync(file, 'utf8');
     return redact(text.slice(-bytes)).replace(/\x1b\[[0-9;]*m/g, '');
   } catch { return ''; }
+}
+
+// Phần log do lần launch hiện tại ghi (lần thử lại vì port ghi tiếp sau log cũ).
+function sinceLaunch(s) {
+  try { return readFileSync(s.log).subarray(s.logFrom ?? 0).toString('utf8'); } catch { return ''; }
 }
 
 async function responds(port) {
@@ -92,17 +130,26 @@ async function responds(port) {
   } catch { return false; }
 }
 
-// Chờ app trả lời HTTP (bất kỳ mã nào), tiến trình chết, hoặc hết waitSeconds.
+// Chờ app trả lời HTTP (bất kỳ mã nào), tiến trình chết, hoặc hết waitSeconds. Chỉ `ready` khi tiến trình của mình còn
+// sống: L7TZXHII trả `ready` vì app lạ trên port trả lời trong lúc app của item đã chết vì EADDRINUSE. App chết vì
+// port bị chiếm (lệnh start chỉ chạy sau khi build xong) thì start lại không build trên port khác, tối đa PORT_RETRIES lần.
 async function settle(teamWorkspace, key, waitSeconds) {
-  const s = readState(teamWorkspace, key);
-  if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
   const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
   for (;;) {
-    if (await responds(s.port)) {
+    const s = readState(teamWorkspace, key);
+    if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
+    if (alive(s.pid) && await responds(s.port) && alive(s.pid)) {
       return { state: 'ready', url: `http://localhost:${s.port}`, port: s.port, pid: s.pid, mode: s.mode, log: s.log,
-        hint: 'Use this url in capture_evidence. Call app stop once your evidence is written.' };
+        ...(s.authEnv ? { authEnv: s.authEnv } : {}),
+        hint: `Use this url in capture_evidence. Call app stop once your evidence is written.${s.authEnv
+          ? ` ${Object.keys(s.authEnv).join('/')} already point at this port for this app: do not edit .env for it.` : ''}` };
     }
     if (!alive(s.pid)) {
+      const retries = s.retries ?? 0;
+      if (retries < PORT_RETRIES && /EADDRINUSE/.test(sinceLaunch(s))) {
+        await launch(teamWorkspace, key, locate(teamWorkspace, s.matchRoot), s.requestedMode ?? s.mode, false, retries + 1);
+        continue;
+      }
       rmSync(stateFile(teamWorkspace, key), { force: true });
       return { state: 'failed', log: s.log, tail: tail(s.log),
         hint: 'The build or the app exited: read the tail, fix the cause, then call app start again.' };
@@ -134,6 +181,12 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
 
   const where = locate(teamWorkspace, matchRoot);
   stopApp(teamWorkspace, key);   // start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là bản mới
+  await launch(teamWorkspace, key, where, mode, build, 0);
+  return settle(teamWorkspace, key, waitSeconds);
+}
+
+// Lần thử lại vì port (retries > 0) ghi tiếp vào log để vẫn thấy dòng EADDRINUSE trước đó.
+async function launch(teamWorkspace, key, where, mode, build, retries) {
   const port = await freePort(teamWorkspace);
   const cmd = appCommand(where.matchRoot, port, mode);
   if (cmd.error) fail('UNSUPPORTED_APP', cmd.error);
@@ -146,16 +199,18 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
     : ['sh', '-c', steps.join(' && ')];
   mkdirSync(where.logDir, { recursive: true });
   const log = join(where.logDir, `${key}-app.log`);
-  const fd = openSync(log, 'w');
+  const fd = openSync(log, retries ? 'a' : 'w');
+  const logFrom = fstatSync(fd).size;
+  const authEnv = authUrlEnv(cmd.profile.root, port);
   let child;
   try {
-    child = spawn(process.execPath, ['-e', WRAPPER, JSON.stringify(shell)], { cwd: cmd.profile.root, env: childEnv({ PORT: String(port) }),
-      detached: true, windowsHide: true, stdio: ['ignore', fd, fd] });
+    child = spawn(process.execPath, ['-e', WRAPPER, JSON.stringify(shell)], { cwd: cmd.profile.root,
+      env: childEnv({ PORT: String(port), ...authEnv }), detached: true, windowsHide: true, stdio: ['ignore', fd, fd] });
   } finally {
     closeSync(fd);
   }
   child.unref();
-  writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: cmd.mode, built: steps.length > 1,
-    matchRoot: where.matchRoot, log, startedAt: new Date().toISOString() }));
-  return settle(teamWorkspace, key, waitSeconds);
+  writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: cmd.mode, requestedMode: mode,
+    built: steps.length > 1, retries, matchRoot: where.matchRoot, log, logFrom, startedAt: new Date().toISOString(),
+    ...(Object.keys(authEnv).length ? { authEnv } : {}) }));
 }

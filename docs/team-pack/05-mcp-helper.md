@@ -370,7 +370,8 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   - `fail-before` (chỉ gate ở worktree, cần `testsAdded`): chép file test của item vào worktree **probe**
     (`.team-work/wt/_probe`, detached ở base của item, cài dependency một lần, chuẩn bị nền khi tạo worktree item đầu
     tiên, dùng tuần tự, dọn bằng `reset --hard` + `clean -fd`) và chạy `test_one` trên code chưa sửa. Test mới (có
-    trong lần chạy với bản sửa, không có trong baseline) mà vẫn pass → `warn`. Probe chưa sẵn sàng sau 90 s thì
+    trong lần chạy với bản sửa, không có trong baseline) không cái nào fail → `warn`; có cái fail thì các test mới pass
+    trước khi sửa là đối chứng, chỉ ghi vào `passesBefore`, check `ok`. Probe chưa sẵn sàng sau 90 s thì
     `skipped`. Không chặn: root gửi lại cho fixer (BUG), reviewer nhận trong `<gate_findings>`. Kết quả có
     `reproduced` (ít nhất một test mới fail trên code chưa sửa).
   - `reproduction` (chỉ PI, gate ở worktree, `requireReproduction`): bằng chứng nguyên nhân gốc là test mới fail trên

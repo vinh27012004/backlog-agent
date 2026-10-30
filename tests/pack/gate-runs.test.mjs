@@ -216,10 +216,12 @@ test('fail-before runs the new tests on the unfixed code in the probe worktree',
   const result = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });
   assert.equal(result.passed, true, JSON.stringify(result.checks));
   const check = result.checks.find(c => c.name === 'fail-before');
-  assert.equal(check.status, 'warn', JSON.stringify(check));
+  // Một test mới fail trước khi sửa: test còn lại là đối chứng, không thành finding.
+  assert.equal(check.status, 'ok', JSON.stringify(check));
+  assert.equal(check.reproduced, true);
   assert.equal(check.newTests, 2);
-  assert.match(check.warnings[0], /does not reproduce the problem: tests\/money\.test\.js > zero again$/);
-  assert.ok(result.findings.some(f => f.startsWith('fail-before: ')));
+  assert.deepEqual(check.passesBefore, ['tests/money.test.js > zero again']);
+  assert.equal(result.findings.some(f => f.startsWith('fail-before: ')), false);
   // Probe được dọn về base sau khi chạy.
   assert.equal(readFileSync(join(probe.matchRoot, 'src', 'lib.js'), 'utf8').replace(/\r\n/g, '\n'), 'exports.vnd = n => n * 10000;\n');
   assert.doesNotMatch(readFileSync(join(probe.matchRoot, 'src', 'tests', 'money.test.js'), 'utf8'), /zero again/);
@@ -248,12 +250,13 @@ test('a PI needs a new test that fails on the unfixed code; without one the gate
   assert.equal(weak.failKind, 'not_reproduced', JSON.stringify(weak.checks));
   assert.equal(weak.signature, 'not_reproduced:passes-before');
   assert.match(weak.detail, /zero again/);
+  assert.equal(weak.checks.find(c => c.name === 'fail-before').status, 'warn');
 
   writeFileSync(testFile, `${original}it('zero again', () => { expect(vnd(0)).toBe(0); });\nit('one dong is 100 xu', () => { expect(vnd(1)).toBe(100); });\n`);
   const ok = await pi({ testsAdded: ['tests/money.test.js'] });
   assert.equal(ok.passed, true, JSON.stringify(ok.checks));
   assert.equal(ok.checks.find(c => c.name === 'reproduction').status, 'ok');
-  assert.equal(ok.checks.find(c => c.name === 'fail-before').status, 'warn', 'the edge-case test that also passes before stays a warning');
+  assert.equal(ok.checks.find(c => c.name === 'fail-before').status, 'ok', 'the edge-case test that also passes before is a control, not a warning');
 
   // Không phải PI: không có check reproduction.
   const bug = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });

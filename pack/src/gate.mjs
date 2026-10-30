@@ -441,8 +441,10 @@ export function disappearedTests(baseline, run, accepted = []) {
   return [];
 }
 
-// Mục 5: chạy test của item trên code chưa sửa (probe ở base). Test mới (không có trong baseline) vẫn pass ở đó thì
-// nó không tái hiện lỗi / không kiểm thay đổi. Chỉ cảnh báo: root gửi lại cho fixer, reviewer nhận làm gate finding.
+// Mục 5: chạy test của item trên code chưa sửa (probe ở base). Không test mới nào (không có trong baseline) fail ở
+// đó thì bộ test không tái hiện lỗi / không kiểm thay đổi. Chỉ cảnh báo: root gửi lại cho fixer, reviewer nhận làm
+// gate finding. Có test mới fail thì những test mới pass trước khi sửa là test đối chứng (ca USD của BUG-02, Practice
+// MZP27104: verifier đòi retry vô ích), chỉ ghi vào `passesBefore`, không cảnh báo.
 async function failBefore(probe, { base, files, folder, checkoutRoot, matchRoot, profile, addedRun, baseline, targets, logFile, timeoutMs }) {
   const check = { name: 'fail-before' };
   const known = baseline?.tests ?? {};
@@ -458,8 +460,9 @@ async function failBefore(probe, { base, files, folder, checkoutRoot, matchRoot,
       : run.res.code === 0 ? ['every declared test'] : [];
     // reproduced: ít nhất một test mới fail trên code chưa sửa (PI bắt buộc, xem requireReproduction).
     const reproduced = fresh && run.report ? passed.length < fresh.length : run.res.code !== 0;
-    return { ...check, status: passed.length ? 'warn' : 'ok', reproduced, source: run.source, ...(fresh ? { newTests: fresh.length } : {}),
-      ...(passed.length ? { warnings: [`passes on the unfixed code, so it does not reproduce the problem: ${passed.slice(0, 5).join('; ')}`] } : {}) };
+    return { ...check, status: reproduced ? 'ok' : 'warn', reproduced, source: run.source, ...(fresh ? { newTests: fresh.length } : {}),
+      ...(reproduced && passed.length ? { passesBefore: passed.slice(0, 5) } : {}),
+      ...(reproduced ? {} : { warnings: [`passes on the unfixed code, so it does not reproduce the problem: ${passed.slice(0, 5).join('; ')}`] }) };
   } catch (error) {
     return { ...check, status: 'skipped', reason: String(error?.message ?? error).slice(0, 160) };
   }
