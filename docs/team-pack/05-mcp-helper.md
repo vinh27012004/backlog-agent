@@ -620,6 +620,12 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `codegraph: indexed|failed|not installed`). Lỗi không bao giờ làm hỏng bước gọi nó. Index nằm ở `.codegraph/` trong
   thư mục trận; `prepare_checkout` thêm `.codegraph/` vào `.git/info/exclude` (dùng chung cho mọi worktree) nên không
   lọt vào diff, gate hay commit. Sau đó watcher của server tự `sync` khi agent sửa file (debounce 2 s).
+- **Helper đọc index cho triage** (30/10, `pack/src/signals.mjs` `codeTopology`): lúc `start_work`, helper mở
+  `.codegraph/codegraph.db` của checkout chính bằng `node:sqlite` (built-in, chỉ đọc, không qua MCP server) để tính
+  `impact_radius_files`, `call_depth`, `callers_count`, `callees_count`, `cross_module` cho Jev và luật `difficulty`
+  ([08](08-guardrails.md)). Đọc thẳng bảng `nodes`/`edges`/`files`/`project_metadata` của bản 1.6.2 (cạnh: `source`
+  phụ thuộc `target`); đổi phiên bản codegraph thì kiểm lại schema. Thiếu index, `index_state` khác `complete`, DB
+  khoá/hỏng hay Node không có `node:sqlite` thì `topology: null`, không lỗi. Đo trên Solova (FMC0ZXFC, 148 file): 2–12 ms.
 - **Cần theo dõi ở practice**: server giữ file SQLite trong `.codegraph/` của worktree; nếu tiến trình còn sống lúc
   `worktree remove` thì Windows có thể khoá file. Câu hỏi cho BTC: thêm một MCP server thứ hai vào
   `.codex/config.toml` có được không.

@@ -12,10 +12,12 @@ import { difficultyFromSignals } from './signals.mjs';
 
 export const SEVERITY = ['low', 'medium', 'high', 'critical'];
 const SEVERITY_FLOOR = { PI: 'critical' };
+// Tiêu chí nêu thẳng tên trường của code_topology/kb_insights để Jev bám vào số liệu thay vì chỉ đọc chữ của đề.
 const DIFFICULTY = {
-  easy: '1-2 files, cause or change is obvious',
-  medium: 'several files, or the cause needs some investigation',
-  hard: 'cross-module, data/concurrency/config/time zone, or cause unknown'
+  easy: '1-2 files, localized impact (code_topology.impact_radius_files <= 3, not cross_module), no tricky stack/DB pitfalls in kb_insights',
+  medium: 'several files, moderate impact (impact_radius_files 4-10), clear module boundaries, or the cause needs some investigation',
+  hard: 'cross-module, high impact radius (impact_radius_files > 10), tricky concurrency/transaction/migration/time zone issues ' +
+    '(kb_insights.risk_factors), or cause unknown'
 };
 
 const INJECTION_PATTERNS = [
@@ -38,16 +40,42 @@ const fullText = item => Object.values(item ?? {}).filter(v => typeof v === 'str
 // Jev chỉ nhận đầu và cuối của đoạn dài (state còn bị cắt ở maxStateChars), để phần cuối đề vẫn tới được Jev.
 export function headTail(text, head, tail) {
   const s = String(text ?? '');
-  return s.length <= head + tail ? s : `${s.slice(0, head)}\n…[${s.length - head - tail} chars cut]…\n${s.slice(-tail)}`;
+  return s.length <= head + tail ? s : `${s.slice(0, head)}\n…[${s.length - head - tail} chars cut]…\n${tail > 0 ? s.slice(-tail) : ''}`;
 }
 
-const forJev = item => ({ ...item,
-  ...(typeof item?.description === 'string' ? { description: headTail(item.description, 1400, 600) } : {}),
-  ...(typeof item?.startInstruction === 'string' ? { startInstruction: headTail(item.startInstruction, 600, 400) } : {}) });
+// scale < 1: co cả đầu lẫn cuối khi phần trước item (signals, topology, KB) đã chiếm chỗ.
+const forJev = (item, scale = 1) => {
+  const cut = (head, tail) => [Math.floor(head * scale), Math.floor(tail * scale)];
+  return { ...item,
+    ...(typeof item?.description === 'string' ? { description: headTail(item.description, ...cut(1400, 600)) } : {}),
+    ...(typeof item?.startInstruction === 'string' ? { startInstruction: headTail(item.startInstruction, ...cut(600, 400)) } : {}) };
+};
 
-// Jev đọc chữ: ghép các phần thành văn bản có nhãn rõ ràng.
+// Jev đọc chữ: ghép các phần thành văn bản có nhãn rõ ràng, JSON một dòng cho đỡ tốn chỗ.
 const state = parts => Object.entries(parts).filter(([, v]) => v !== null && v !== undefined)
-  .map(([k, v]) => `## ${k}\n${typeof v === 'string' ? v : JSON.stringify(v, null, 1)}`).join('\n\n');
+  .map(([k, v]) => `## ${k}\n${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n\n');
+
+// signals (src/signals.mjs) tách thành ba khối: đặc trưng của đề, code_topology (index codegraph), kb_insights
+// (stack-notes, bug-patterns). Thiếu phần nào thì khối đó vắng mặt; ms chỉ để đo, không gửi Jev.
+export function signalBlocks(signals) {
+  if (!signals) return {};
+  const { topology, kb, ...rest } = signals;
+  const { ms, ...topo } = topology ?? {};
+  return { signals: rest, code_topology: topology ? topo : null, kb_insights: kb ?? null };
+}
+
+const SCALES = [1, 0.75, 0.5, 0.3, 0.15, 0];
+
+// State không bao giờ vượt max: các khối trước item giữ nguyên (đứng trước nên không bị cắt), item co dần đầu + cuối
+// cho vừa phần còn lại. Chỉ khi chính các khối đó đã quá max mới cắt cứng (JevClient cũng cắt ở maxStateChars).
+export function fitState(parts, item, max = 4000) {
+  let text = '';
+  for (const scale of SCALES) {
+    text = state({ ...parts, item: item === undefined ? undefined : forJev(item, scale) });
+    if (text.length <= max) return text;
+  }
+  return text.slice(0, max);
+}
 
 const typeOf = key => String(key).split('-')[0].toUpperCase();
 
@@ -62,8 +90,8 @@ const TRIAGE_QUESTIONS = {
 
 const ROUTE_QUESTIONS = {
   model: choice('Which model tier should implement this change?', {
-    small: 'routine, local change with clear instructions',
-    strong: 'needs investigation, design or changes across several files' }),
+    small: 'routine local change with clear instructions and a low impact radius (code_topology)',
+    strong: 'needs investigation or design, high impact radius or cross-module changes, or a high-risk domain (kb_insights.risk_factors)' }),
   reviewer: noul('Is an independent code review needed for this change (risk of subtle regressions, unclear root cause, security impact)?')
 };
 
@@ -161,11 +189,13 @@ export class Decider {
     return { model, reviewer };
   }
 
+  fit(parts, item) { return fitState(parts, item, this.jev.config.maxStateChars ?? 4000); }
+
   // 1. Nhận item: mức nghiêm trọng, độ khó, có câu lệnh nhắm vào AI không.
-  // signals (src/signals.mjs) đứng trước item để không bị cắt ở maxStateChars.
+  // signals, code_topology, kb_insights đứng trước item để không bị cắt ở maxStateChars.
   async triage(key, item, { signals = null } = {}) {
     const type = typeOf(key);
-    const { answers, err, ms } = await this.ask(TRIAGE_QUESTIONS, state({ item_type: type, signals, item: forJev(item) }));
+    const { answers, err, ms } = await this.ask(TRIAGE_QUESTIONS, this.fit({ item_type: type, ...signalBlocks(signals) }, item));
     const out = this.triageFrom(type, item, answers ?? {}, err, signals);
     for (const d of Object.values(out)) this.record(key, d, ms);
     return out;
@@ -174,8 +204,10 @@ export class Decider {
   // 2. Cách chạy fixer: tier model, có cần reviewer.
   async route(key, item, triage, { pendingItems = null, minutesLeft = null, signals = null } = {}) {
     const type = typeOf(key);
+    // Đặc trưng của đề đã nằm trong triage; route chỉ cần thêm topology và KB.
+    const { signals: _, ...blocks } = signalBlocks(signals);
     const { answers, err, ms } = await this.ask(ROUTE_QUESTIONS,
-      state({ item_type: type, triage, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
+      this.fit({ item_type: type, triage, ...blocks, workload: { pending_items: pendingItems, minutes_left: minutesLeft } }, item));
     const out = this.routeFrom(type, triage?.difficulty ?? 'medium', answers ?? {}, err, signals);
     for (const d of Object.values(out)) this.record(key, d, ms);
     return out;
@@ -185,7 +217,7 @@ export class Decider {
   async intake(key, item, { pendingItems = null, minutesLeft = null, signals = null } = {}) {
     const type = typeOf(key);
     const { answers, err, ms } = await this.ask({ ...TRIAGE_QUESTIONS, ...ROUTE_QUESTIONS },
-      state({ item_type: type, signals, workload: { pending_items: pendingItems, minutes_left: minutesLeft }, item: forJev(item) }));
+      this.fit({ item_type: type, ...signalBlocks(signals), workload: { pending_items: pendingItems, minutes_left: minutesLeft } }, item));
     const triage = this.triageFrom(type, item, answers ?? {}, err, signals);
     const route = this.routeFrom(type, triage.difficulty.value, answers ?? {}, err, signals);
     for (const d of [...Object.values(triage), ...Object.values(route)]) this.record(key, d, ms);
@@ -232,7 +264,7 @@ export class Decider {
     const situation = { item_type: typeOf(key), gate_passed: gatePassed, mvs_passed: mvsPassed, attempts, max_attempts: maxAttempts,
       minutes_left: minutesLeft === null ? null : Math.round(minutesLeft * 10) / 10, pending_items: pendingItems, last_failure: lastFailure,
       same_failure_count: sameFailureCount };
-    const { answers, err, ms } = await this.ask({ action: choice('What should the team do next with this item?', allowed) }, state({ situation, item: forJev(item) }));
+    const { answers, err, ms } = await this.ask({ action: choice('What should the team do next with this item?', allowed) }, this.fit({ situation }, item));
     const d = this.pickChoice('next_action', answers?.action, err, rule, new Set(Object.keys(allowed)));
     return this.record(key, { ...d, allowed: Object.keys(allowed) }, ms);
   }

@@ -139,6 +139,28 @@ cho `["git", "-C"]`, vì worker không cần `-C`).
 > ([06 §9](06-agents-va-skills.md#9-chọn-model)); `easy` chỉ khi đề là câu trả lời thuần hoặc grep thấy ≤ 3 file. Root không
 > tốn thêm lượt gọi nào. Sau trận tập: so `rule`/`jev` trong `decisions.ndjson` với số lần thử thật để chỉnh trọng số.
 >
+> **Topology và KB (30/10):** `difficulty` của Jev vẫn 0/5 lần đủ ngưỡng sau khi có `signals` (độ tin 0,27–0,48), vì
+> Jev chỉ thấy số file grep, không thấy cấu trúc code. `signals` có thêm hai phần, gửi Jev thành hai khối riêng
+> `## code_topology` và `## kb_insights` đứng sau `## signals`, trước `## item`:
+> - `topology` (từ index codegraph, [05 §5.21](05-mcp-helper.md#521-codegraph-mcp-server-ngoài-mới-2810)): điểm xuất
+>   phát là symbol trùng từ khoá dáng code của đề, không có thì các symbol trong file grep thấy (bỏ file test và
+>   `env-require/`); `impact_radius_files` là số file app phụ thuộc tới đó (gọi, tham chiếu, import, sâu 3 như
+>   `codegraph_impact`; không đi qua file import để file hub không kéo cả app vào), `call_depth` là chuỗi hàm gọi dài
+>   nhất (tới 6), `cross_module` khi các file đó nằm ở hơn một module (2 cấp thư mục dưới thư mục chiếm ≥ 75% mã nguồn).
+>   Ngân sách 300 ms; không có index thì `null` và luật dùng lại phần grep.
+> - `kb` (từ `skills/stack-notes/<stack>.md` và `backlog-references/bug-patterns.md`): `domain` theo manifest của app
+>   (Next.js, Prisma, tRPC, Spring Petclinic, Flask…), `risk_factors` theo chữ của đề (`db_transaction`, `concurrency`,
+>   `schema_migration`, `ssr_hydration`, `timezone`, `money_precision`, `caching`, `auth_access`, `orm_query` khi repo có
+>   ORM, `dependency_upgrade`) và một dòng `known_pitfalls` khớp nhất.
+>
+> Tiêu chí của `difficulty` và `model` nêu thẳng các trường đó (easy: ≤ 3 file bị ảnh hưởng; hard: > 10 file, gọi chéo
+> module hay rủi ro concurrency/transaction/migration). Luật dự phòng: `impact_radius_files > 10` hoặc hơn 3 module
+> cộng 1 điểm như grep rộng; `concurrency`/`db_transaction`/`schema_migration` cộng 1 khi cờ `data`/`tricky` chưa tính;
+> có topology thì `easy` cần ≤ 3 file trong một module thay cho "grep ≤ 3 file". State luôn ≤ `maxStateChars`: các
+> khối trước giữ nguyên, phần đầu + cuối của đề co lại cho vừa (`fitState`), không còn cắt mất đuôi đề. Luật sàn
+> không đổi. Chạy lại trên đề FMC0ZXFC: chỉ BUG-02 đổi từ `hard` sang `medium` (grep không còn đếm `env-require/`),
+> TASK-03/04 (câu trả lời thuần, ≤ 2 file) ra `easy`. Sau trận tập tới: đo lại tỉ lệ `difficulty` theo Jev trong `decisions.ndjson`.
+>
 > Quan sát của Player 0.9.33: request Jev được khai trong `networkActivity` nên **hiện** ở bảng Network & API của
 > dashboard với origin `https://api.typesafe.ai`. Bước gắn cờ `UNEXPECTED_NETWORK_ORIGIN` chỉ xét event trong progress
 > log (`progress.mjs:670`), còn telemetry của MCP gộp vào sau (`progress.mjs:1104`), nên hiện chưa bị gắn cờ tự động.
