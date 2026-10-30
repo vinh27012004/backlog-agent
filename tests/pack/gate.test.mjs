@@ -326,6 +326,10 @@ test('code scan warns about leftovers, unsafe SQL, credentials and junk files in
   writeFileSync(join(r.app, 'tests', 'money.test.ts'), 'it("vnd", () => { console.log("x"); expect(vnd(1)).toBe(100); });\n');
   writeFileSync(join(r.app, 'invoices-tab.tsx.cr01-backup'), 'old\n');
   writeFileSync(join(r.app, 'capture-before-cr01.mjs'), 'run()\n');
+  // FMC0ZXFC: script/seed riêng của item bị commit vào source; test mang tên item thì được.
+  writeFileSync(join(r.app, 'prisma', 'seed-bug02.ts'), 'export {};\n');
+  writeFileSync(join(r.app, 'BUG-02-run-checks.mjs'), 'export {};\n');
+  writeFileSync(join(r.app, 'tests', 'bug-04-mvs.test.ts'), 'it("vnd again", () => { expect(vnd(2)).toBe(200); });\n');
   const files = (await changedFiles(r.root, r.base));
   const warnings = (await codeScan(r.root, r.base, files, 'M1')).join('\n');
   assert.match(warnings, /lib\/orders\.ts:1: leaves a TODO/);
@@ -338,6 +342,9 @@ test('code scan warns about leftovers, unsafe SQL, credentials and junk files in
   assert.doesNotMatch(warnings, /seed-x\.ts|money\.test\.ts/, 'CLI scripts and tests may print');
   assert.match(warnings, /invoices-tab\.tsx\.cr01-backup: looks like a backup/);
   assert.match(warnings, /capture-before-cr01\.mjs: looks like a backup or helper script/);
+  assert.match(warnings, /prisma\/seed-bug02\.ts: item-named helper or seed script/);
+  assert.match(warnings, /BUG-02-run-checks\.mjs: item-named helper or seed script/);
+  assert.doesNotMatch(warnings, /bug-04-mvs\.test\.ts/);
   writeAnswer(r, GOOD);
   const result = await gate(r);
   assert.equal(result.passed, true, 'code-scan only warns');

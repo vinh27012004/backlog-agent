@@ -379,6 +379,7 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     (`not_reproduced:existing-only`) hoặc mọi test mới đều pass trên code chưa sửa (`not_reproduced:passes-before`) →
     fail `not_reproduced`, chạy trước check answer. Stack không có `test_one` hoặc probe không chạy được thì chỉ `warn`.
     Đã qua build và regression nên `tree` vẫn được lưu: hết giờ thì root vẫn publish được theo luật cơ hội cuối.
+    Diff không đổi file nào ngoài `answers/<ID>/` (PI chỉ báo cáo, FMC0ZXFC PI-01) thì check này `skipped`.
   - Mọi check `warn` gom vào `findings` của kết quả để root đưa cho reviewer.
 - Build và test pass (kể cả khi chỉ answer sai) thì `codePassed: true` và `tree` = SHA tree của `<folder>/` trừ
   `answers/<ID>/` (index tạm `GIT_INDEX_FILE`, `git add -A` + `git write-tree`), tính sau khi lệnh của gate chạy

@@ -275,6 +275,13 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.equal(cause.decisions.root_cause_confirmed.value, false);
     assert.equal(jevCalls.length, callsBefore);
     await assert.rejects(client.call('decide', { point: 'root_cause_confirmed', backlogItemKey: 'TASK-01', context: { fixResultFile: join(tw, 'AGENTS.md') } }), /PATH_NOT_ALLOWED/);
+    // FMC0ZXFC: root viết đường dẫn bằng '/' trên Windows, helper từ chối PATH_NOT_ALLOWED.
+    const slashed = await client.call('decide', { point: 'root_cause_confirmed', backlogItemKey: 'TASK-01', context: { fixResultFile: resultFile.replaceAll('\\', '/') } });
+    assert.equal(slashed.decisions.root_cause_confirmed.value, false);
+    // Luật cơ hội cuối chỉ cho bản đã qua build và regression (TASK-02 chưa có gate nào pass).
+    await assert.rejects(client.call('submit_work', { backlogItemKey: 'TASK-02', gitRevision: 'a'.repeat(40), lastChance: { reason: 'no time' } }), /LAST_CHANCE_INVALID/);
+    // FMC0ZXFC: BLOCKER_OPENED sai key chỉ nhận "exact keys"; lỗi phải nêu key cần có.
+    await assert.rejects(client.call('report_progress', { event: { type: 'BLOCKER_OPENED', backlogId: 'TASK-02', code: 'X', summary: 'x' } }), /blockerId, backlogId, summary/);
     await assert.rejects(client.call('decide', { point: 'claims_supported', backlogItemKey: 'TASK-01', context: { fixResultFile: resultFile } }));
     // Hard gate: item chưa qua gate thì không tích hợp được; sửa code sau gate thì phải gate lại; answers/<ID>/ thì được sửa.
     await assert.rejects(client.call('worktree', { action: 'integrate', backlogItemKey: 'TASK-02', message: 'bye' }), /GATE_REQUIRED/);
@@ -286,6 +293,8 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const integrated = await client.call('worktree', { action: 'integrate', backlogItemKey: 'TASK-01', message: 'return hello world' });
     assert.equal(integrated.baseChanged, false);
     const pushed = await client.call('commit_and_push', { backlogItemKey: 'TASK-01', message: 'return hello world' });
+    // Worktree TASK-02 tạo trước bản này: phải sync trước lượt sau (FMC0ZXFC: ảnh CR bị sidebar cũ che).
+    assert.deepEqual(pushed.staleWorktrees, ['TASK-02']);
     assert.equal(sh('git', ['--git-dir', remote.bare, 'rev-parse', 'refs/heads/main'], root), pushed.revision);
     const pushedFiles = sh('git', ['--git-dir', remote.bare, 'show', '--name-only', '--format=', pushed.revision], root).split('\n');
     assert.ok(pushedFiles.includes(`${MATCH}/src/lib.js`));

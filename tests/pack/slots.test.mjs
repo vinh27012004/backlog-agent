@@ -78,3 +78,34 @@ test('the newest fix-result with no gate after it is reported once as FIX_RESULT
   assert.deepEqual(rt.ungatedResults(), []);
   assert.equal(rt.itemNotice(), null);
 });
+
+// FMC0ZXFC: TASK-03 (hạn 8 phút) và TASK-04 chỉ hỏi một giá trị, chờ slot sau 4 item sửa code rồi không bao giờ bắt đầu.
+test('answer-only items need no slot, are always offered and go before code items of the same deadline class', () => {
+  const desc = { 'TASK-03': '## Question\nWhich value?\n## Normalization\nOne integer.', 'TASK-04': '## Questions\n1. Balance?',
+    'CR-03': '## Acceptance criteria\n1. Links work' };
+  const rows = [row('BUG-01', 'started'), row('BUG-03', 'started'), row('CR-01', 'started'), row('CR-02', 'started'),
+    row('CR-03', 'todo', { points: 100 }), row('TASK-03', 'todo', { points: 50 }), row('TASK-04', 'todo', { points: 70 })];
+  const rt = runtime(rows);
+  rt.gm.view.items = Object.entries(desc).map(([key, descriptionMd]) => ({ key, raw: { descriptionMd } }));
+  const full = rt.itemNotice();
+  assert.deepEqual(full.newItems, ['TASK-03', 'TASK-04'], 'no free slot: only the answer-only items');
+  assert.deepEqual(full.answerOnly, ['TASK-03', 'TASK-04']);
+  assert.equal(full.freeSlots, undefined);
+  assert.match(full.hint, /Answer-only, needs no slot: start TASK-03, TASK-04 now/);
+  assert.doesNotMatch(full.hint, /CR-03/);
+
+  // A running answer-only item does not take one of the 4 slots either.
+  const running = runtime([row('BUG-01', 'started'), row('BUG-03', 'started'), row('CR-01', 'started'), row('TASK-03', 'started'), row('CR-03', 'todo')]);
+  running.gm.view.items = rt.gm.view.items;
+  assert.deepEqual(running.itemNotice().newItems, ['CR-03']);
+
+  // Real order: PI, then deadline, then answer-only, then points.
+  const ordered = runtime(rows);
+  ordered.gm.view.items = rt.gm.view.items;
+  delete ordered.matchState;
+  ordered.session.descriptor = { matchId: 'M1' };
+  ordered.minutesLeft = () => 20;
+  ordered.releases = () => [];
+  ordered.writer = { state: { bytes: 0, blockers: {} } };
+  assert.deepEqual(ordered.matchState().suggestedOrder.filter(k => ['CR-03', 'TASK-03', 'TASK-04'].includes(k)), ['TASK-04', 'TASK-03', 'CR-03']);
+});

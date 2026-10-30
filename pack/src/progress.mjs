@@ -55,7 +55,8 @@ export function eventProblem(e, playerSessionId) {
   if (!isId(playerSessionId) || e?.schemaVersion !== 1 || e?.playerSessionId !== playerSessionId) return 'envelope';
   const keys = KEYS[e.type];
   if (!keys) return `type ${e.type} not allowed`;
-  if (!exactKeys(e, [...BASE, ...keys])) return 'exact keys';
+  // Nêu key cần có: FMC0ZXFC root gửi BLOCKER_OPENED với `code`, chỉ nhận "exact keys" rồi bỏ sự kiện.
+  if (!exactKeys(e, [...BASE, ...keys])) return `exact keys: ${e.type} takes ${keys.join(', ')}`;
   const summaryOk = e.type === 'ENVIRONMENT_READY' || safeText(e.summary, 240);
   if (!summaryOk) return 'summary (1-240 chars, single line, no credential-like text)';
   switch (e.type) {

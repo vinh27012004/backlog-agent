@@ -10,7 +10,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync,
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexStandardPriceCard } from '../../vendor/mtm-player-0.9.39/app/src/codex-price-card.mjs';
+import { codexStandardPriceCard } from '../../vendor/mtm-player-0.9.41/app/src/codex-price-card.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const COUNTERS = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'];

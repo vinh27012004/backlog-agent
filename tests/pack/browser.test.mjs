@@ -300,3 +300,36 @@ test('capture_evidence route simulates a failing or slow server without touching
     server.close();
   }
 });
+
+// FMC0ZXFC BUG-04: thả card lên đầu danh sách cần kéo-thả thật; không có step drag nên TC-02 NOT_RUN. Danh sách kéo bằng
+// chuột như @hello-pangea/dnd (bắt đầu kéo sau 5 px, thả trước phần tử dưới con trỏ) và nhận Space bằng bàn phím.
+const DRAG = page(`<ul id="list" style="list-style:none;padding:0;margin:40px;width:200px">
+<li style="height:40px">A</li><li style="height:40px">B</li><li style="height:40px">C</li></ul><div id="order"></div><div id="key"></div>
+<script>
+const show = () => order.textContent = 'order ' + [...list.children].map(li => li.textContent).join(',');
+show(); let drag = null, start = null, moved = false;
+list.addEventListener('mousedown', e => { drag = e.target.closest('li'); start = e.clientY; moved = false; });
+window.addEventListener('mousemove', e => { if (drag && e.buttons === 1 && Math.abs(e.clientY - start) > 5) moved = true; });
+window.addEventListener('mouseup', e => { if (drag && moved) { drag.style.display = 'none';
+  const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('li'); drag.style.display = '';
+  if (over && over !== drag) list.insertBefore(drag, over); show(); } drag = null; });
+window.addEventListener('keydown', e => { if (e.key === ' ' && e.keyCode === 32) key.textContent = 'lifted'; });
+</script>`);
+
+test('capture_evidence drags with real mouse events and presses Space', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'drag', text: 'C' }] }), /drag needs to/);
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'drag', text: 'C', to: { text: 'A' }, position: 'top' }] }), /position/);
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(DRAG); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'goto', url: `http://127.0.0.1:${server.address().port}/` },
+      { action: 'drag', selector: 'li', text: 'C', to: { selector: 'li', text: 'A' }, position: 'before' },
+      { action: 'assertText', text: 'order C,A,B' },
+      { action: 'press', key: 'Space' }, { action: 'assertText', text: 'lifted' }] });
+    assert.ok(res.steps.some(s => s.action === 'drag' && s.to));
+  } finally {
+    server.close();
+  }
+});

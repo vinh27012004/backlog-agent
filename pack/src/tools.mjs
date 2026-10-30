@@ -1,6 +1,6 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { app, stopApp } from './app.mjs';
 import { captureEvidence } from './browser.mjs';
 import { indexCodegraph } from './codegraph.mjs';
@@ -10,7 +10,7 @@ import { Decider } from './decisions.mjs';
 import { JevClient, loadJevConfig } from './jev.mjs';
 import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './environment.mjs';
 import { modelPlan } from './models.mjs';
-import { itemSignals } from './signals.mjs';
+import { answerOnlyText, itemSignals } from './signals.mjs';
 import { EventQueue } from './events.mjs';
 import { GameMaster } from './game.mjs';
 import { answerAgreement, answerCheck, answerFields, changedFiles, itemEvidence, itemRequirements, runGate, scenarioCounts } from './gate.mjs';
@@ -184,8 +184,12 @@ export class Runtime {
           disputeChecked: { type: 'boolean', description: 'Answer-only item: a checker refuted the independent solver\'s different value (ANSWER_DISPUTED otherwise).' } }, ['backlogItemKey', 'gateJobId']), handler: a => this.recordVerification(a) },
       { name: 'commit_and_push', description: 'GAME: validate answers/<ID>/ and changed paths, commit everything under the match folder and push to the assigned branch (never force). Requires that the last gate of the item passed build and tests on exactly the current content (GATE_REQUIRED / GATE_STALE otherwise). Returns the full revision.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), message: str('One-line commit message.') }, ['backlogItemKey', 'message']), handler: a => this.commitAndPush(a) },
-      { name: 'submit_work', description: 'GAME: submit the pushed revision with the committed answers/<ID>/submit.json. Idempotent and safe to call again; never resubmits a received item.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), gitRevision: str('Full SHA returned by commit_and_push.') }, ['backlogItemKey', 'gitRevision']), handler: a => this.submitWork(a) },
+      { name: 'submit_work', description: 'GAME: submit the pushed revision with the committed answers/<ID>/submit.json. Idempotent and safe to call again; never resubmits a received item. '
+          + 'lastChance: the team rule in AGENTS.md (last-chance rule) authorizes submitting a candidate whose build and regression passed but whose verification '
+          + 'is not PASSED (scenarios NOT_RUN/FAIL, or a PI reproduction check) when no further attempt fits in the time left: an item that is not submitted scores 0. '
+          + 'The helper refuses lastChance unless the last gate of the item passed build and regression on this content.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), gitRevision: str('Full SHA returned by commit_and_push.'),
+          lastChance: obj({ reason: str('Why no further attempt fits and what is not verified (one line).') }, ['reason']) }, ['backlogItemKey', 'gitRevision']), handler: a => this.submitWork(a) },
       { name: 'report_progress', description: 'Write a root-decided progress event: BLOCKER_OPENED, BLOCKER_RESOLVED, BACKLOG_STATUS (IN_PROGRESS/COMPLETED/BLOCKED/FAILED), ORCHESTRATOR_RESTARTED, ORCHESTRATOR_ENDED, or a BLOCKED/FAILED stage. No envelope fields.',
         inputSchema: obj({ event: { type: 'object', description: 'Event without schemaVersion/playerSessionId.' } }, ['event']), handler: a => this.reportProgress(a) },
       { name: 'wait_for_update', description: 'Block up to timeoutMs (max 55000) for new events: ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, FIX_RESULT (a fixer wrote a fix-result that no gate has checked yet; state.ungated lists them), POLL_ERROR. Use instead of ending the turn.',
@@ -194,7 +198,7 @@ export class Runtime {
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
         inputSchema: obj({ path: str('Absolute folder; default matchRoot.') }), readOnly: true, handler: a => this.detectProfile(a) },
-      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost (the `app` tool gives its url) and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: login{url (the app\'s sign-in page), matchRoot (absolute worktree path, as for app start)} signs in with the test account the app\'s own seed script creates: the helper reads it from the app\'s .env or the seed defaults, fills the form and checks the form is gone; the account never reaches you (the result names only its env variables), so never read or type seed passwords yourself; LOGIN_FAILED means the app refused it. goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key}, waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
+      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost (the `app` tool gives its url) and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: login{url (the app\'s sign-in page), matchRoot (absolute worktree path, as for app start)} signs in with the test account the app\'s own seed script creates: the helper reads it from the app\'s .env or the seed defaults, fills the form and checks the form is gone; the account never reaches you (the result names only its env variables), so never read or type seed passwords yourself; LOGIN_FAILED means the app refused it. goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key: Enter|Tab|Escape|Space|ArrowUp/Down/Left/Right|Backspace}, drag{selector|text, index?, to:{selector|text, index?}, position?: before|after|center} (real mouse drag for drag-and-drop lists; keyboard drag is press Space on the focused handle, arrows, Space), waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
         inputSchema: obj({ steps: { type: 'array', items: { type: 'object' }, description: 'Ordered actions, max 60.' },
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
@@ -526,18 +530,30 @@ export class Runtime {
   // Item thường đã hiện mà chưa Start Work khi còn chỗ (ZVUYZ41V: TASK-01 hiện lúc 02:49:49 với 2 item đang chạy, root
   // chỉ thấy lúc 03:02 vì không gọi wait_for_update giữa các wait_agent). callTool gắn kết quả này vào mọi tool của
   // root dưới tên `notice`; không làm lượt chờ job trả sớm như PI, vì vòng chờ trong exec sẽ quay liên tục.
+  // Item chỉ trả lời (không tiêu chí nghiệm thu, có "Question"/"Answer format" hoặc cấm sửa source) không chiếm slot,
+  // như PI (FMC0ZXFC: TASK-03 hạn 8 phút ra khi 4 slot đều bận, TASK-04 70 điểm chờ tới hết trận; 120 điểm mất).
   itemNotice() {
     if (this.session.phase !== 'GAME' || !this.gm.view) return null;
     const rows = this.itemRows().filter(r => typeOf(r.key) !== 'PI' && r.status !== 'CLOSED');
-    const freeSlots = MAX_ITEMS_IN_FLIGHT - rows.filter(r => r.local === 'started').length;
+    const freeSlots = MAX_ITEMS_IN_FLIGHT - rows.filter(r => r.local === 'started' && !this.answerOnlyItem(r.key)).length;
     const todo = new Set(rows.filter(r => r.local === 'todo' && (r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
-    const newItems = this.matchState().suggestedOrder.filter(k => todo.has(k));
+    const waiting = this.matchState().suggestedOrder.filter(k => todo.has(k));
+    const answerOnly = waiting.filter(k => this.answerOnlyItem(k));
+    const newItems = freeSlots > 0 ? waiting : answerOnly;
+    const slotted = waiting.filter(k => !answerOnly.includes(k)).slice(0, Math.max(0, freeSlots));
     const ungated = this.ungatedResults();
     const hints = [];
     if (ungated.length) hints.push(`Fix-result waiting for its gate: ${ungated.map(r => r.key).join(', ')}; spawn the verifier (and reviewer) for ${ungated.map(r => r.fixResultFile).join(', ')} now.`);
-    if (freeSlots > 0 && newItems.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${newItems.slice(0, freeSlots).join(', ')} now (One item, step 1), then carry on.`);
+    if (answerOnly.length) hints.push(`Answer-only, needs no slot: start ${answerOnly.join(', ')} now (One item, step 1), then carry on.`);
+    if (freeSlots > 0 && slotted.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${slotted.join(', ')} now (One item, step 1), then carry on.`);
     if (!hints.length) return null;
-    return { ...(freeSlots > 0 && newItems.length ? { newItems, freeSlots } : {}), ...(ungated.length ? { ungated } : {}), hint: hints.join(' ') };
+    return { ...(newItems.length ? { newItems, ...(freeSlots > 0 ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
+      ...(ungated.length ? { ungated } : {}), hint: hints.join(' ') };
+  }
+
+  answerOnlyItem(key) {
+    const raw = this.gm.view?.items?.find(i => i.key === key)?.raw;
+    return answerOnlyText(raw?.descriptionMd ?? raw?.description ?? '');
   }
 
   // Fix-result mới nhất của item đang làm mà chưa gate nào chạy sau nó (803P85ZA: cr01_fix2 ghi CR-01-fixer-2.json lúc
@@ -633,6 +649,9 @@ export class Runtime {
       const da = a.deadlineMinutes ? a.minutesLeft ?? 999 : 999;
       const db = b.deadlineMinutes ? b.minutesLeft ?? 999 : 999;
       if (da !== db) return da - db;
+      // Item chỉ trả lời xong trong vài phút (MZP27104 TASK-01: 4m41s) nên đi trước item phải sửa code.
+      const oa = this.answerOnlyItem(a.key), ob = this.answerOnlyItem(b.key);
+      if (oa !== ob) return oa ? -1 : 1;
       if ((b.points ?? 0) !== (a.points ?? 0)) return (b.points ?? 0) - (a.points ?? 0);
       return (typeRank[a.type] ?? 9) - (typeRank[b.type] ?? 9);
     }).map(r => r.key);
@@ -1081,6 +1100,15 @@ export class Runtime {
       if (agreement) result.answerAgreement = agreement;
       const ji = j.item(key);
       ji.attempts = (ji.attempts ?? 0) + 1;
+      if (inWorktree && result.changed?.length) {
+        const overlap = await this.mainOverlap(ji.worktreeBase, result.changed);
+        if (overlap.length) {
+          result.overlap = overlap;
+          result.findings = [...(result.findings ?? []), ...overlap.map(o => `overlap: ${o.file} also changed on main by ${o.commits.join('; ')}`)].slice(0, 20);
+          result.overlapHint = 'Main changed the same file(s) after this worktree was created: worktree sync before the next attempt; '
+            + 'if the change on main already fixes this item, keep it and add only the tests and evidence of this item. Not a regression of this item.';
+        }
+      }
       // Test bỏ có lý do (allowTestChange) ở item này: gate của item sau (base đã gồm thay đổi này) không tính lại.
       if (result.codePassed && result.removedTests?.length) {
         j.data.preparation.acceptedRemovals = [...new Set([...(j.data.preparation.acceptedRemovals ?? []), ...result.removedTests])].slice(-500);
@@ -1129,10 +1157,48 @@ export class Runtime {
       ji.lastGate = { jobId: job.id, where: result.where, passed: result.passed, failKind: result.failKind,
         signature: result.signature, repeat: result.repeat ?? 0, tree: result.codePassed ? result.tree : null,
         ...(result.fixesBaseline ? { fixesBaseline: result.fixesBaseline } : {}) };
+      // Một gate main kiểm cả các item khác đã integrate mà chưa push: tree của chúng (trừ answers/ của từng item) chính
+      // là nội dung vừa build và test, nên commit_and_push của chúng khỏi gate main riêng (FMC0ZXFC: publish nối tiếp,
+      // mỗi item một gate main 45–75 s, CR-03 đã qua review mà hết giờ trước khi tới lượt).
+      if (!inWorktree && result.codePassed) {
+        const covered = await this.coverIntegrated(key, job.id);
+        if (covered.length) result.coveredItems = covered;
+      }
       j.save();
       return result;
     }, { key });
     return this.settleJob(job.id, Math.min(45, waitSeconds) * 1000, { pi });
+  }
+
+  // Gate main vừa pass cho `key`: các item khác đã integrate mà chưa push (worktree gate của chúng đã pass) có tree
+  // (trừ answers/ của từng item) đúng là nội dung vừa build và test, nên ghi gate đó cho chúng.
+  async coverIntegrated(key, jobId) {
+    const folder = this.session.descriptor.matchId;
+    const items = this.journal.data.items ?? {};
+    const covered = Object.entries(items).filter(([k, it]) => k !== key && it.integratedRevision && !it.publishedRevision
+      && !it.receipt && it.lastGate?.tree);
+    for (const [k, it] of covered) {
+      it.lastGate = { jobId, where: 'main', passed: true, failKind: null, signature: null, repeat: 0, coveredBy: key,
+        tree: await contentTree(this.session.paths.checkoutRoot, folder, [`${folder}/answers/${k}`]) };
+    }
+    return covered.map(([k]) => k);
+  }
+
+  // File của item cũng bị commit trên main sau điểm tạo worktree (FMC0ZXFC: BUG-02 sửa đúng dòng của BUG-03 để test
+  // baseline pass; BUG-03 sync conflict rồi trễ hạn). Gồm commit đã integrate chưa push.
+  async mainOverlap(base, files) {
+    if (!base) return [];
+    const { checkoutRoot } = this.session.paths;
+    try {
+      const onMain = new Set((await git(['diff', '--name-only', base, 'HEAD'], { cwd: checkoutRoot })).out.split(/\r?\n/).filter(Boolean));
+      const both = files.filter(f => onMain.has(f)).slice(0, 5);
+      const out = [];
+      for (const file of both) {
+        const log = await git(['log', '--format=%h %s', `${base}..HEAD`, '--', file], { cwd: checkoutRoot });
+        out.push({ file, commits: log.out.split(/\r?\n/).filter(Boolean).slice(0, 3).map(l => oneLine(l, 100)) });
+      }
+      return out;
+    } catch { return []; }
   }
 
   recordVerification({ backlogItemKey: key, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped, disputeChecked = false }) {
@@ -1173,13 +1239,15 @@ export class Runtime {
     const gateText = gatePassed
       ? `gate passed${job.result.regression ? ` (${job.result.regression.total} regression tests)` : ''}`
       : `gate failed: ${job.result?.failKind ?? job.error?.code ?? 'error'}`;
-    const summary = `Scenarios ${sp}/${requiredScenarios} passed${sf ? `, ${sf} failed` : ''}${ss ? `, ${ss} not run` : ''}; ${gateText}.`;
+    // submit.json có thể ghi nhiều kịch bản hơn số bắt buộc (PI-01 FMC0ZXFC: "5/3 passed", hint "-2 not passing").
+    const extra = sp > requiredScenarios ? ` (+${sp - requiredScenarios} extra)` : '';
+    const summary = `Scenarios ${Math.min(sp, requiredScenarios)}/${requiredScenarios} passed${extra}${sf ? `, ${sf} failed` : ''}${ss ? `, ${ss} not run` : ''}; ${gateText}.`;
     this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status, required, executed, passed, failed, skipped, summary });
     ji.verification = { status, gateJobId };
     this.journal.save();
     return { status, required, executed, passed, failed, skipped, source: counted ? 'submit.json testResults' : 'arguments',
       ...(differs ? { note: `Counted from submit.json (${sp} pass, ${sf} fail, ${ss} not run), not from the arguments.` } : {}),
-      ...(status !== 'PASSED' ? { hint: `Not PASSED: ${requiredScenarios - sp} required scenario(s) not passing. Submit only under the last-chance rule.` } : {}) };
+      ...(status !== 'PASSED' ? { hint: `Not PASSED: ${gatePassed ? `${Math.max(0, requiredScenarios - sp)} required scenario(s) not passing` : 'the gate did not pass'}. Submit only under the last-chance rule (submit_work with lastChance).` } : {}) };
   }
 
   async commitAndPush({ backlogItemKey: key, message }) {
@@ -1217,7 +1285,10 @@ export class Runtime {
       await git(['commit', '-m', oneLine(`${key}: ${message}`, 120)], { cwd: checkoutRoot });
     }
     const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`], { cwd: checkoutRoot })).out.trim() || 0);
-    if (!ahead && !ji.publishedRevision) fail('NO_CHANGES', 'nothing to commit or push');
+    // Commit của item đã lên remote cùng lần push của item khác (một gate main cho nhiều item): chỉ ghi revision.
+    const alreadyOnRemote = !ahead && !ji.publishedRevision && Boolean(ji.integratedRevision)
+      && (await git(['rev-list', '--count', `origin/${branch}..${ji.integratedRevision}`], { cwd: checkoutRoot, allowFail: true })).out.trim() === '0';
+    if (!ahead && !ji.publishedRevision && !alreadyOnRemote) fail('NO_CHANGES', 'nothing to commit or push');
     let pushed = false;
     for (let attempt = 0; attempt < 3 && !pushed; attempt++) {
       const res = await git(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: checkoutRoot, timeoutMs: 120_000, allowFail: true });
@@ -1245,15 +1316,29 @@ export class Runtime {
     j.save();
     const log = this.progress.state.backlogs[key]?.status;
     if (log && log !== 'SUBMITTED') this.backlogStatus(key, 'COMPLETED', `Pushed ${revision.slice(0, 12)}; ready to submit.`);
-    return { revision, branch, ...(warnings.length ? { answerWarnings: warnings } : {}) };
+    // Worktree của item khác tạo trước bản này: ảnh/test của chúng chưa có thay đổi vừa lên main (FMC0ZXFC: ảnh CR-01,
+    // CR-02 bị sidebar cũ che sau khi BUG-01 đã nộp, mất 2 lượt fixer chỉ để chụp lại).
+    const staleWorktrees = Object.entries(j.data.items ?? {}).filter(([k, it]) => k !== key && !it.receipt && !it.endedAt
+      && it.worktreeBase && it.worktreeBase !== revision && this.liveWorktree(k)).map(([k]) => k);
+    return { revision, branch, ...(alreadyOnRemote ? { alreadyOnRemote: true } : {}), ...(warnings.length ? { answerWarnings: warnings } : {}),
+      ...(staleWorktrees.length ? { staleWorktrees, hint: `Main moved: worktree sync ${staleWorktrees.join(', ')} before each one's next fixer, `
+        + 'verifier or evidence step (never under a running fixer).' } : {}) };
   }
 
-  async submitWork({ backlogItemKey: key, gitRevision }) {
+  async submitWork({ backlogItemKey: key, gitRevision, lastChance = null }) {
     this.session.require('GAME');
     if (!isKey(key) || !/^[a-f0-9]{40,64}$/.test(gitRevision ?? '')) fail('INVALID_ARGUMENT', 'key or revision');
     const j = this.journal;
     const ji = j.item(key);
     if (ji.receipt) return { status: 'SUBMITTED', receiptId: ji.receipt.id, replay: true };
+    // Luật cơ hội cuối nói rõ trong lệnh gọi để auto-review thấy quyền (FMC0ZXFC: guardian chặn PI-01 và BUG-04 vì
+    // verification chưa PASSED, root hỏi người duyệt, không ai trả lời). Chỉ nhận khi gate gần nhất đã pass build + test.
+    if (lastChance) {
+      if (typeof lastChance.reason !== 'string' || !lastChance.reason.trim()) fail('INVALID_ARGUMENT', 'lastChance.reason');
+      if (!ji.lastGate?.tree) fail('LAST_CHANCE_INVALID', `the last gate of ${key} did not pass build and regression; the last-chance rule never covers that`);
+      ji.lastChance = oneLine(lastChance.reason, 200);
+      j.save();
+    }
     const { checkoutRoot } = this.session.paths;
     const folder = this.session.descriptor.matchId;
     const { matchUuid } = this.gm.endpoint('submit');
@@ -1336,7 +1421,7 @@ export class Runtime {
     return { cursor: last, events: events.slice(-50),
       state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), nextReleaseAt: this.gm.view ? this.releases()?.next?.at ?? null : null,
         open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
-        working: rows.filter(r => ['started', 'published'].includes(r.local)).map(r => r.key),
+        working: rows.filter(r => r.status !== 'CLOSED' && ['started', 'published'].includes(r.local)).map(r => r.key),
         ungated: this.ungatedResults(),
         submitted: rows.filter(r => r.local === 'submitted').map(r => r.key),
         jobs: [...this.jobs.jobs.values()].filter(x => x.state === 'running').map(x => x.id) } };
@@ -1370,7 +1455,7 @@ export class Runtime {
 
   readResultFile(file) {
     if (typeof file !== 'string' || !isAbsolute(file)) fail('INVALID_ARGUMENT', 'context.fixResultFile must be an absolute path');
-    if (!file.toLowerCase().startsWith(join(this.session.paths.teamWork, 'results').toLowerCase())) fail('PATH_NOT_ALLOWED', 'result files live in .team-work/results/');
+    if (!resolve(file).toLowerCase().startsWith(resolve(this.session.paths.teamWork, 'results').toLowerCase())) fail('PATH_NOT_ALLOWED', 'result files live in .team-work/results/');
     try { return JSON.parse(readFileSync(file, 'utf8')); } catch { fail('INVALID_ARGUMENT', 'result file is missing or not JSON'); }
   }
 

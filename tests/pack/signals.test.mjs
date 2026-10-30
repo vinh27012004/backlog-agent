@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Decider } from '../../pack/src/decisions.mjs';
 import { JevClient, mockTransport } from '../../pack/src/jev.mjs';
-import { codeTerms, countCriteria, difficultyFromSignals, itemSignals, workText } from '../../pack/src/signals.mjs';
+import { answerOnlyText, codeTerms, countCriteria, difficultyFromSignals, itemSignals, workText } from '../../pack/src/signals.mjs';
 
 // Rút gọn từ CR-01 của Practice HIET12OA.
 const CR = `# Export the filtered invoice list as CSV
@@ -91,4 +91,14 @@ test('Jev below threshold falls back to the signal rule, and signals reach Jev b
   assert.equal(route.model.value, 'strong');                  // item hard luôn tier strong
   const at = h => bodies[0].state.indexOf(`## ${h}\n`);
   assert.ok(at('signals') > 0 && at('signals') < at('item'));
+});
+
+// FMC0ZXFC: TASK-03/04 hỏi một câu ("## Question(s)"), PI-01 cấm sửa source; BUG-04 có Out of scope nhưng cũng có tiêu chí.
+test('answer-only items: a question or answer format without criteria, or an out-of-scope ban on changing the source', () => {
+  assert.equal(answerOnlyText('## Context\nA dispute.\n## Question\nWhich value?\n## Normalization\nOne integer.'), true);
+  assert.equal(answerOnlyText('## Questions\n1. Ledger balance?\n## Submission\n- copy the template'), true);
+  assert.equal(answerOnlyText('## What we need from you\n1. **rootCauseRelease**\n## Out of scope\nChanging the application source, re-sending e-mails.\n## Submission\nx'), true);
+  assert.equal(answerOnlyText('## Acceptance criteria\n1. Order kept after reload\n## Out of scope\nChanging the application source of other boards.'), false);
+  assert.equal(answerOnlyText('## Expected outcome\nCards keep their order.\n## Out of scope\nDatabase migration.'), false);
+  assert.equal(answerOnlyText('## Question\nWhich value?\n## Acceptance criteria\n1. pnpm audit passes'), false);
 });

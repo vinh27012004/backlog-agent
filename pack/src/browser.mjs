@@ -204,6 +204,13 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
     if (s.action === 'route') rules.set(i, routeRule(s, i));
+    if (s.action === 'drag') {
+      if (!s.to || typeof s.to !== 'object' || (s.to.selector === undefined && s.to.text === undefined)) {
+        fail('INVALID_ARGUMENT', `step ${i + 1}: drag needs to:{selector|text, index?}`);
+      }
+      if (s.position !== undefined && !['before', 'after', 'center'].includes(s.position)) fail('INVALID_ARGUMENT', `step ${i + 1}: position is before, after or center`);
+      checkSelector(s.to, i);
+    }
     checkSelector(s, i);
   }
   const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
@@ -400,11 +407,42 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             break;
           }
           case 'press': {
-            const key = String(s.key ?? 'Enter');
-            const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, Backspace: 8 };
+            // Space + mũi tên: kéo-thả bằng bàn phím của @hello-pangea/dnd, dnd-kit (Space nhấc, mũi tên di, Space thả).
+            const key = s.key === ' ' || s.key === 'Space' ? ' ' : String(s.key ?? 'Enter');
+            const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Backspace: 8, ' ': 32 };
+            const code = key === ' ' ? 'Space' : key;
             for (const type of ['keyDown', 'keyUp']) {
-              await send('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: codes[key] ?? 0, ...(key === 'Enter' && type === 'keyDown' ? { text: '\r' } : {}) });
+              await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: codes[key] ?? 0,
+                ...(type === 'keyDown' && key === 'Enter' ? { text: '\r' } : type === 'keyDown' && key === ' ' ? { text: ' ' } : {}) });
             }
+            break;
+          }
+          case 'drag': {
+            // Kéo bằng chuột thật (FMC0ZXFC BUG-04: không có step kéo-thả, TC-02 NOT_RUN). Nhấn ở giữa nguồn, nhích quá
+            // ngưỡng bắt đầu kéo (5 px của @hello-pangea/dnd), đi từng bước tới mép trên (before) / dưới (after) / giữa đích.
+            const to = { selector: s.to.selector, text: s.to.text, index: s.to.index };
+            await locate(to, s.timeoutMs);
+            const from = await locate(q, s.timeoutMs);
+            const dst = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; const r = el.getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, bottom: r.bottom }; }`, to);
+            if (!dst) fail('ELEMENT_NOT_FOUND', to.selector ?? `text "${to.text}"`);
+            const ty = s.position === 'before' ? dst.top + 4 : s.position === 'after' ? dst.bottom - 4 : dst.y;
+            const mouse = (type, x, y) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left',
+              buttons: type === 'mouseReleased' ? 0 : 1, clickCount: type === 'mouseMoved' ? 0 : 1 });
+            await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
+            await mouse('mousePressed', from.x, from.y);
+            await sleep(150);
+            await mouse('mouseMoved', from.x, from.y + (ty < from.y ? -10 : 10));
+            await sleep(100);
+            const moves = 20;
+            for (let n = 1; n <= moves; n++) {
+              await mouse('mouseMoved', from.x + (dst.x - from.x) * n / moves, from.y + (ty - from.y) * n / moves);
+              await sleep(25);
+            }
+            await sleep(250);
+            await mouse('mouseReleased', dst.x, ty);
+            await sleep(Math.min(3000, s.settleMs ?? 500));
+            log.push({ step: i + 1, action: 'drag', from: { x: Math.round(from.x), y: Math.round(from.y) }, to: { x: Math.round(dst.x), y: Math.round(ty) } });
             break;
           }
           case 'select':
@@ -456,7 +494,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           default:
             fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
         }
-        if (!['assertText', 'login'].includes(s.action)) log.push({ step: i + 1, action: s.action });
+        if (!['assertText', 'login', 'drag'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
     } catch (error) {
       // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).

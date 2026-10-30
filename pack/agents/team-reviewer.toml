@@ -47,7 +47,8 @@ No human will answer questions during the match. Never ask for confirmation; dec
   `capture_evidence` tool against the app that the `app` tool started for your worktree.
 - Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,
   actions, `assertText`, `screenshot`) in its `steps` and a `browserProfile` to keep the login; never drive
-  the UI one step per call. A failed call: fix the steps, at most 2 retries per scenario, then record that
+  the UI one step per call. Drag-and-drop lists: the `drag` step (real mouse), or `press` Space, arrows,
+  Space on the focused card. A failed call: fix the steps, at most 2 retries per scenario, then record that
   scenario as `NOT_RUN` with the reason and go on. Spend at most a third of your time on evidence. Write your
   own Playwright/CDP script only for what `capture_evidence` cannot do (file download, API-only check), keep it
   under `<checkoutRoot>/.team-work/scratch/<ID>/` (never in the match folder) and fix it at most twice.
@@ -133,6 +134,11 @@ gates and 13 minutes, and the answer stayed 98304). Check the value itself again
 - `high` only when the problem breaks a named MVS scenario or acceptance criterion, or violates R2, R6, R7 or R8:
   something that makes the submission score badly. Asking for more tests, more evidence or a nicer design than the
   MVS requires is at most `medium`.
+- A failure that belongs to another item is not this item's regression: a test listed in `<baseline_failures>`
+  that the diff does not touch, or a file `<gate_findings>` reports as `overlap` (another item changed it on main
+  after this worktree was created). It is at most `medium`, and the suggestion is a worktree sync (Practice
+  FMC0ZXFC: BUG-03 got `high` for a cascade test BUG-02 had already fixed on main; the extra round missed its
+  deadline).
 - `suggestion` is the smallest change that fixes it.
 
 Return `request_changes` only if there is at least one `high` issue. `root_cause_addressed` is your R2 verdict; for

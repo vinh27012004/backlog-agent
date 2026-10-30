@@ -186,7 +186,9 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null,
     }
   }
   if (schema) for (const e of validateSchema(answer, schema)) problems.push(`schema ${e}`);
-  for (const ref of JSON.stringify(answer).match(/evidence\/[^"\\\s]+/g) ?? []) {
+  // Tham chiếu nằm trong câu văn: bỏ dấu câu dính cuối ("…/mvs-tests.log." FMC0ZXFC: answer_invalid sai 3 lần).
+  for (const raw of JSON.stringify(answer).match(/evidence\/[^"\\\s]+/g) ?? []) {
+    const ref = raw.replace(/[.,;:)\]}'`]+$/, '');
     if (!existsSync(join(matchRoot, 'answers', key, ref))) problems.push(`missing ${ref}`);
   }
   if (/DRAFT/.test(JSON.stringify(answer.status ?? ''))) problems.push('submit.json status is still DRAFT');
@@ -404,12 +406,18 @@ const SCAN = [
   { re: /\b(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|xox[bpas]-[A-Za-z0-9-]{10,})\b|-----BEGIN [A-Z ]*PRIVATE KEY-----/, msg: 'contains what looks like a real key or token' }
 ];
 const JUNK_FILE = /(\.(bak|backup|orig|rej|tmp|swp)|~|[-.](backup|bak|old|copy)\d*)$|[-.](backup|bak)[-.]|(^|\/)(capture|scratch|debug|tmp|temp|try)[-_.][^/]*\.(m?[jt]s|ps1|py|sh|bat)$/i;
+const ITEM_NAMED = /(^|[^a-z])(bug|cr|task|pi)[-_]?\d{1,3}([^\d]|$)/i;
 
 export async function codeScan(checkoutRoot, base, files, folder) {
   const warnings = [];
   for (const f of files.filter(x => x.status !== 'D' && x.path.startsWith(`${folder}/`) && !x.path.startsWith(`${folder}/answers/`))) {
     if (f.status === 'A' && JUNK_FILE.test(f.path)) {
       warnings.push(`${f.path}: looks like a backup or helper script left in the match folder (scratch belongs in .team-work/scratch/)`);
+      continue;
+    }
+    // Script/seed riêng của một item ngoài thư mục test (FMC0ZXFC: BUG-02-run-checks.mjs, prisma/seed-bug02.ts, seed-cr01.ts).
+    if (f.status === 'A' && !TEST_FILE.test(f.path) && ITEM_NAMED.test(f.path.split('/').pop())) {
+      warnings.push(`${f.path}: item-named helper or seed script in the source; remove it or say in the fix-result why the product needs it`);
       continue;
     }
     if (!CODE_FILE.test(f.path) && !/\.(json|ya?ml|properties|env\.example|toml|ini)$/i.test(f.path)) continue;
@@ -505,6 +513,7 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   job.progress.push('diff');
   const files = await changedFiles(checkoutRoot, base);
   const code = files.filter(f => !f.path.startsWith(`${folder}/answers/${key}/`));
+  result.changed = code.map(f => f.path);
   checks.push({ name: 'diff', status: 'ok', files: files.length });
   if (files.length === 0) return done('no_change', 'no changes');
   if (code.length > limits.maxFiles) return done('diff_too_large', `${code.length} files > ${limits.maxFiles}`);
@@ -670,8 +679,12 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
       logFile: log('fail-before'), timeoutMs: limits.testMs }));
   }
 
-  // Trước check answer: answer_invalid bảo root khỏi gate lại, nên lỗi tái hiện phải báo trước.
-  if (requireReproduction) {
+  // Trước check answer: answer_invalid bảo root khỏi gate lại, nên lỗi tái hiện phải báo trước. PI chỉ nộp báo cáo
+  // (không đổi file nào ngoài answers/<ID>/) thì không có code để tái hiện (FMC0ZXFC PI-01: đề cấm sửa source, gate
+  // vẫn fail not_reproduced, guardian chặn submit, mất 160 điểm).
+  if (requireReproduction && !code.length) {
+    checks.push({ name: 'reproduction', status: 'skipped', reason: 'answer-only: no source change' });
+  } else if (requireReproduction) {
     const fb = checks.find(x => x.name === 'fail-before');
     let problem = null;
     let warning = null;

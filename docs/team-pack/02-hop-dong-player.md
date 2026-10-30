@@ -1,6 +1,6 @@
 # 02 · Hợp đồng với MTM Player
 
-Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35 và 0.9.39, xem §12) (`vendor/mtm-player-0.9.39/app/`),
+Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35, 0.9.39 và 0.9.41, xem §12) (`vendor/mtm-player-0.9.41/app/`),
 trừ chỗ ghi *chưa xác minh*. Đường dẫn `src/...` bên dưới tính từ thư mục `app/`.
 
 ## 1. Player làm gì, không làm gì
@@ -260,6 +260,19 @@ thước), `src/cli-supervisor.mjs` (`protocolPrompt`), `src/codex-app-server.mj
 `src/local-app-lifecycle.mjs`, `src/submission-policy.mjs`, `src/model-policy.mjs`,
 `src/workspace-paths.mjs`, `src/workspace-instructions.mjs`, `src/preparation.mjs`, và
 `contracts/progress-event.schema.json` trong sample pack mới.
+
+### 0.9.41 (30/10/2026)
+
+Bản `0.9.41-local` (`D:\mtm\MTM-PLAYER\0.9.41`, chép vào `vendor/mtm-player-0.9.41/` không kèm `node.exe`). Trong danh
+sách trên chỉ `progress.mjs` và `codex-app-server.mjs` đổi, không đổi gì mà pack phải theo; cách duyệt quyền vẫn như
+cũ (`approvalPolicy: 'on-request'`, `approvalsReviewer` mặc định `auto_review`, tức guardian của Codex); contract test
+chạy lại trên source 0.9.41. Thay đổi:
+
+- `src/codex-subagent-usage.mjs` (mới), `src/progress.mjs`, `src/codex-app-server.mjs`: dashboard cộng token của
+  subagent, đọc từ file session Codex (cùng `session_id` với root) vài giây một lần; thread guardian bị loại vì "Codex
+  does not charge for them". `tools/judge/usage.mjs` vẫn cần để xem guardian và thời gian job.
+- `src/local-app.mjs`, `src/manage-web.mjs`: Shut down chờ agent dừng rồi tự đóng, không phải bấm lần hai.
+- `src/cli-activity.mjs`, `src/diagnostic-journal.mjs`: che `user:password@` trong URL mọi scheme (cả chuỗi kết nối DB).
 
 ### 0.9.39 (29/10/2026)
 

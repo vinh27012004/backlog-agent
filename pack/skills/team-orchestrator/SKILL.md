@@ -28,10 +28,12 @@ Spawn only with the model the helper picked (see **Models**), which is always fr
 subagent starts from its own instructions plus your `message`, so the brief must hold everything it needs.
 Forking copies your whole history into every call it makes (Practice CV8WV1JM: `fork_turns: "all"` started
 each fixer at ~60K tokens, 4.9M input for one item). Up to 4 items
-in flight (each in its own worktree), not counting a PI: a PI never waits for a free slot. Never leave a slot
-empty while an item waits: any `team_runtime` result may carry `notice: {newItems, freeSlots}` (items released and
-not started while a slot is free); start them right away (**One item**, step 1) before going back to waiting
-(Practice ZVUYZ41V: TASK-01 waited 12 minutes with 2 slots free). Results go to
+in flight (each in its own worktree), not counting a PI or an answer-only item (no acceptance criteria, it asks a
+question or forbids changing the source): those never wait for a free slot. Never leave a slot
+empty while an item waits: any `team_runtime` result may carry `notice: {newItems, freeSlots, answerOnly}` (items
+released and not started while a slot is free, or answer-only); start them right away (**One item**, step 1)
+before going back to waiting (Practice ZVUYZ41V: TASK-01 waited 12 minutes with 2 slots free; FMC0ZXFC: TASK-03
+and TASK-04, both answer-only, never started while 4 code items ran). Results go to
 `<checkoutRoot>/.team-work/results/<ID>-<role>-<n>.json`.
 
 ## One item
@@ -124,26 +126,41 @@ not started while a slot is free); start them right away (**One item**, step 1) 
      need no action. `medium`/`low` review issues never block the submission.
    - `"orchestrator_gate"` (the verifier could not reach the gate): run `run_gate {backlogItemKey, fixResultFile}`
      yourself with the job pattern in **Waiting**, then decide as above.
-7. Publish (one item at a time) in ONE `exec`, which stops at the first error and says where:
+7. Publish in ONE `exec`, which stops at the first error and says where. Put in `keys` every item that is
+   ready now (gate passed, no reviewer `high`), in the order they became ready: one gate on main then covers all
+   of them (Practice FMC0ZXFC: three items published one by one, a main gate each, and CR-03, approved at
+   05:23, was still waiting when the match ended at 05:27). Fill `lastChance` only for an item submitted under the
+   last-chance rule (**Answers**), with one line saying what is not verified and why no attempt fits:
    ```
    // @exec: {"yield_time_ms": 600000, "max_output_tokens": 3000}
    const t = "mcp__team_runtime__", call = async (n, a) => JSON.parse((await tools[t + n](a)).content[0].text);
-   const key = "<ID>", msg = "<one-line commit message>", out = {};
+   const keys = ["<ID>"], msgs = { "<ID>": "<one-line commit message>" }, gates = { "<ID>": "<verdict gate.jobId>" };
+   const lastChance = {}, out = {};   // e.g. { "<ID>": "TC-02 NOT_RUN: drag did not reorder; 3 minutes left" }
    const step = async (name, n, a) => { const r = await call(n, a); out[name] = r; if (r.error) throw new Error(name); return r; };
    try {
-     await step("verification", "record_verification", { backlogItemKey: key, gateJobId: "<verdict gate.jobId>", disputeChecked: <true only after a checker refuted the solver's value> });
-     const integrated = await step("integrate", "worktree", { action: "integrate", backlogItemKey: key, message: msg });
-     if (integrated.baseChanged) {
-       let g = await step("mainGate", "run_gate", { backlogItemKey: key, where: "main", waitSeconds: 45 });
-       while (g.state === "running" && !g.newPI) g = out.mainGate = await call("job_status", { jobId: g.jobId, waitSeconds: 110 });
-       if (g.newPI || !g.result?.passed) throw new Error("mainGate");
+     let moved = keys.length > 1;
+     for (const key of keys) {
+       await step(`${key}.verification`, "record_verification", { backlogItemKey: key, gateJobId: gates[key], disputeChecked: <true only after a checker refuted the solver's value> });
+       const integrated = await step(`${key}.integrate`, "worktree", { action: "integrate", backlogItemKey: key, message: msgs[key] });
+       moved ||= integrated.baseChanged;
      }
-     const pushed = await step("push", "commit_and_push", { backlogItemKey: key, message: msg });
-     await step("submit", "submit_work", { backlogItemKey: key, gitRevision: pushed.revision });
-     await step("remove", "worktree", { action: "remove", backlogItemKey: key });
+     if (moved) {
+       let g = await step("mainGate", "run_gate", { backlogItemKey: keys.at(-1), where: "main", waitSeconds: 45 });
+       while (g.state === "running" && !g.newPI) g = out.mainGate = await call("job_status", { jobId: g.jobId, waitSeconds: 110 });
+       if (g.newPI || !g.result?.codePassed) throw new Error("mainGate");
+     }
+     for (const key of keys) {
+       const pushed = await step(`${key}.push`, "commit_and_push", { backlogItemKey: key, message: msgs[key] });
+       await step(`${key}.submit`, "submit_work", { backlogItemKey: key, gitRevision: pushed.revision,
+         ...(lastChance[key] ? { lastChance: { reason: lastChance[key] } } : {}) });
+       await step(`${key}.remove`, "worktree", { action: "remove", backlogItemKey: key });
+     }
    } catch (e) { out.stoppedAt = e.message; }
    text(out);
    ```
+   The main gate's `coveredItems` are the other integrated items it also checked; their `commit_and_push` needs no
+   gate of its own and may return `alreadyOnRemote` (pushed together). A failing main gate: its `detail` names the
+   file; it is usually the `overlap` between two of the items, so publish the first one alone after fixing it.
    On `stoppedAt`, carry on from that step by hand; never repeat a step that succeeded. `verification` with
    `ANSWER_DISPUTED` (the solver finished after the gate with another value): the disputed-answer path of step 6,
    then publish again. `mainGate` with `newPI`:
@@ -157,6 +174,13 @@ not started while a slot is free); start them right away (**One item**, step 1) 
    `send_message` "main now has the baseline fix; re-run the test-suite step of the MVS before writing results"; a
    fixer already finished whose MVS needs the suite → a short new attempt that only re-runs that step and updates
    its `testResults` row and log, then a new verifier (the sync changed the worktree, so the old gate is stale).
+   `commit_and_push` returns `staleWorktrees` (worktrees created before what was just pushed): `worktree sync` each
+   one whose fixer has returned before its next fixer, verifier or evidence step, so screenshots and tests include
+   the change (Practice FMC0ZXFC: CR-01 and CR-02 screenshots still showed the old sidebar after BUG-01 was in; two
+   extra fixer rounds only to recapture). A worktree gate's `overlap` (files main changed after the worktree was
+   created, with the commits) means another item touched the same code: sync before the next attempt, and when
+   main's change already fixes this item, the next fixer keeps it and adds only this item's tests and evidence
+   (Practice FMC0ZXFC: BUG-02 fixed BUG-03's status rule to pass a baseline test; BUG-03 missed its deadline).
 8. Drop (gate `repeat: 3`, no time for another attempt, or the item is not worth the time left): if its fixer
    still runs, tell it to stop (`send_message`), then `report_progress {event: {type: "BACKLOG_STATUS",
    backlogId: "<ID>", status: "FAILED", summary: "<one-line reason>"}}`. Never drop silently: the dashboard and the
@@ -244,6 +268,11 @@ Do not repeat that in the brief. Your part:
   brief, and never report `BACKLOG_STATUS` `BLOCKED` for it. The item carries on: scenarios without their evidence are
   `NOT_RUN`, and the gate and answer rules below decide (Practice 9KNXREJ5: one rejected login on CR-01 left CR-01 and
   TASK-02 `BLOCKED` waiting for an approval that never came, with TASK-02's gate and review already passed).
+- The same holds for every auto-review rejection, `submit_work` included: never `request_user_input`, never
+  `BLOCKED`. A submission under the last-chance rule always carries `lastChance {reason}` (the team authorizes it in
+  AGENTS.md); if it is still rejected, report `BACKLOG_STATUS` `FAILED` with the reason and go on with the other
+  items (Practice FMC0ZXFC: PI-01 and BUG-04 were rejected, root asked for approval twice, nobody answered, 240
+  points lost).
 
 ## Answers
 `answers/<ID>/submit.json` keeps every template key, satisfies `files/challenge/<ID>-submit.schema.json`
@@ -255,7 +284,8 @@ file in `requiredEvidence` (named by the item text, e.g. a "before fixing" scree
 published under the last-chance rule;
 `DONE` only when every scenario passed, and every scenario passed means `DONE` (a `warn` says so) unless a
 requirement outside the scenarios is unmet and named in `engineeringRecord`. Last-chance rule: no time for another attempt and build + regression pass →
-you may submit with MVS not all passing; never submit a build or regression failure.
+you may submit with MVS not all passing, with `submit_work` `lastChance {reason}`; never submit a build or
+regression failure.
 
 ## Priorities and time
 PI first; then deadline items by least slack; then highest points; BUG > CR > TASK on ties. Exception: an

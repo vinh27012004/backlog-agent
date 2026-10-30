@@ -30,6 +30,21 @@ export function workText(text) {
   return out.join('\n');
 }
 
+// Item chỉ cần nộp câu trả lời, không sửa code: không có tiêu chí nghiệm thu và có heading "Answer format" (TASK-01
+// HIET12OA) hoặc "Question(s)" (TASK-03/04 FMC0ZXFC), hoặc Out of scope cấm sửa source (PI-01 FMC0ZXFC: báo cáo từ log).
+// Đọc mô tả gốc vì workText bỏ mục Out of scope.
+export function answerOnlyText(description) {
+  const text = String(description ?? '');
+  if (countCriteria(text)) return false;
+  if (/^\s*#{1,6}\s+(?:answer format|questions?)\b/im.test(workText(text))) return true;
+  const lines = text.split(/\r?\n/);
+  const at = lines.findIndex(l => /^\s*#{1,6}\s+out of scope\b/i.test(l));
+  if (at < 0) return false;
+  const level = lines[at].match(/^\s*(#+)/)[1].length;
+  const end = lines.findIndex((l, i) => i > at && (l.match(/^\s*(#{1,6})\s/)?.[1].length ?? 99) <= level);
+  return /\bchang\w*\s+(?:the\s+)?(?:application\s+)?source\b/i.test(lines.slice(at + 1, end < 0 ? undefined : end).join('\n'));
+}
+
 // Đếm mục đánh số / gạch đầu dòng dưới heading "Acceptance criteria" (không có thì "Requirements").
 export function countCriteria(text) {
   const lines = String(text ?? '').split(/\r?\n/);
@@ -97,8 +112,8 @@ export async function itemSignals(item, { root = null, scenarios = 0 } = {}) {
   try { code = await codeMatches(root, codeTerms(text)); } catch { code = null; }
   const criteria = countCriteria(item?.description);
   const flags = Object.entries(FLAGS).filter(([, re]) => re.test(text)).map(([k]) => k);
-  // Chỉ cần nộp một câu trả lời (TASK-01 HIET12OA); TASK-02 cũng có "Answer format" nhưng có tiêu chí phải sửa code.
-  if (!criteria && /^\s*#{1,6}\s+answer format\b/im.test(text)) flags.push('answerOnly');
+  // Chỉ cần nộp một câu trả lời; TASK-02 cũng có "Answer format" nhưng có tiêu chí phải sửa code.
+  if (answerOnlyText(item?.description)) flags.push('answerOnly');
   return {
     acceptance_criteria: criteria,
     verification_scenarios: scenarios,

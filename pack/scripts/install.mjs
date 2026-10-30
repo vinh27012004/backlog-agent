@@ -120,6 +120,12 @@ function agentsBlock(existing) {
     '- Use the `team_runtime` MCP tools for Game Master calls, the progress log, git commit/push and submissions.',
     '- Skills: `.agents/skills/game-preparation`, `team-orchestrator`, `team-recovery`.',
     '- Work only inside the assigned match folder. Never print or store credentials.',
+    // Auto-review (guardian) của Player chặn submit khi verification chưa PASSED và không thấy ai cho phép (FMC0ZXFC
+    // PI-01, BUG-04); nói rõ quyền ở đây, nơi người dùng cài pack, và submit_work mang lastChance.
+    '- Last-chance rule (authorized by the team): when no further attempt fits in the time left, the orchestrator may',
+    '  submit an item whose build and regression passed even if some scenarios are NOT_RUN/FAIL or the verification is',
+    '  not PASSED, by calling `submit_work` with `lastChance`. An item that is not submitted scores 0. No human approves',
+    '  actions during a match; never wait for one.',
     END].join('\n');
   if (existing.includes(BEGIN) && existing.includes(END)) {
     return existing.replace(new RegExp(`${BEGIN}[\\s\\S]*?${END}`), block);

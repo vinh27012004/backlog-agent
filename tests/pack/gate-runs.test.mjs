@@ -262,3 +262,19 @@ test('a PI needs a new test that fails on the unfixed code; without one the gate
   const bug = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });
   assert.equal(bug.checks.some(c => c.name === 'reproduction'), false);
 });
+
+// FMC0ZXFC PI-01: đề cấm sửa source, chỉ nộp báo cáo; gate cũ fail not_reproduced, guardian chặn submit (160 điểm).
+// Cùng trận: tham chiếu evidence trong câu văn dính dấu chấm/phẩy, gate báo thiếu file dù file có.
+test('a PI that only changes its answers needs no reproduction test; evidence references ignore trailing punctuation', { timeout: 120_000 }, async () => {
+  const r = appRepo();
+  writeFileSync(join(r.root, '.runs'), '5');
+  const answers = join(r.root, 'M1', 'answers', 'BUG-09');
+  mkdirSync(join(answers, 'evidence'), { recursive: true });
+  writeFileSync(join(answers, 'evidence', 'derivation.json'), '{}');
+  writeFileSync(join(answers, 'submit.json'), JSON.stringify({ status: 'DONE',
+    engineeringRecord: 'Joined the logs (evidence/derivation.json). See evidence/derivation.json, then the summary.' }));
+  const report = await gate(r, { requireReproduction: true });
+  assert.equal(report.passed, true, JSON.stringify(report.checks));
+  assert.equal(report.checks.find(c => c.name === 'reproduction').status, 'skipped');
+  assert.deepEqual(report.changed, []);
+});

@@ -144,7 +144,7 @@ backlog-agent/
 ├── tests/pack/                    # node:test (unit + contract với source Player)
 ├── docs/team-pack/                # bộ tài liệu này
 ├── orchestrator/ monitor/ tests/*.py                   # legacy, chỉ tham chiếu
-└── vendor/                        # của BTC, chỉ đọc: mtm-player-0.9.39/, team-orchestrator-pack-0.5.1/
+└── vendor/                        # của BTC, chỉ đọc: mtm-player-0.9.41/, team-orchestrator-pack-0.5.1/
 ```
 
 ## 8. Nguyên tắc tiết kiệm token và credit

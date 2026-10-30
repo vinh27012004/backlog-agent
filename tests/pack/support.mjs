@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO = resolve(here, '..', '..');
 export const PACK = join(REPO, 'pack');
-export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.39', 'app', 'src');
+export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.41', 'app', 'src');
 export const hasPlayer = existsSync(join(PLAYER_SRC, 'progress.mjs'));
 
 export const player = async name => import(pathToFileURL(join(PLAYER_SRC, name)).href);

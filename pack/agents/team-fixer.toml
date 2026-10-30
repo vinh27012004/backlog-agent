@@ -48,7 +48,8 @@ No human will answer questions during the match. Never ask for confirmation; dec
   `capture_evidence` tool against the app that the `app` tool started for your worktree.
 - Evidence budget: one `capture_evidence` call per MVS scenario, with the whole flow (login, navigation,
   actions, `assertText`, `screenshot`) in its `steps` and a `browserProfile` to keep the login; never drive
-  the UI one step per call. A failed call: fix the steps, at most 2 retries per scenario, then record that
+  the UI one step per call. Drag-and-drop lists: the `drag` step (real mouse), or `press` Space, arrows,
+  Space on the focused card. A failed call: fix the steps, at most 2 retries per scenario, then record that
   scenario as `NOT_RUN` with the reason and go on. Spend at most a third of your time on evidence. Write your
   own Playwright/CDP script only for what `capture_evidence` cannot do (file download, API-only check), keep it
   under `<checkoutRoot>/.team-work/scratch/<ID>/` (never in the match folder) and fix it at most twice.

@@ -130,7 +130,8 @@ deployment" là nghi phạm đầu tiên) và cách kiểm patch của Agentless
    `original_still_failing` cũng đi nhánh này. Mỗi lượt fixer PI tối đa 12 phút (`returnBy`), 4 lượt, lượt cuối model `top`.
 4. **Fixer xong**: `team_verifier` (chạy gate qua proxy) và `team_reviewer` chạy **cùng lúc** (reviewer xét R2/R4: nguyên nhân có bằng chứng, bản
    sửa đúng cho mọi trường hợp). Gate đòi test mới fail trên code chưa sửa (`not_reproduced`), cộng build + regression
-   như mọi item. Rồi `decide root_cause_confirmed` (cần một giả thuyết `confirmed` khi có danh sách).
+   như mọi item. PI chỉ nộp báo cáo (diff không có file nào ngoài `answers/<ID>/`, như PI-01 trận FMC0ZXFC: đề cấm sửa
+   source) thì không cần test tái hiện. Rồi `decide root_cause_confirmed` (cần một giả thuyết `confirmed` khi có danh sách).
 5. **Publish ngay** khi gate pass và reviewer không có `high`; PI đứng đầu hàng publish. Hết thời gian cho lượt nữa thì
    build + regression pass là đủ (luật cơ hội cuối), kể cả khi `not_reproduced` hay reviewer `high`.
 6. Cần chạy app để tái hiện: chạy trên cổng riêng, ghi PID, **luôn tắt** sau khi xong. Checker giả thuyết không chạy

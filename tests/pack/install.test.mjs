@@ -44,6 +44,8 @@ test('reinstall is idempotent and keeps foreign AGENTS.md content', () => {
   assert.deepEqual(after, before);
   assert.match(after[3], /player block/);
   assert.equal((after[3].match(/TEAM-PACK:BEGIN/g) ?? []).length, 1);
+  // FMC0ZXFC: auto-review chặn submit vì không thấy ai cho phép luật cơ hội cuối.
+  assert.match(after[3], /Last-chance rule \(authorized by the team\)[\s\S]*`submit_work` with `lastChance`/);
   assert.match(after[0], /runtime-server\.mjs"\]/);
 });
 
