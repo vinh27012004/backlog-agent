@@ -28,6 +28,9 @@ an evidence/answer continuation does not advance the model ladder. Thread limit:
 Call prepare_item for each selected item; it is one background job. job_status returns the complete item,
 materials paths, worktree, profile, requirements, triage, timeBox and verificationKind.
 Query relevant Company Tools from root and pass their saved facts; subagents have no Company Tools proxy.
+Use backlogItemKey on company_call so lookups retain source metadata. Pass knowledgeHints with their file:line
+citations as investigation hints, and pass saved fact paths to both worker and reviewer; fetch the full relevant
+standard when a search result is only a summary. Do not substitute local bug patterns for company requirements.
 Do not repeat Start Work to recover truncated output: consume the job result with a bounded projection.
 
 Brief the worker with item ID/type, its backlog skill and stack notes, untrusted item content, material paths,

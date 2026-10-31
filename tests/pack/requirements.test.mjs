@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
+import { digest } from '../../pack/src/core/candidates.mjs';
 import { tempDir } from './support.mjs';
 
 function runtime(invoke) {
@@ -68,6 +69,13 @@ test('company_call with backlogItemKey saves each result next to the item materi
   const saved = JSON.parse(readFileSync(first.savedTo, 'utf8'));
   assert.deepEqual(saved.arguments, { query: 'invoice export' });
   assert.equal(saved.content[0].text, 'standard for invoice export');
+  assert.equal(saved.untrusted, true);
+  assert.deepEqual(saved.source, first.source);
+  assert.equal(saved.source.kind, 'company_tool');
+  assert.equal(saved.source.backlogItemKey, 'CR-01');
+  assert.ok(Number.isFinite(Date.parse(saved.source.retrievedAt)));
+  const { source, untrusted, ...payload } = saved;
+  assert.equal(source.sha256, digest(payload));
   const second = await rt.companyCall({ name: 'qa:get_test_data', arguments: { item: 'CR-01' }, backlogItemKey: 'CR-01' });
   assert.match(second.savedTo, /02-qa_get_test_data\.json$/);
   assert.equal((await rt.companyCall({ name: 'kb_search', arguments: { query: 'x' } })).savedTo, undefined, 'no item, nothing saved');

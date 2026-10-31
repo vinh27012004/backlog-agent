@@ -120,6 +120,24 @@ test('manifest preserves before-fix separately and detects stale final source/mo
   writeFileSync(path, 'changed'); assert.match(problems()[0], /bytes changed/);
 });
 
+test('source index refresh uses the yielded worktree after sync and before full review', async () => {
+  const f = fixture(), calls = [];
+  f.rt.refreshCodegraph = async (key, matchRoot) => {
+    calls.push({ key, matchRoot, workerState: f.ji.workerState });
+    return { name: 'codegraph', freshness: 'unknown', code: 3 };
+  };
+  const main = f.rt.session.paths.matchRoot;
+  writeFileSync(join(main, 'src', 'helper.js'), 'export const helper = true;\n');
+  sh('git', ['add', 'M1/src/helper.js'], f.checkout); sh('git', ['commit', '-q', '-m', 'shared helper'], f.checkout);
+  const synced = await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+  assert.equal(synced.synced, true);
+  assert.equal(synced.codegraph.freshness, 'unknown', 'optional index failure must not break sync');
+  const ready = await f.preflight(f.result(1));
+  assert.equal(ready.ready, true, 'optional index failure must not block review/gate');
+  assert.equal(ready.codegraph.code, 3);
+  assert.deepEqual(calls, Array.from({ length: 2 }, () => ({ key: f.key, matchRoot: f.wt.matchRoot, workerState: 'yielded' })));
+});
+
 test('prepare is idempotent and returns worker brief inputs without repeating Start Work', async () => {
   const f = fixture(); let starts = 0; f.rt.startWork = async () => { starts++; return { triage: { models: {} }, materialsDir: 'materials', timeBox: {} }; };
   f.rt.worktree = async () => ({ ...f.wt, setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { app, stopApp } from './env/app.mjs';
 import { captureEvidence } from './env/browser.mjs';
-import { indexCodegraph } from './env/codegraph.mjs';
+import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
 import { CompanyTools } from './match/company.mjs';
 import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
@@ -878,6 +878,7 @@ export class Runtime {
       j.save();
       return { ...wt, baseRevision: ji.worktreeBase, answerFile: join(wtAnswer, 'submit.json'), evidenceDir: join(wtAnswer, 'evidence'),
         setupJobId: job.id, codegraph: codegraph.skipped ?? (codegraph.code === 0 ? 'indexed' : 'failed'),
+        codegraphFreshness: codegraph.freshness ?? 'unknown',
         hint: 'Wait for setupJobId (job_status) before building or testing in the worktree.' };
     }
     if (!this.liveWorktree(key)) fail('WORKTREE_MISSING', `${key} has no worktree`);
@@ -943,6 +944,7 @@ export class Runtime {
       // apply --3way ghi vào index; bỏ khỏi index để worktree giống lúc trước sync (thay đổi chưa stage).
       if (tracked) await git(['reset', '-q'], { cwd });
       ji.worktreeBase = mainHead;
+      const codegraph = await this.refreshCodegraph(key, wt.matchRoot);
       for (const k of ['integratedRevision', 'integratedWorktreeHead', 'integratedCandidateId', 'publishedRevision', 'publishedCandidateId']) delete ji[k];
       if (ji.candidate) ji.candidate.state = 'stale';
       const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);
@@ -955,7 +957,7 @@ export class Runtime {
         ji.worktreeSetupJob = setupJobId = job.id;
       }
       j.save();
-      return { synced: true, baseRevision: mainHead, changedFiles: changed.length, ...(setupJobId ? { setupJobId } : {}),
+      return { synced: true, baseRevision: mainHead, changedFiles: changed.length, codegraph, ...(setupJobId ? { setupJobId } : {}),
         hint: `${setupJobId ? 'Wait for setupJobId, then rebuild. ' : ''}Restart the app from this worktree before new evidence; the last gate is stale, run run_gate again.` };
     }
     if (action === 'integrate') return integrateCandidate(this, key, message);
@@ -1560,7 +1562,8 @@ export class Runtime {
     try {
       const pending = this.itemRows().filter(r => r.status !== 'CLOSED' && ['todo', 'started'].includes(r.local)).length;
       const item = this.jevItem(key);
-      ji.signals ??= await this.itemSignals(key, item);
+      await this.refreshCodegraph(key, this.session.paths?.matchRoot);
+      ji.signals = await this.itemSignals(key, item);
       const { triage: t, route: r } = await this.decider().intake(key, item, { pendingItems: pending, minutesLeft: this.minutesLeft(), signals: ji.signals });
       const values = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v.value]));
       ji.triage = values;
@@ -1574,6 +1577,11 @@ export class Runtime {
   }
 
   // Đặc trưng khách quan cho Jev và luật difficulty (src/decide/signals.mjs); không có checkout thì bỏ phần grep code.
+  async refreshCodegraph(key, matchRoot) {
+    return ensureCodegraphIndex({ teamWorkspace: this.teamWorkspace, matchRoot, timeoutMs: 30_000,
+      logFile: join(this.session.paths.teamWork, 'logs', `${key}-codegraph-refresh.log`) });
+  }
+
   async itemSignals(key, item) {
     const root = this.session.paths?.matchRoot;
     let scenarios = 0;
@@ -1600,11 +1608,14 @@ export class Runtime {
     const ji = this.journal.item(key);
     let decisions;
     if (point === 'triage') {
-      ji.signals ??= await this.itemSignals(key, item);
+      await this.refreshCodegraph(key, this.session.paths?.matchRoot);
+      ji.signals = await this.itemSignals(key, item);
       decisions = await d.triage(key, item, { signals: ji.signals });
       ji.triage = Object.fromEntries(Object.entries(decisions).map(([k, v]) => [k, v.value]));
       this.journal.save();
     } else if (point === 'route') {
+      await this.refreshCodegraph(key, this.session.paths?.matchRoot);
+      ji.signals = await this.itemSignals(key, item);
       const pending = this.itemRows().filter(r => r.status !== 'CLOSED' && ['todo', 'started'].includes(r.local)).length;
       decisions = await d.route(key, item, ji.triage ?? {}, { pendingItems: context.pendingItems ?? pending, minutesLeft: this.minutesLeft(),
         signals: ji.signals ?? null });
@@ -1642,7 +1653,9 @@ export class Runtime {
       mkdirSync(dir, { recursive: true });
       const n = readdirSync(dir).filter(f => f.endsWith('.json')).length + 1;
       out.savedTo = join(dir, `${String(n).padStart(2, '0')}-${name.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
-      writeFileAtomic(out.savedTo, `${JSON.stringify({ tool: name, arguments: args, content: out.content, structuredContent: out.structuredContent }, null, 2)}\n`);
+      const payload = { tool: name, arguments: args, content: out.content, structuredContent: out.structuredContent };
+      out.source = { kind: 'company_tool', backlogItemKey: key, retrievedAt: new Date().toISOString(), sha256: digest(payload) };
+      writeFileAtomic(out.savedTo, `${JSON.stringify({ ...payload, untrusted: true, source: out.source }, null, 2)}\n`);
     }
     return out;
   }

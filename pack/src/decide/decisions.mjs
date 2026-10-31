@@ -8,13 +8,14 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { choice, noul, score } from './jev.mjs';
-import { difficultyFromSignals } from './signals.mjs';
+import { difficultyFromSignals, uncertainTopology } from './signals.mjs';
 
 export const SEVERITY = ['low', 'medium', 'high', 'critical'];
 const SEVERITY_FLOOR = { PI: 'critical' };
 // Tiêu chí nêu thẳng tên trường của code_topology/kb_insights để Jev bám vào số liệu thay vì chỉ đọc chữ của đề.
 const DIFFICULTY = {
-  easy: '1-2 files, localized impact (code_topology.impact_radius_files <= 3, not cross_module), no tricky stack/DB pitfalls in kb_insights',
+  easy: '1-2 files, localized impact (code_topology.impact_radius_files <= 3, not cross_module), graph fresh and not truncated, '
+    + 'no tricky stack/DB pitfalls in kb_insights (heuristic investigation hints, not confirmed causes)',
   medium: 'several files, moderate impact (impact_radius_files 4-10), clear module boundaries, or the cause needs some investigation',
   hard: 'cross-module, high impact radius (impact_radius_files > 10), tricky concurrency/transaction/migration/time zone issues ' +
     '(kb_insights.risk_factors), or cause unknown'
@@ -157,7 +158,10 @@ export class Decider {
     if (floor && SEVERITY.indexOf(severity.value) < SEVERITY.indexOf(floor)) {
       severity = { ...severity, value: floor, source: 'rule', reason: `${type} is never below ${floor}` };
     }
-    const difficulty = this.pickChoice('difficulty', a.difficulty, err, () => difficultyFromSignals(type, signals), new Set(Object.keys(DIFFICULTY)));
+    let difficulty = this.pickChoice('difficulty', a.difficulty, err, () => difficultyFromSignals(type, signals), new Set(Object.keys(DIFFICULTY)));
+    if (difficulty.value === 'easy' && uncertainTopology(signals) && !signals?.flags?.includes('answerOnly')) {
+      difficulty = { ...difficulty, value: 'medium', source: 'rule', reason: 'graph is stale, unverified or truncated; localized impact is not established' };
+    }
     // Chặn bẫy: Jev "có" ở ngưỡng thấp, HOẶC regex khớp trên toàn bộ đề → coi là có (an toàn trước).
     const trap = injectionHeuristic(fullText(item));
     let injection = this.pickNoul('injection', a.injection, err, () => trap, this.th.injection);
@@ -182,8 +186,11 @@ export class Decider {
       reviewer = { name: 'reviewer', value: true, source: 'rule', confidence: null, rule: true, jev: a.reviewer?.pYes ?? null, reason: 'PI: reviewer runs in parallel with the gate' };
     } else {
       reviewer = this.pickNoul('reviewer', a.reviewer, err, () => true);
-      if (!reviewer.value && difficulty !== 'easy') {
-        reviewer = { ...reviewer, value: true, source: 'rule', reason: `Jev may skip review only for easy items (difficulty ${difficulty})` };
+      const incompleteGraph = uncertainTopology(signals) && !flags.has('answerOnly');
+      if (!reviewer.value && (difficulty !== 'easy' || incompleteGraph)) {
+        reviewer = { ...reviewer, value: true, source: 'rule', reason: incompleteGraph
+          ? 'graph is stale, unverified or truncated; independent review is required'
+          : `Jev may skip review only for easy items (difficulty ${difficulty})` };
       }
     }
     return { model, reviewer };

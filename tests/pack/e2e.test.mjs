@@ -158,7 +158,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // Model cho spawn lấy trong allowedModels: lần 1 theo tier small (6.1-terra medium), kể cả TASK-01 có deadline.
     assert.deepEqual(work.triage.models.fixer.map(m => `${m.model}/${m.reasoning_effort}`), ['gpt-6.1-terra/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
     assert.deepEqual(work2.triage.models.fixer.map(m => m.model), ['gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6.1-sol']);
-    assert.equal(work2.triage.models.reviewer.model, 'gpt-6.1-terra');
+    assert.equal(work2.triage.models.reviewer.model, 'gpt-6.1-sol');
     assert.match(work.triage.by, /difficulty:jev/);
     assert.equal(jevCalls.length, 2);
     assert.equal(work2.triage.injection, true, 'regex sees the end of a long item');

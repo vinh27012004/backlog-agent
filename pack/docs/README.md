@@ -24,3 +24,12 @@ Source/environment đổi phải kiểm phần mất hiệu lực. Rebase do pus
 5. Player: `/manage` → Load team pack → Initialize Match.
 
 Log lệnh của helper: `matches/<matchId>/.team-work/logs/`. Journal: `.team-work/journal.json`.
+
+KB và source: `knowledgeHints` là gợi ý theo stack/regex, kèm `skills/<path>:line`, không phải nguyên nhân đã chứng minh.
+Company Tools được gọi với `backlogItemKey` sẽ lưu kết quả, tham số, thời điểm tra và SHA-256 cạnh vật liệu item;
+fixer/reviewer trích file kết quả và ID/section, đối chiếu source `file:line` rồi ghi kiểm chứng thực tế.
+
+Helper lưu dấu vân tay source tại `.codegraph/team-source.json` sau khi index thành công trên source không đổi.
+Nó kiểm cả file chưa commit/mới/xoá, làm mới graph trước triage, sau sync worktree và trước full review.
+Index cũ thiếu dấu này được sync lại; lỗi hoặc kiểm tra vượt ngân sách trả độ mới `unknown`, không chặn gate/publish.
+Source đổi hoặc graph bị cắt không được dùng để xếp code item `easy`; đọc source/`rg` khi graph không đủ tin cậy.

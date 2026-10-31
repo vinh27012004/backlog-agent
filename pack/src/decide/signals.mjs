@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findAppRoot } from '../env/environment.mjs';
 import { git } from '../core/git.mjs';
+import { codegraphFreshness } from '../env/codegraph-state.mjs';
 
 const MAX_TERMS = 12;
 // Từ khoá khớp quá nhiều file là từ chung chung (Dashboard, invoice…), không cho biết vùng code cần sửa.
@@ -178,6 +179,7 @@ function dependents(stmt, start, maxDepth, deadline) {
     for (const id of frontier) {
       if (seen.size >= MAX_VISITS || Date.now() > deadline) { truncated = true; break; }
       for (const r of stmt.all(id)) {
+        if (seen.size >= MAX_VISITS || Date.now() > deadline) { truncated = true; break; }
         if (seen.has(r.id)) continue;
         seen.set(r.id, depth + 1);
         files.set(r.id, r.file);
@@ -187,6 +189,12 @@ function dependents(stmt, start, maxDepth, deadline) {
     if (next.length) depth++;
     frontier = next;
   }
+  // Chạm giới hạn độ sâu khi vẫn còn phụ thuộc chưa thăm cũng là kết quả chưa đầy đủ.
+  if (!truncated && frontier.length) {
+    for (const id of frontier) {
+      if (Date.now() > deadline || stmt.all(id).some(r => !seen.has(r.id))) { truncated = true; break; }
+    }
+  }
   return { seen, files, depth, truncated };
 }
 
@@ -195,11 +203,12 @@ function dependents(stmt, start, maxDepth, deadline) {
 function seedNodes(db, terms, grepFiles) {
   const appFile = f => !TEST_PATH.test(f) && !NOT_APP.test(f);
   const byName = db.prepare("SELECT id, name, file_path AS file FROM nodes WHERE lower(name) = lower(?) AND kind NOT IN ('file', 'import') LIMIT ?");
-  const byPath = db.prepare("SELECT path FROM files WHERE path = ? OR path LIKE ? LIMIT 3");
-  const inFile = db.prepare("SELECT id, name, file_path AS file FROM nodes WHERE file_path = ? AND kind NOT IN ('file', 'import') LIMIT 60");
+  const byPath = db.prepare("SELECT path FROM files WHERE path = ? OR path LIKE ? LIMIT 4");
+  const inFile = db.prepare("SELECT id, name, file_path AS file FROM nodes WHERE file_path = ? AND kind NOT IN ('file', 'import') LIMIT 61");
   const seeds = new Map();
   const symbols = [];
   const files = [];
+  let truncated = false;
   for (const t of terms) {
     if (/^[A-Za-z_$][\w$]*$/.test(t)) {
       const rows = byName.all(t, GENERIC_SYMBOLS + 1);
@@ -208,14 +217,21 @@ function seedNodes(db, terms, grepFiles) {
       symbols.push(t);
       for (const r of app) seeds.set(r.id, r);
     } else if (/\.\w+$/.test(t)) {
-      files.push(...byPath.all(t, `%/${t}`).map(r => r.path));
+      const paths = byPath.all(t, `%/${t}`);
+      if (paths.length > 3) truncated = true;
+      files.push(...paths.slice(0, 3).map(r => r.path));
     }
   }
   const from = seeds.size ? 'symbols' : 'files';
   for (const f of new Set([...files, ...(seeds.size ? [] : grepFiles)].filter(appFile))) {
-    for (const r of inFile.all(f)) if (seeds.size < MAX_SEEDS) seeds.set(r.id, r);
+    const rows = inFile.all(f);
+    if (rows.length > 60) truncated = true;
+    for (const r of rows.slice(0, 60)) {
+      if (seeds.size < MAX_SEEDS) seeds.set(r.id, r);
+      else if (!seeds.has(r.id)) truncated = true;
+    }
   }
-  return { seeds, symbols, from };
+  return { seeds, symbols, from, truncated };
 }
 
 // root: checkout chính; terms: codeTerms của đề; grepFiles: file git grep thấy. Không bao giờ ném lỗi.
@@ -223,16 +239,18 @@ export async function codeTopology(root, { terms = [], grepFiles = [], budgetMs 
   const t0 = Date.now();
   const path = root ? join(root, '.codegraph', 'codegraph.db') : null;
   if (!path || !existsSync(path)) return null;
+  const freshness = await codegraphFreshness(root);
+  if (freshness.freshness !== 'fresh') return freshness;
   const mod = await loadSqlite();
   if (!mod) return null;
   let db;
   try {
     db = new mod.DatabaseSync(path, { readOnly: true });
     const state = db.prepare("SELECT value FROM project_metadata WHERE key = 'index_state'").get()?.value;
-    if (state && state !== 'complete') return null;            // đang index dở: số liệu thiếu còn tệ hơn không có
-    const { seeds, symbols, from } = seedNodes(db, terms, grepFiles);
+    if (state !== 'complete') return { freshness: 'unknown', reason: 'index_incomplete' };
+    const { seeds, symbols, from, truncated } = seedNodes(db, terms, grepFiles);
     if (!seeds.size) return null;
-    const deadline = t0 + budgetMs;
+    const deadline = Date.now() + budgetMs;
     const ids = [...seeds.keys()];
     const anyDep = db.prepare("SELECT e.source AS id, n.file_path AS file, n.kind FROM edges e JOIN nodes n ON n.id = e.source WHERE e.target = ? AND e.kind IN ('calls', 'references', 'imports')");
     const callers = db.prepare("SELECT e.source AS id, n.file_path AS file, n.kind FROM edges e JOIN nodes n ON n.id = e.source WHERE e.target = ? AND e.kind = 'calls'");
@@ -247,17 +265,17 @@ export async function codeTopology(root, { terms = [], grepFiles = [], budgetMs 
     const base = moduleRoot(db.prepare('SELECT path FROM files').all().map(r => r.path).filter(p => !NOT_APP.test(p)));
     const modules = new Set(app.map(f => moduleOf(f, base)));
     return {
-      seeds: seeds.size, seed_from: from, symbols: symbols.slice(0, 5),
+      freshness: 'fresh', seeds: seeds.size, seed_from: from, symbols: symbols.slice(0, 5),
       impact_radius_files: app.length, impacted_test_files: files.size - app.length,
       call_depth: calls.depth,
       callers_count: [...calls.seen.values()].filter(d => d === 1).length,
       callees_count: out.size,
       cross_module: modules.size > 1, modules: modules.size, module_sample: [...modules].slice(0, 4),
-      ...(impact.truncated || calls.truncated ? { truncated: true } : {}),
+      ...(truncated || impact.truncated || calls.truncated ? { truncated: true } : {}),
       ms: Date.now() - t0
     };
   } catch {
-    return null;
+    return { freshness: 'unknown', reason: 'index_unreadable' };
   } finally {
     try { db?.close(); } catch { /* đã đóng */ }
   }
@@ -301,11 +319,9 @@ const MANIFEST_STACK = [['package.json', 'node'], ['pom.xml', 'java'], ['build.g
 
 const readText = path => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
 
-const domains = new Map();
 // Stack (tên file stack-notes) và framework của checkout; root null hay không thấy manifest thì 'unknown'.
 export function detectDomain(root) {
   if (!root) return { stack: 'unknown', frameworks: [] };
-  if (domains.has(root)) return domains.get(root);
   let out = { stack: 'unknown', frameworks: [] };
   try {
     const app = findAppRoot(root);
@@ -328,7 +344,6 @@ export function detectDomain(root) {
       out = { stack: stack ?? 'unknown', frameworks: FRAMEWORKS.filter(([, re]) => re.test(all)).map(([name]) => name) };
     }
   } catch { /* đọc manifest lỗi: unknown */ }
-  domains.set(root, out);
   return out;
 }
 
@@ -342,14 +357,17 @@ const kbText = rel => {
 export function kbPitfalls(stack) {
   const out = [];
   let inPitfalls = false;
-  for (const line of kbText(`stack-notes/${stack}.md`).split(/\r?\n/)) {
+  const stackFile = `stack-notes/${stack}.md`;
+  for (const [i, line] of kbText(stackFile).split(/\r?\n/).entries()) {
     if (/^\*\*/.test(line)) inPitfalls = /^\*\*Pitfalls/i.test(line);
-    else if (inPitfalls && /^- /.test(line)) out.push({ text: line.slice(2).trim(), stack: true });
+    else if (inPitfalls && /^- /.test(line)) out.push({ text: line.slice(2).trim(), stack: true,
+      source: { file: `skills/${stackFile}`, line: i + 1 } });
   }
-  for (const line of kbText('backlog-references/bug-patterns.md').split(/\r?\n/)) {
+  for (const [i, line] of kbText('backlog-references/bug-patterns.md').split(/\r?\n/).entries()) {
     const cells = line.split('|').map(c => c.trim());
     if (cells.length < 6 || !cells[1] || /^-+$|^Pattern$/.test(cells[1])) continue;
-    out.push({ text: `${cells[1]}: ${cells[3]}`, signs: cells[2], stack: false });
+    out.push({ text: `${cells[1]}: ${cells[3]}`, signs: cells[2], stack: false,
+      source: { file: 'skills/backlog-references/bug-patterns.md', line: i + 1 } });
   }
   return out;
 }
@@ -366,20 +384,24 @@ function pickPitfall(stack, frameworks, risks) {
     const hit = hints.filter(re => re.test(hay)).length;
     if (!hit) continue;
     const score = hit * 2 + names.filter(n => hay.includes(n)).length + (p.stack ? 1 : 0);
-    if (!best || score > best.score) best = { score, text: p.text };
+    if (!best || score > best.score) best = { score, text: p.text, source: p.source };
   }
   if (!best) return null;
   const line = best.text.replace(/\*\*/g, '');
-  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+  return { text: line.length > 200 ? `${line.slice(0, 199)}…` : line, source: best.source };
 }
 
 // text: phần làm việc của đề (workText); root: checkout chính.
 export function kbInsights(text, { root = null } = {}) {
   const { stack, frameworks } = detectDomain(root);
   const risk_factors = RISKS.filter(([, re, , needs]) => re.test(text) && (!needs || frameworks.some(f => needs.test(f)))).map(([k]) => k);
+  const pitfall = pickPitfall(stack, frameworks, risk_factors);
   return { domain: frameworks.length ? `${frameworks.join(' + ')} (${stack})` : stack, risk_factors,
-    known_pitfalls: pickPitfall(stack, frameworks, risk_factors) };
+    basis: 'heuristic', known_pitfalls: pitfall?.text ?? null, known_pitfall_source: pitfall?.source ?? null };
 }
+
+export const uncertainTopology = signals => Boolean(signals?.topology && (signals.topology.truncated
+  || (signals.topology.freshness && signals.topology.freshness !== 'fresh')));
 
 // item: {title, description, startInstruction, points, deadlineMinutes}; root: checkout chính (null thì bỏ phần code).
 export async function itemSignals(item, { root = null, scenarios = 0 } = {}) {
@@ -425,7 +447,8 @@ export function difficultyFromSignals(type, s) {
   if ((s.code && (s.code.files > 8 || s.code.modules > 3)) || (topo && (topo.impact_radius_files > 10 || topo.modules > 3))) score++;
   if (flags.has('answerOnly')) score--;
   if (score >= 3) return 'hard';
-  const small = topo ? topo.impact_radius_files <= 3 && !topo.cross_module : s.code && s.code.files > 0 && s.code.files <= 3;
+  const small = !uncertainTopology(s) && (topo ? topo.impact_radius_files <= 3 && !topo.cross_module
+    : s.code && s.code.files > 0 && s.code.files <= 3);
   if (score <= 0 && (flags.has('answerOnly') || small)) return 'easy';
   return 'medium';
 }

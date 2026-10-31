@@ -11,7 +11,7 @@ const names = plan => plan.fixer.map(m => `${m.model}/${m.reasoning_effort}`);
 test('a plain item starts cheap and moves to the strong tier on retries', () => {
   const plan = modelPlan({ type: 'TASK', modelTier: 'small', deadline: false, allowed: ENTERPRISE });
   assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
-  assert.deepEqual(plan.reviewer, { model: 'gpt-6.1-terra', reasoning_effort: 'high', tier: 'review' });
+  assert.deepEqual(plan.reviewer, { model: 'gpt-6.1-sol', reasoning_effort: 'high', tier: 'review' });
   // Checker giả thuyết chỉ chạy khi PI đã kẹt: dùng tier strong.
   assert.deepEqual(plan.piHypothesis, { model: 'gpt-6.1-sol', reasoning_effort: 'high', tier: 'strong' });
   // Verifier chỉ chạy gate và đối chiếu MVS: tier small.
@@ -31,24 +31,31 @@ test('a strong-tier item starts on the strong model; a PI ends on top, a CR with
   assert.deepEqual(cr.fixer.map(m => m.tier), ['strong', 'strong', 'strong']);
 });
 
-test('on the free account each tier falls back to an allowed model', () => {
-  const plan = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: FREE });
-  assert.deepEqual(names(plan), ['gpt-6-luna/medium', 'gpt-6-luna/high', 'gpt-6-luna/high']);
-  const plain = modelPlan({ type: 'TASK', modelTier: 'small', deadline: false, allowed: FREE });
-  assert.equal(plain.fixer[0].model, 'gpt-6-luna');
-  assert.equal(plain.reviewer.model, 'gpt-6-luna');
+test('tiers fall back among the three configured models with the appropriate effort', () => {
+  const plan = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: ['gpt-6.1-terra', 'gpt-6-astra'] });
+  assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6-astra/high', 'gpt-6-astra/high']);
+  assert.equal(plan.reviewer.model, 'gpt-6-astra');
+  for (const model of ['gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra']) {
+    const only = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: [model] });
+    assert.deepEqual(names(only), [`${model}/medium`, `${model}/high`, `${model}/high`]);
+    assert.equal(only.reviewer.model, model);
+  }
 });
 
 test('every pick is allowed; unknown models give null and no policy gives no plan', () => {
-  for (const allowed of [ENTERPRISE, FREE, ['gpt-6-luna']]) {
+  for (const allowed of [ENTERPRISE, ['gpt-6.1-terra', 'gpt-6-astra'], ['gpt-6.1-sol']]) {
     for (const type of ['PI', 'BUG']) {
       const plan = modelPlan({ type, modelTier: 'small', deadline: true, allowed });
       for (const m of [...plan.fixer, plan.reviewer, plan.piHypothesis, plan.verifier]) assert.ok(allowed.includes(m.model), m.model);
     }
   }
-  const odd = modelPlan({ type: 'BUG', modelTier: 'small', deadline: false, allowed: ['gpt-test'] });
-  assert.deepEqual(odd.fixer, [null, null, null]);
-  assert.equal(odd.reviewer, null);
+  for (const allowed of [FREE, ['gpt-6-sol'], ['gpt-test']]) {
+    const odd = modelPlan({ type: 'BUG', modelTier: 'small', deadline: false, allowed });
+    assert.deepEqual(odd.fixer, [null, null, null]);
+    assert.equal(odd.reviewer, null);
+    assert.equal(odd.piHypothesis, null);
+    assert.equal(odd.verifier, null);
+  }
   assert.equal(modelPlan({ type: 'BUG', modelTier: 'small', deadline: false, allowed: undefined }), null);
 });
 

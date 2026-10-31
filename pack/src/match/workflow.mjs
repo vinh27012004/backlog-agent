@@ -63,6 +63,7 @@ export class Workflow {
         return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started,
           worktree, profile: r.detectProfile({ path: worktree.matchRoot }), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), resultsDir: join(r.session.paths.teamWork, 'results'),
+          knowledgeHints: ji.signals?.kb ?? null,
           fixResultFile: this.nextResultFile(key),
           ...(started.independentAnswer ? { independentAnswer: { ...started.independentAnswer, resultsFile: this.nextResultFile(key, 'solver') } } : {}),
           worker: 'team_fixer', checker: ji.verificationKind === 'answer_only' ? 'team_pi_hypothesis' : 'team_reviewer',
@@ -138,10 +139,12 @@ export class Workflow {
     ji.candidate = candidate;
     ji.artifacts[basename(fixResultFile)] = artifact.hash;
     ji.workerState = 'yielded';
+    // Worker đã bàn giao và ngừng ghi: reviewer nhận graph của source cuối cùng.
+    const codegraph = !blocked && !codeReview ? await r.refreshCodegraph(key, paths.matchRoot) : null;
     this.metric(key, 'handoff', since, { candidateId: id });
     return { candidateId: id, ready: !blocked, verificationKind: ji.verificationKind ?? 'acceptance', repair,
       nextFixResultFile: this.nextResultFile(key),
-      reviewScope: candidate.reviewScope, priorReviewFile: codeReview?.file ?? null,
+      reviewScope: candidate.reviewScope, priorReviewFile: codeReview?.file ?? null, codegraph,
       warnings: [...answer.warnings, ...req.warnings],
       next: blocked ? 'Repair the whole todo list before full review. Answer/evidence repair uses followup_task on the worker; then a new numbered result and preflight.'
         : ji.verificationKind === 'answer_only' ? 'Run the gate; validate independent solver through result_handoff. No default reviewer/verifier.'

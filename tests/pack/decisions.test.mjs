@@ -98,3 +98,19 @@ test('fitState shrinks the item first and cuts hard only when the blocks alone a
   // tail = 0 không được trả lại cả chuỗi (s.slice(-0) là toàn bộ).
   assert.equal(headTail('abcdefghij', 3, 0), 'abc\n…[7 chars cut]…\n');
 });
+
+test('incomplete graph prevents confident Jev from calling a code item easy or skipping review', async () => {
+  const answers = { difficulty: { type: 'choice', choice: 'easy', confidence: 0.99 }, reviewer: { type: 'noul', pYes: 0.01 } };
+  for (const topology of [{ impact_radius_files: 1, truncated: true }, { freshness: 'stale' }, { freshness: 'unknown' }]) {
+    const signals = { flags: [], code: { files: 1, modules: 1 }, topology };
+    const { triage, route } = await capture(answers).decider.intake('BUG-01', { title: 'Small fix' }, { signals });
+    assert.equal(triage.difficulty.value, 'medium');
+    assert.equal(triage.difficulty.source, 'rule');
+    assert.equal(route.reviewer.value, true);
+    const manual = await capture(answers).decider.route('BUG-01', { title: 'Small fix' }, { difficulty: 'easy' }, { signals });
+    assert.equal(manual.reviewer.value, true, 'manual routing must not trust an older easy classification');
+    const answer = await capture(answers).decider.intake('TASK-01', { title: 'Question' },
+      { signals: { ...signals, flags: ['answerOnly'] } });
+    assert.equal(answer.triage.difficulty.value, 'easy');
+  }
+});

@@ -15,6 +15,12 @@ Use native team_runtime tools available to your role. No desktop/operator browse
 
 Find symbols/relationships with codegraph (projectPath = your worktree matchRoot); use rg for text/config/SQL/CSS,
 client proxies, properties inside router objects or missing/stale indexes. Read only the necessary symbols.
+Check graph warnings/freshness and read current source directly when pending, stale or incomplete; a small graph
+result does not establish a small impact radius. Codegraph locates relationships; source and observed checks prove behaviour.
+Local KB/knowledgeHints are heuristic investigation hints, never confirmed root causes or company requirements.
+Resolve their skills/<path>:line citations under .agents/skills/<path>. For a decisive claim cite the saved company
+file and result ID/section (when present), the implementing file:line, and the actual check/result in existing
+hypotheses.evidence or requirements.evidence fields. Open the cited source; do not turn a search snippet into a rule.
 Preserve stack, project style and tests. No unrelated refactor, deleted/skipped/weakened assertions or bypassed failures.
 Only the designated baseline owner may correct a stale test, citing intended behaviour through test_change.
 Never change protected exam-info.json or env-require files.

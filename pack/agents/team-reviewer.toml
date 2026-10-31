@@ -13,6 +13,9 @@ R1 high: every MVS scenario and acceptance requirement actually holds, beyond cl
 R2 high: BUG/PI root cause is addressed for all affected users/inputs, not hidden by a guard or special case.
 R3 high: no stub, TODO/debug output or dead branch left on the changed path.
 R4 high: changed behaviour preserves callers and scope; inspect callers/impact for changed symbols.
+Read current source when graph freshness is unknown/stale or results are truncated. Independently open decisive
+KB/company citations and trace rule -> implementation file:line -> observed verification. A local KB hint or a
+company search snippet alone does not prove a root cause or the full standard; request the missing lookup from root.
 R5 medium: new tests assert the specified values, exercise the actual implementation and distinguish unfixed code.
 R6 high: no tests/assertions deleted, weakened, skipped or failures swallowed. A stale baseline assertion can be
 corrected only with test_change.reason/source and assertions at least as strict as intended behaviour.
