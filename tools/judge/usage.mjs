@@ -259,12 +259,14 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     };
     const jobs = {};
     for (const j of ji.jobs ?? []) { const x = (jobs[j.kind] ??= { n: 0, ms: 0 }); x.n++; x.ms += j.ms ?? 0; }
+    const phases = {};
+    for (const m of ji.metrics ?? []) { const x = (phases[m.phase] ??= { n: 0, ms: 0 }); x.n++; x.ms += m.ms ?? 0; }
     const start = Date.parse(ji.startedAt);
     const end = Date.parse(ji.endedAt ?? ji.receipt?.receivedAt);
     items[key] = { outcome: ji.outcome ?? (ji.receipt ? 'SUBMITTED' : ji.startedAt ? 'NOT_SUBMITTED' : 'NOT_STARTED'),
       startedAt: ji.startedAt ?? null, endedAt: ji.endedAt ?? ji.receipt?.receivedAt ?? null,
       ms: Number.isFinite(start) && Number.isFinite(end) ? end - start : null, attempts: ji.attempts ?? 0,
-      gates: ji.gateHistory?.length ?? gateJobs(key), jobs, fixer: role('team_fixer'), reviewer: role('team_reviewer'),
+      gates: ji.gateHistory?.length ?? gateJobs(key), jobs, phases, dispatchMs: ji.dispatchMs ?? null, fixer: role('team_fixer'), reviewer: role('team_reviewer'),
       pi: role('team_pi_hypothesis'), guardian: role('guardian') };
   }
 
@@ -326,6 +328,10 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     '', '## Theo item', '',
     'Ô fixer/reviewer/PI: số thread · lượt gọi model · input · thời gian chạy. Gate: số lần · tổng thời gian (journal cũ chưa có thời gian job).', '',
     table(['Item', 'Kết quả', 'Bắt đầu → kết thúc', 'Thời gian', 'Fixer', 'Reviewer', 'PI', 'Guardian', 'Gate', 'Chuẩn bị worktree'], itemRows),
+    '', '## Thời gian theo giai đoạn', '',
+    'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint; các hoạt động song song không cộng thành thời gian toàn trận.', '',
+    table(['Item', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Publish'], Object.entries(items).map(([key, x]) =>
+      [key, dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
     '', '## Root: lượt gọi model đến sau việc gì', '',
     `Context lớn nhất của root: ${tok(Math.max(0, ...rootThreads.map(t => t.maxContext)))}. Mỗi lượt gọi model được tính cho tool vừa trả kết quả ` +
       '(`message` = tin nhắn của Player hoặc agent khác); `exec` được tách theo tool bên trong.', '',

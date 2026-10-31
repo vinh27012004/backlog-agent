@@ -131,7 +131,7 @@ function fakeSessions() {
   write(5, [rec(at('00:00'), 'session_meta', { id: O, session_id: O, originator: 'mtm_player', cwd: join(root, 'elsewhere') }), tokens('00:30', 99999, 0, 9)]);
   json(join(tw, 'team-sdlc-pack', 'logs', 'M2.dashboard.html'), { cli: { provider: 'codex', status: 'STOPPED', sessionId: R } });
   json(join(checkout, '.team-work', 'journal.json'), { matchId: 'M2', items: { 'BUG-09': { startedAt: at('00:30'), endedAt: at('08:00'),
-    outcome: 'SUBMITTED', attempts: 1, gateHistory: [{ jobId: 'job-3' }],
+    outcome: 'SUBMITTED', attempts: 1, gateHistory: [{ jobId: 'job-3' }], dispatchMs: 800, metrics: [{ phase: 'prepare', ms: 1000 }, { phase: 'evidence', ms: 2000 }],
     jobs: [{ kind: 'worktree_setup', ms: 30000, state: 'done' }, { kind: 'run_gate', ms: 120000, state: 'done' }] } } });
   return { root, tw, checkout, sessions };
 }
@@ -155,6 +155,7 @@ test('usage sums tokens and time per role and item from the Codex transcripts of
   assert.equal(bug.ms, 450000);
   assert.equal(bug.gates, 1);
   assert.equal(bug.jobs.run_gate.ms, 120000);
+  assert.equal(bug.phases.prepare.ms, 1000); assert.equal(bug.phases.evidence.ms, 2000); assert.equal(bug.dispatchMs, 800);
   assert.equal(bug.fixer.busyMs, 240000);
   assert.deepEqual(res.guardian.reviewed.team_fixer, { threads: 1, reviews: 1, input: 700 });
   assert.equal(res.guardian.tool.capture_evidence.input, 700);

@@ -83,7 +83,7 @@ Gửi qua kênh Q&A. Ghi câu trả lời và ngày bên dưới từng câu, r�
 - **Q5 (26/10):** Pha chuẩn bị có khoảng **10 phút**. Mục tiêu `ENVIRONMENT_READY` ≤ 7 phút, chừa 3 phút dự
   phòng: `login_match` chạy song song với job `setup_environment`, test baseline giới hạn 4 phút, helper có mốc
   cứng 8 phút để bỏ phần không bắt buộc. Đã cập nhật [05 §5.3](05-mcp-helper.md#53-setup_environment-job),
-  [06 §3.1](06-agents-va-skills.md#31-game-preparation), [07 §1–2](07-quy-trinh-tran.md#1-tổng-quan-thời-gian).
+  [06 §3.1](06-agents-va-skills.md), [07 §1–2](07-quy-trinh-tran.md#1-tổng-quan-thời-gian).
   Chưa rõ quá 10 phút thì chuyện gì xảy ra (bị huỷ hay chỉ trễ); ghi lại khi Practice.
 - **Q7 (26/10):** Evidence **tuỳ từng backlog item**, không có một định dạng chung. Vì vậy mỗi item TASK/CR/BUG
   có bước phân tích đề bắt buộc (`team_repo_scout` + skill `item-analysis`) trả về `evidencePlan`; worker làm

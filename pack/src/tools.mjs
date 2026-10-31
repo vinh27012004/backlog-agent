@@ -23,6 +23,9 @@ import { PREPARATION_STAGES, ProgressWriter } from './match/progress.mjs';
 import { PROXY_TOOLS, forward, startProxyServer } from './core/proxy.mjs';
 import { redactDeep } from './core/redact.mjs';
 import { Session } from './core/session.mjs';
+import { integrateCandidate } from './core/integration.mjs';
+import { resultArtifact, digest, environmentFingerprint, sourceSnapshot, repairPlan } from './core/candidates.mjs';
+import { Workflow } from './match/workflow.mjs';
 import { trustedTeamWorkspace } from './core/paths.mjs';
 import { HelperError, fail, isId, oneLine, writeFileAtomic } from './core/util.mjs';
 
@@ -89,6 +92,7 @@ export class Runtime {
     this.closingWarned = new Set();
     this.ungatedWarned = new Set();
     this.configuredAt = 0;
+    this.workflow = new Workflow(this);
   }
 
   get progress() {
@@ -171,6 +175,18 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key, e.g. BUG-01.') }, ['backlogItemKey']), readOnly: true, handler: a => this.readItem(a) },
       { name: 'start_work', description: 'GAME: call Start Work for an item, save template/MVS/files under .team-work/items/<ID>/ and log IN_PROGRESS. Returns triage, models and timeBox (returnBy; a PI also checkpointBy, and each PI attempt is capped). A PI also fetches the remote first: `remote` lists commits pushed since main (fast-forwarded into main when it has no unpublished work) and the recent changes of the match folder.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start even if little time is left.'), requiredScenarios: num('Number of verification scenarios you will run (MVS count or acceptance criteria, min 1).') }, ['backlogItemKey']), handler: a => this.startWork(a) },
+      { name: 'prepare_item', description: 'GAME: one background job for Start Work, materials, worktree/environment setup, profile and complete worker brief inputs. Returns worker + reviewer for code items, worker + independent solver for answer_only. Wait with job_status.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start with little time left.'), waitSeconds: num('Wait max 45 seconds.') }, ['backlogItemKey']), handler: a => this.workflow.prepare(a) },
+      { name: 'candidate_preflight', description: 'GAME: validate the immutable numbered fixer result, schema, answer, required evidence, scenario claims and source/environment fingerprint before opening full review. Returns candidateId and a merged typed repair todo. Worker must have yielded writes.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), fixResultFile: str('Absolute <ID>-fixer-<version>.json; each handoff uses a new version.'), reviewFile: str('Optional previous review to merge all high findings.') }, ['backlogItemKey', 'fixResultFile']), handler: a => this.workflow.preflight(a) },
+      { name: 'result_handoff', description: 'GAME: validate a reviewer or independent solver result against its strict contract and bind it to candidateId. Errors name the bad field. Never overwrite a handed-off file.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), kind: { type: 'string', enum: ['review', 'hypothesis'] }, purpose: { type: 'string', enum: ['solver', 'hypothesis', 'arbitration'] }, resultFile: str('Absolute results JSON path.'), candidateId: str('Current candidateId from preflight.') }, ['backlogItemKey', 'kind', 'resultFile', 'candidateId']), handler: a => this.workflow.handoff(a) },
+      { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. Wait for root to sync and send resume before continuing. resume grants writes again. Root never syncs a writing worker.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.') }, ['backlogItemKey', 'phase']), handler: a => this.workflow.checkpoint(a) },
+      { name: 'next_actions', description: 'GAME: ordered actions for new items, preflight, repair, gate, review, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
+        inputSchema: obj({}), readOnly: true, handler: () => { this.session.require('GAME'); return this.workflow.actions(); } },
+      { name: 'publish_item', description: 'GAME: serialized recoverable job: verification, integrate, main gate if content changed, push and idempotent submit. Requires candidateId, independent review/solver and gate. Stops at errors; job_status gives checkpoint. A remote rebase always stops for a fresh gate.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), candidateId: str('Current candidateId.'), message: str('Commit message.'), waitSeconds: num('Wait max 45 seconds.'), lastChance: obj({ reason: str('Why no further attempt fits; code gate must still pass.') }, ['reason']) }, ['backlogItemKey', 'candidateId']), handler: a => this.workflow.publish(a) },
       { name: 'worktree', description: 'GAME: per-item git worktree. create: new worktree at the main HEAD (+ .env with a per-item test database, dependency install as a job, template copied to answers/<ID>/submit.json). integrate: commit the worktree and cherry-pick onto the main checkout; only the exact content of the last gate whose build and tests passed (answers/<ID>/ may still change), else GATE_REQUIRED / GATE_STALE. sync: move a worktree with no commit yet onto the main HEAD, keeping its uncommitted work (pulls in fixes other items already integrated, e.g. a shared layout bug; WORKTREE_CONFLICT leaves it unchanged; reinstall job when dependencies changed). remove: delete it. status: paths and state.',
         inputSchema: obj({ action: { type: 'string', enum: ['create', 'integrate', 'sync', 'remove', 'status'] }, backlogItemKey: str('Item key.'), message: str('integrate: one-line commit message.') }, ['action', 'backlogItemKey']), handler: a => this.worktree(a) },
       { name: 'run_gate', description: 'GAME: background job that re-checks an item: diff, forbidden changes, test quality (new tests without assertions or with assertions that cannot fail → weak_test), code scan of the added lines (TODO, stubs, debug output, SQL built from strings, credentials, backup/helper files; warnings only), typecheck/build, declared tests, full regression vs baseline (failures rerun once to rule out flakiness; baseline tests that no longer run fail like a test change), the declared tests on the unfixed code (fail-before, worktree only; a PI fails as not_reproduced unless a new test fails there), answer file (template scenarios, MVS-required evidence for PASS scenarios, status vs results). where=worktree (default when the item has one) or main. A failure has a stable `signature` and `repeat` (how often this item failed with it); warnings are collected in `findings` for the reviewer.',
@@ -179,7 +195,7 @@ export class Runtime {
           needsDependency: bool('True only if the item requires changing dependency/build files.'), testsAdded: { type: 'array', items: { type: 'string' }, description: 'Test files or names added/changed for this item.' },
           allowTestChange: { type: 'object', description: 'Only when an existing test contradicts the intended behaviour: the fixer\'s test_change {reason, source}; source quotes the item text, a company standard (e.g. kb_search result id) or repo evidence (file:line of a migration, code comment or organizer seed). Without it, editing a baseline-failing test or removing assertions fails the gate.' },
           waitSeconds: num('Seconds to wait in this call (max 45).') }, ['backlogItemKey']), handler: a => (a.fixResultFile ? this.gateFromFixResult(a, { pi: true }) : this.runGate(a)) },
-      { name: 'record_verification', description: 'GAME: log BACKLOG_TESTS from a finished gate job plus the verification scenarios. Counts come from testResults in answers/<ID>/submit.json (PASS / FAIL / anything else = not run) when it has them; the count arguments are only for items without testResults.',
+      { name: 'record_verification', description: 'GAME: record actual MVS testResults, named acceptance checks, or answer_only schema/source, independent derivation and code gate from a finished gate job. Never invent scenario counts; manual count arguments are legacy compatibility only.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), gateJobId: str('Job id returned by run_gate.'), scenariosPassed: num('Scenarios executed and passed (only without testResults).'), scenariosFailed: num('Scenarios executed and failed (only without testResults).'), scenariosSkipped: num('Scenarios not executed (only without testResults).'),
           disputeChecked: { type: 'boolean', description: 'Answer-only item: a checker refuted the independent solver\'s different value (ANSWER_DISPUTED otherwise).' } }, ['backlogItemKey', 'gateJobId']), handler: a => this.recordVerification(a) },
       { name: 'commit_and_push', description: 'GAME: validate answers/<ID>/ and changed paths, commit everything under the match folder and push to the assigned branch (never force). Requires that the last gate of the item passed build and tests on exactly the current content (GATE_REQUIRED / GATE_STALE otherwise). Returns the full revision.',
@@ -198,10 +214,11 @@ export class Runtime {
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
         inputSchema: obj({ path: str('Absolute folder; default matchRoot.') }), readOnly: true, handler: a => this.detectProfile(a) },
-      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost (the `app` tool gives its url) and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: login{url (the app\'s sign-in page), matchRoot (absolute worktree path, as for app start)} signs in with the test account the app\'s own seed script creates: the helper reads it from the app\'s .env or the seed defaults, fills the form and checks the form is gone; the account never reaches you (the result names only its env variables), so never read or type seed passwords yourself; LOGIN_FAILED means the app refused it. goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key: Enter|Tab|Escape|Space|ArrowUp/Down/Left/Right|Backspace}, drag{selector|text, index?, to:{selector|text, index?}, position?: before|after|center} (real mouse drag for drag-and-drop lists; keyboard drag is press Space on the focused handle, arrows, Space), waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls.',
+      { name: 'capture_evidence', description: 'Any agent: drive a headless Edge/Chrome against the app YOU started on localhost (the `app` tool gives its url) and save PNG screenshots into answers/<ID>/evidence/. Steps run in order: login{url (the app\'s sign-in page), matchRoot (absolute worktree path, as for app start)} signs in with the test account the app\'s own seed script creates: the helper reads it from the app\'s .env or the seed defaults, fills the form and checks the form is gone; the account never reaches you (the result names only its env variables), so never read or type seed passwords yourself; LOGIN_FAILED means the app refused it. goto{url}, fill{selector|text,value}, click{selector|text,force?}, select{selector,value}, press{key: Enter|Tab|Escape|Space|ArrowUp/Down/Left/Right|Backspace}, drag{selector|text, index?, to:{selector|text, index?}, position?: before|after|center} (real mouse drag for drag-and-drop lists; keyboard drag is press Space on the focused handle, arrows, Space), waitFor{selector|text,timeoutMs}, wait{ms}, (selector is plain CSS, never Playwright :has-text/>>/text=; give selector and text together to pick by visible text among the matches, e.g. {selector:"[role=tab]",text:"Invoices"}; index picks the n-th match), assertText{text}, screenshot{path,fullPage?}, route{url (substring or * pattern), method?, status?, body?, contentType?, abort? (Failed|TimedOut|ConnectionRefused|ConnectionReset|InternetDisconnected|AddressUnreachable), delayMs?, times?}, unroute. route makes the browser answer matching requests itself (e.g. status 500, abort TimedOut, delayMs for a slow network) so an MVS that asks how the app handles a failing server can be captured without changing code or stopping shared services; the result lists them in `routed` and the answer must say the failure was simulated. Clicks are real mouse events: if another element covers the target, it fails with ELEMENT_OBSCURED naming the cover (useful UI-bug evidence); pass force:true to click through the cover. A failed step returns error.details: failedStep, url, visibleText and the clickable candidates on the page, so fix the steps from it instead of guessing. Use browserProfile to keep a login (cookies) across calls. download{selector|text,path,timeoutMs?} registers before click, saves completed HTTP/Blob bytes and returns path/bytes/sha256. waitFor also accepts state visible|hidden|enabled. Supply context for scenario/worktree/appMode/before_fix or final provenance.',
         inputSchema: obj({ steps: { type: 'array', items: { type: 'object' }, description: 'Ordered actions, max 60.' },
           viewport: { type: 'object', description: '{width,height}, default 1366x900.' },
-          browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.') }, ['steps']),
+          browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.'),
+          context: obj({ backlogItemKey: str('Item key.'), matchRoot: str('Absolute worktree matchRoot.'), scenario: str('Scenario or requirement ID.'), appMode: { type: 'string', enum: ['dev', 'production'] }, phase: { type: 'string', enum: ['before_fix', 'final'] } }, ['backlogItemKey', 'matchRoot', 'scenario', 'appMode', 'phase']) }, ['steps']),
         handler: a => this.captureEvidence(a) },
       { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version (mode "dev": runs the dev script instead, no build, only when a scenario needs the development app) and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
         inputSchema: obj({ action: { type: 'string', enum: ['start', 'status', 'stop'] }, backlogItemKey: str('Item key.'),
@@ -231,6 +248,7 @@ export class Runtime {
 
   // ------------------------------------------------------------------ session
   configureSession({ frame }) {
+    const wasConfigured = this.session.configured;
     this.session.configure(frame, this.teamWorkspace);
     const d = this.session.descriptor;
     if (!this.writer || this.writer.playerSessionId !== d.playerSessionId) {
@@ -242,9 +260,13 @@ export class Runtime {
     const st = this.writer.state;
     const j = this.journal;
     const submissionPolicy = this.session.policies.MTM_SUBMISSION_POLICY_V1;
+    if (!wasConfigured && this.session.phase === 'GAME' && j) {
+      for (const ji of Object.values(j.data.items)) { delete ji.workerThread; ji.workerState = 'yielded'; }
+      j.save();
+    }
     const next = this.session.phase === 'PREPARE'
       ? ['prepare_checkout', 'setup_environment (job) while you call login_match', 'wait_for_update until JOB_DONE', 'report_ready', 'end the turn']
-      : ['login_match', 'refresh_match', 'match_state', 'company_tools', 'start_work → implement → run_gate → record_verification → commit_and_push → submit_work', 'wait_for_update; never end the turn while the match runs'];
+      : ['login_match', 'refresh_match', 'company_tools', 'next_actions → prepare_item → native worker/checker → candidate_preflight → run_gate/result_handoff → publish_item', 'wait_for_update; never end the turn while the match runs'];
     return {
       phase: this.session.phase, type: this.session.type, matchId: d.matchId, teamId: d.teamId,
       paths: this.session.paths, restartAttempt: d.restartAttempt ?? 0, models: this.session.models,
@@ -274,6 +296,7 @@ export class Runtime {
   proxyCall(name, args) {
     switch (name) {
       case 'read_item': return this.readItem(args);
+      case 'worker_checkpoint': return this.workflow.checkpoint(args);
       case 'job_status': return this.jobStatus(args, { pi: false });
       case 'worktree':
         if (args.action !== 'status') fail('PROXY_DENIED', 'subagents may only call worktree status');
@@ -361,6 +384,12 @@ export class Runtime {
         j.data.preparation.profile = result.profile;
         j.data.preparation.baseline = result.baseline;
         j.data.preparation.build = result.build;
+        if (result.build === 'PASS' && result.baseline) {
+          j.data.preparation.codeSnapshot = await sourceSnapshot(this.session.paths.checkoutRoot, this.session.descriptor.matchId, detectProfile(matchRoot));
+          j.data.preparation.codeProofs = [{ snapshot: j.data.preparation.codeSnapshot, result: {
+            codePassed: true, checks: [{ name: 'build', status: 'ok' }, { name: 'regression', status: 'ok', counts: result.baseline.counts }],
+            regression: result.baseline.counts, baselineFailures: result.baseline.failing ?? [], testsAdded: null } }];
+        }
         j.save();
         return result;
       });
@@ -435,6 +464,7 @@ export class Runtime {
       mkdirSync(dir, { recursive: true });
       writeFileAtomic(join(dir, 'page.json'), `${JSON.stringify(item.raw, null, 2)}\n`);
       const old = before.get(item.key);
+      if (game) { const ji = this.journal?.item(item.key); if (ji && !ji.discoveredAt) { ji.discoveredAt = new Date().toISOString(); this.journal.save(); } }
       if (!old) this.events.push('ITEM_NEW', { key: item.key, itemType: item.type, title: item.title, minutesLeft: this.gm.itemMinutesLeft(item), points: item.points });
       else {
         if (old.status !== item.status) this.events.push(item.status === 'CLOSED' ? 'ITEM_CLOSED' : 'ITEM_STATUS', { key: item.key, status: item.status });
@@ -543,7 +573,7 @@ export class Runtime {
     const slotted = waiting.filter(k => !answerOnly.includes(k)).slice(0, Math.max(0, freeSlots));
     const ungated = this.ungatedResults();
     const hints = [];
-    if (ungated.length) hints.push(`Fix-result waiting for its gate: ${ungated.map(r => r.key).join(', ')}; spawn the verifier (and reviewer) for ${ungated.map(r => r.fixResultFile).join(', ')} now.`);
+    if (ungated.length) hints.push(`Fix-result waiting for preflight: ${ungated.map(r => r.key).join(', ')}; call candidate_preflight for ${ungated.map(r => r.fixResultFile).join(', ')} now.`);
     if (answerOnly.length) hints.push(`Answer-only, needs no slot: start ${answerOnly.join(', ')} now (One item, step 1), then carry on.`);
     if (freeSlots > 0 && slotted.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${slotted.join(', ')} now (One item, step 1), then carry on.`);
     if (!hints.length) return null;
@@ -623,7 +653,7 @@ export class Runtime {
       if (out.newCommits.length) {
         const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`], { cwd: checkoutRoot })).out.trim() || 0);
         const dirty = (await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out;
-        if (ahead || dirty) {
+        if (ahead || dirty || this.workflow.publishOwner) {
           out.note = `main has ${ahead ? `${ahead} unpushed commit(s)` : 'uncommitted changes to tracked files'}, so the new commits are not in main yet; the fixer can read them with git show`;
         } else {
           const ff = await git(['merge', '--ff-only', `origin/${branch}`], { cwd: checkoutRoot, allowFail: true });
@@ -699,14 +729,17 @@ export class Runtime {
     const ji = j.item(key);
     const firstStart = !ji.startedAt;
     ji.startedAt ??= new Date().toISOString();
+    if (firstStart && ji.discoveredAt) ji.dispatchMs = Math.max(0, Date.parse(ji.startedAt) - Date.parse(ji.discoveredAt));
     ji.type = data?.backlogType ?? item.type;
     ji.requiredScenarios = Math.max(1, Math.floor(requiredScenarios));
+    ji.verificationKind = this.answerOnlyItem(key) && !Array.isArray(data?.submitTemplate?.testResults) ? 'answer_only'
+      : data?.minimumVerificationScenarios ? 'mvs' : 'acceptance';
     j.save();
     const log = this.progress.state.backlogs[key]?.status;
     if (log !== 'IN_PROGRESS') this.backlogStatus(key, 'IN_PROGRESS', data?.replay ? 'Work resumed.' : 'Work started.');
     if (firstStart || !this.progress.state.backlogs[key]?.tests) {
-      this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status: 'NOT_RUN', required: ji.requiredScenarios + 1,
-        executed: 0, passed: 0, failed: 0, skipped: 0, summary: `${ji.requiredScenarios} scenario(s) plus regression.` });
+      this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status: 'NOT_RUN', required: ji.verificationKind === 'answer_only' ? 3 : ji.requiredScenarios + 1,
+        executed: 0, passed: 0, failed: 0, skipped: 0, summary: ji.verificationKind === 'answer_only' ? 'answer_only: schema/source, independent derivation and code gate not checked yet.' : `${ji.requiredScenarios} scenario(s) plus regression.` });
     }
     const pi = typeOf(key) === 'PI';
     // Trước worktree create: commit mới (nếu có) phải vào main để worktree của PI có nó.
@@ -825,6 +858,7 @@ export class Runtime {
         await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
         await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
         ji.worktreeBase = base;
+        ji.mainEnvironment = environmentFingerprint(matchRoot, detectProfile(matchRoot));
       }
       // Template của Start Work → answers/<ID>/submit.json trong worktree (nếu chưa có).
       const template = join(this.itemDir(key), 'template.json');
@@ -868,11 +902,15 @@ export class Runtime {
     // Đưa worktree lên HEAD của main, giữ thay đổi chưa commit của item (Practice #5: sidebar lỗi của BUG-01 che màn
     // hình ở mọi worktree; CR-01 phải chép tay layout.tsx từ main vào worktree để chụp evidence).
     if (action === 'sync') {
+      if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must call worker_checkpoint ready_for_evidence/candidate and yield all writes before sync');
+      if (this.workflow.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before sync');
+      if (ji.submitIntent && !ji.receipt) fail('SUBMISSION_PENDING', 'replay the pending submission before changing the worktree');
       const cwd = wt.worktreeRoot;
       const mainHead = await revParse(checkoutRoot);
-      const oldBase = ji.worktreeBase;
+      const head = await revParse(cwd);
+      const oldBase = head === ji.integratedWorktreeHead ? head : ji.worktreeBase;
       if (mainHead === oldBase) return { synced: false, baseRevision: mainHead, hint: 'Already at the main HEAD.' };
-      if ((await revParse(cwd)) !== oldBase) fail('WORKTREE_CONFLICT', 'the worktree has its own commits; sync only before integrate');
+      if (head !== oldBase) fail('WORKTREE_CONFLICT', 'worktree has unintegrated commits; complete integration before sync');
       // Không dùng stash (Practice HIET12OA: `stash -u` hỏng giữa chừng vì app.log đang bị app giữ, rồi vì đường dẫn dài
       // trong node_modules; root mất 3 phút và 1,8M token gỡ tay). File đã track đi qua một patch; file chưa track không
       // bị reset đụng tới, chỉ cần không trùng đường dẫn với file main vừa thêm.
@@ -905,6 +943,8 @@ export class Runtime {
       // apply --3way ghi vào index; bỏ khỏi index để worktree giống lúc trước sync (thay đổi chưa stage).
       if (tracked) await git(['reset', '-q'], { cwd });
       ji.worktreeBase = mainHead;
+      for (const k of ['integratedRevision', 'integratedWorktreeHead', 'integratedCandidateId', 'publishedRevision', 'publishedCandidateId']) delete ji[k];
+      if (ji.candidate) ji.candidate.state = 'stale';
       const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);
       // Dependency hay schema đổi: cài lại và generate trong worktree (.env đã có nên giữ nguyên).
       const deps = changed.filter(f => /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pom\.xml|build\.gradle(\.kts)?|requirements\.txt|pyproject\.toml|go\.(mod|sum)|composer\.(json|lock)|[^/]+\.prisma)$/.test(f));
@@ -918,39 +958,7 @@ export class Runtime {
       return { synced: true, baseRevision: mainHead, changedFiles: changed.length, ...(setupJobId ? { setupJobId } : {}),
         hint: `${setupJobId ? 'Wait for setupJobId, then rebuild. ' : ''}Restart the app from this worktree before new evidence; the last gate is stale, run run_gate again.` };
     }
-    if (action === 'integrate') {
-      const files = await changedFiles(wt.worktreeRoot, 'HEAD');
-      const outside = files.filter(f => !f.path.startsWith(`${folder}/`));
-      if (outside.length) fail('PATH_NOT_ALLOWED', outside.map(f => f.path).join(', '));
-      await this.requireGate(key, wt.worktreeRoot);
-      if (files.length) {
-        await git(['add', '--', folder], { cwd: wt.worktreeRoot });
-        await git(['commit', '-m', oneLine(`${key}: ${message ?? 'work'}`, 120)], { cwd: wt.worktreeRoot });
-      }
-      const head = await revParse(wt.worktreeRoot);
-      if (head === ji.worktreeBase) fail('NO_CHANGES', 'worktree has no commit to integrate');
-      const dirty = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot });
-      if (dirty.out) fail('WORKTREE_CONFLICT', 'main checkout has uncommitted changes to tracked files; do not edit the main checkout directly');
-      const mainBefore = await revParse(checkoutRoot);
-      const commits = (await git(['rev-list', '--reverse', `${ji.worktreeBase}..${head}`], { cwd: checkoutRoot })).out.split(/\r?\n/).filter(Boolean);
-      for (const sha of commits) {
-        const pick = await git(['cherry-pick', sha], { cwd: checkoutRoot, allowFail: true });
-        if (pick.code !== 0) {
-          const conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], { cwd: checkoutRoot, allowFail: true })).out.split(/\r?\n/).filter(Boolean);
-          await git(['cherry-pick', '--abort'], { cwd: checkoutRoot, allowFail: true });
-          fail('WORKTREE_CONFLICT', `cherry-pick conflicts: ${conflicts.join(', ') || 'unknown'}`);
-        }
-      }
-      const headRevision = await revParse(checkoutRoot);
-      ji.integratedRevision = headRevision;
-      const { fixedNow, sync } = this.recordBaselineFix(key);
-      j.save();
-      const hint = mainBefore !== ji.worktreeBase ? 'Main moved since the worktree was created: run run_gate with where=main before commit_and_push.' : 'Run commit_and_push.';
-      return { integrated: true, headRevision, commits: commits.length, baseChanged: mainBefore !== ji.worktreeBase,
-        ...(fixedNow.length ? { baselineFixed: fixedNow, syncWorktrees: sync } : {}),
-        hint: sync.length ? `${hint} This item fixed baseline-failing tests: right after it is submitted, run worktree sync for `
-          + `${sync.join(', ')} and tell their fixers (if still running) to re-run the test suite before writing results.` : hint };
-    }
+    if (action === 'integrate') return integrateCandidate(this, key, message);
     fail('INVALID_ARGUMENT', 'action');
   }
 
@@ -994,7 +1002,7 @@ export class Runtime {
       .sort((a, b) => Number(b.m[1]) - Number(a.m[1]))[0] : null;
     if (!latest) return null;
     try {
-      const solver = JSON.parse(readFileSync(join(dir, latest.f), 'utf8'));
+      const solver = this.readResultFile(join(dir, latest.f), 'hypothesis');
       const answer = JSON.parse(readFileSync(join(matchRoot, 'answers', key, 'submit.json'), 'utf8'));
       const r = answerAgreement(answer, solver?.answer_values, answerFields(this.itemTemplate(key)));
       return r.state === 'none' ? null : { ...r, solverFile: join(dir, latest.f) };
@@ -1021,7 +1029,17 @@ export class Runtime {
         : `no gate has passed for ${key}; run run_gate first`);
     }
     const tree = await contentTree(checkoutRoot, folder, [`${folder}/answers/${key}`]);
-    if (tree === g.tree) return;
+    if (tree === g.tree) {
+      if (g.environment && g.matchRoot === join(checkoutRoot, folder)
+        && g.environment !== environmentFingerprint(g.matchRoot, detectProfile(g.matchRoot), this.journal.item(key).environmentEpoch ?? 0)) {
+        fail('GATE_STALE', 'environment changed after gate; run the gate again');
+      }
+      if (g.matchRoot !== join(checkoutRoot, folder) && this.journal.item(key).mainEnvironment
+        && this.journal.item(key).mainEnvironment !== environmentFingerprint(join(checkoutRoot, folder), detectProfile(join(checkoutRoot, folder)))) {
+        fail('GATE_STALE', 'main environment changed since worktree creation; run the main gate');
+      }
+      return;
+    }
     const changed = await treeChanges(checkoutRoot, g.tree, tree);
     const main = checkoutRoot === this.session.paths.checkoutRoot;
     fail('GATE_STALE', `content differs from what gate ${g.jobId} (${g.where}) checked: ${changed.slice(0, 8).join(', ') || 'unknown'}${changed.length > 8 ? ', …' : ''}; run run_gate${main ? ' with where=main' : ''} again`);
@@ -1040,15 +1058,27 @@ export class Runtime {
       fail('PATH_NOT_ALLOWED', `fixResultFile must be ${join(dir, `${key}-fixer-<n>.json`)}`);
     }
     const ji = this.journal.item(key);
+    const artifact = resultArtifact(dir, file, 'fix-result');
+    const savedHash = ji.resultHashes?.[name];
+    if (savedHash && savedHash !== artifact.hash) fail('RESULT_MUTATED', 'fix-result changed after handoff; write the next numbered version');
+    if (ji.candidate) await this.workflow.assertCandidate(key);
+    const wt = this.wtPaths(key);
+    const input = digest({ artifact: artifact.hash, tree: await contentTree(wt.worktreeRoot, this.session.descriptor.matchId),
+      environment: environmentFingerprint(wt.matchRoot, detectProfile(wt.matchRoot)) });
+    if (ji.gateInputs?.[name] && ji.gateInputs[name] !== input) fail('CANDIDATE_STALE', 'candidate changed after gate; hand off the next numbered result');
     const seen = ji.proxiedGates?.[name];
     if (seen && this.jobs.jobs.has(seen)) return { ...(await this.settleJob(seen, Math.min(45, waitSeconds) * 1000, { pi })), reused: true };
-    const fr = this.readResultFile(file);
+    const fr = artifact.value;
+    ji.resultHashes = { ...(ji.resultHashes ?? {}), [name]: artifact.hash };
+    ji.gateInputs = { ...(ji.gateInputs ?? {}), [name]: input };
+    this.journal.save();
     const result = await this.runGate({ backlogItemKey: key, where: 'worktree',
       testsAdded: Array.isArray(fr.tests_added) ? fr.tests_added.filter(t => typeof t === 'string') : [],
       needsDependency: Array.isArray(fr.needs_dependency) && fr.needs_dependency.length > 0,
       allowTestChange: fr.test_change ?? null, waitSeconds }, { pi, ledger: Array.isArray(fr.requirements) ? fr.requirements : null });
     if (result.jobId && !result.busy) {
       ji.proxiedGates = { ...(ji.proxiedGates ?? {}), [name]: result.jobId };
+      if (ji.candidate?.fixResultFile === file) ji.candidate.gateJobId = result.jobId;
       this.journal.save();
     }
     return result;
@@ -1081,7 +1111,7 @@ export class Runtime {
     const matchRoot = inWorktree ? wt.matchRoot : this.session.paths.matchRoot;
     // Worktree: so với điểm tạo worktree (gồm cả commit cục bộ). Main: so với remote (gồm commit đã tích hợp chưa push).
     const branch = this.session.descriptor.repository?.branch ?? 'main';
-    const base = inWorktree ? ji.worktreeBase : `origin/${branch}`;
+    const base = inWorktree ? ji.worktreeBase : await revParse(checkoutRoot, `origin/${branch}`);
     const template = this.itemTemplate(key);
     const schema = this.itemSchema(key);
     const mvs = this.itemMvs(key);
@@ -1089,17 +1119,36 @@ export class Runtime {
     const testChange = this.gateTestChange(key, inWorktree, allowTestChange);
     needsDependency = this.gateNeedsDependency(key, inWorktree, needsDependency);
     const job = this.jobs.start('run_gate', async job => {
+      const profile = detectProfile(matchRoot);
+      const snapshot = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
+      const policy = digest({ testsAdded, needsDependency, testChange, base, baseline: j.data.preparation?.baseline,
+        acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [], reproduction: inWorktree && typeOf(key) === 'PI' });
+      const proof = ji.codeGate;
+      let cachedCode = proof && proof.policy === policy && JSON.stringify(proof.snapshot) === JSON.stringify(snapshot)
+        && !testsAdded.some(t => /(^|[\\/])answers[\\/]/.test(t)) ? proof.result : null;
+      if (!cachedCode && ji.verificationKind === 'answer_only') {
+        const onlyAnswers = (await changedFiles(checkoutRoot, base)).every(f => f.path.startsWith(`${this.session.descriptor.matchId}/answers/${key}/`));
+        const shared = onlyAnswers && (j.data.preparation?.codeProofs ?? []).find(p => JSON.stringify(p.snapshot) === JSON.stringify(snapshot));
+        if (shared) cachedCode = { ...shared.result, testsAdded: null,
+          checks: shared.result.checks.filter(c => ['typecheck', 'build', 'regression', 'tests-kept'].includes(c.name)) };
+      }
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
-        profile: detectProfile(matchRoot), base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence,
+        profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode,
         requirements: ledger === undefined ? [] : this.itemRequirements(key), ledger, needsDependency,
         testsAdded, allowTestChange: testChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
         probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && typeOf(key) === 'PI',
         logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
+      const after = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
+      if (ji.candidate && JSON.stringify(snapshot) !== JSON.stringify(after)) fail('GATE_STALE', 'source/environment changed while gate was running; checkpoint a new candidate');
+      result.environment = after.environment;
+      if (result.codePassed && result.failKind !== 'not_reproduced') ji.codeGate = { snapshot: after, policy, result: structuredClone(result) };
+      if (result.codePassed && result.failKind !== 'not_reproduced') {
+        j.data.preparation.codeProofs = [{ snapshot: after, result: structuredClone(result) }, ...(j.data.preparation.codeProofs ?? [])].slice(0, 4);
+      }
       result.where = inWorktree ? 'worktree' : 'main';
       const agreement = this.solverAgreement(key, matchRoot);
       if (agreement) result.answerAgreement = agreement;
-      const ji = j.item(key);
-      ji.attempts = (ji.attempts ?? 0) + 1;
+      ji.attempts = (ji.attempts ?? 0) + (inWorktree && !result.reusedCode ? 1 : 0);
       if (inWorktree && result.changed?.length) {
         const overlap = await this.mainOverlap(ji.worktreeBase, result.changed);
         if (overlap.length) {
@@ -1131,8 +1180,10 @@ export class Runtime {
       // Lượt fixer kế tiếp đếm theo gate trên worktree; gate main và gate chỉ hỏng submit.json không phải một lượt fixer.
       if (!result.passed && inWorktree && result.failKind !== 'answer_invalid' && (result.repeat ?? 0) < 3) {
         const n = ji.gateHistory.filter(h => h.where === 'worktree' && h.failKind !== 'answer_invalid').length + 1;
-        result.next = `Retry = a new spawn_agent team_fixer (task_name ${key.toLowerCase().replace(/-/g, '')}_fix${n}, model/reasoning_effort `
-          + `from triage.models.fixer[${n - 1}] or its last entry) with the full brief + <previous_attempt>; never send_message to the old fixer.`;
+        result.repair = repairPlan({ gate: result });
+        result.next = result.repair.keepImplementation
+          ? 'Continue the current worker with followup_task: keep implementation, merge ALL outstanding todo, repair only answer/evidence, then a new numbered result and preflight.'
+          : `Consider a fresh team_fixer with model triage.models.fixer[${n - 1}] or its last entry, full brief and the complete previous_attempt. Change a repeated failed hypothesis.`;
         if (result.failKind === 'not_reproduced' && result.codePassed) {
           result.next += ' Build and regression passed: the next fixer only adds a test that fails on the unfixed code (see detail). '
             + 'No time for another attempt: this version may still be published under the last-chance rule.';
@@ -1156,6 +1207,7 @@ export class Runtime {
       if (!result.fixesBaseline.length) delete result.fixesBaseline;
       ji.lastGate = { jobId: job.id, where: result.where, passed: result.passed, failKind: result.failKind,
         signature: result.signature, repeat: result.repeat ?? 0, tree: result.codePassed ? result.tree : null,
+        environment: after.environment, matchRoot,
         ...(result.fixesBaseline ? { fixesBaseline: result.fixesBaseline } : {}) };
       // Một gate main kiểm cả các item khác đã integrate mà chưa push: tree của chúng (trừ answers/ của từng item) chính
       // là nội dung vừa build và test, nên commit_and_push của chúng khỏi gate main riêng (FMC0ZXFC: publish nối tiếp,
@@ -1164,6 +1216,7 @@ export class Runtime {
         const covered = await this.coverIntegrated(key, job.id);
         if (covered.length) result.coveredItems = covered;
       }
+      this.workflow.gateComplete(key, result, job.id);
       j.save();
       return result;
     }, { key });
@@ -1201,7 +1254,7 @@ export class Runtime {
     } catch { return []; }
   }
 
-  recordVerification({ backlogItemKey: key, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped, disputeChecked = false }) {
+  recordVerification({ backlogItemKey: key, gateJobId, scenariosPassed, scenariosFailed, scenariosSkipped, disputeChecked = false, lastChance = false }) {
     this.session.require('GAME');
     const job = this.jobs.jobs.get(gateJobId);
     if (!job || job.kind !== 'run_gate' || job.key !== key) fail('INVALID_ARGUMENT', 'gateJobId is not a run_gate job for this item');
@@ -1211,6 +1264,31 @@ export class Runtime {
     // Số kịch bản lấy từ testResults của submit.json mà gate vừa kiểm (đúng thứ sẽ nộp), không để root tự đếm.
     const wt = this.wtPaths(key);
     const answerRoot = job.result?.where === 'worktree' && this.liveWorktree(key) ? wt.matchRoot : this.session.paths.matchRoot;
+    if (ji.verificationKind === 'answer_only') {
+      const proof = this.workflow.answerProof(key, answerRoot, { allowUnverified: lastChance });
+      const answer = answerCheck(answerRoot, key, this.itemTemplate(key), this.itemSchema(key), this.itemMvs(key), this.itemEvidence(key));
+      const gatePassed = job.state === 'done' && job.result.passed;
+      const passed = (answer.problems.length ? 0 : 1) + (proof.supported ? 1 : 0) + (gatePassed ? 1 : 0);
+      const status = passed === 3 ? 'PASSED' : 'FAILED';
+      const summary = `answer_only checks: schema/source ${answer.problems.length ? 'FAIL' : 'PASS'}, independent derivation ${proof.supported ? 'PASS' : 'UNVERIFIED'}, code gate ${gatePassed ? 'PASS' : 'FAIL'}.`;
+      this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status, required: 3, executed: 3, passed, failed: 3 - passed, skipped: 0, summary });
+      ji.verification = { kind: 'answer_only', status, gateJobId, solverFile: proof.solverFile };
+      this.journal.save();
+      return { kind: 'answer_only', status, required: 3, executed: 3, passed, failed: 3 - passed, skipped: 0, source: 'schema, independent derivation, code gate' };
+    }
+    if (ji.verificationKind === 'acceptance' && ji.candidate && !scenarioCounts(join(answerRoot, 'answers', key, 'submit.json'))) {
+      const fr = this.readResultFile(ji.candidate.fixResultFile);
+      const rows = fr.requirements.length ? fr.requirements.filter(x => x.status !== 'not_applicable') : fr.verification;
+      if (!rows.length) fail('ACCEPTANCE_UNVERIFIED', 'acceptance verification needs named checks or requirements');
+      const gatePassed = job.state === 'done' && job.result.passed;
+      const passed = rows.filter(x => x.status === 'met' || x.result === 'pass').length + (gatePassed ? 1 : 0);
+      const failed = rows.filter(x => x.status === 'not_met' || x.result === 'fail').length + (gatePassed ? 0 : 1);
+      const skipped = rows.length + 1 - passed - failed, status = passed === rows.length + 1 ? 'PASSED' : failed ? 'FAILED' : 'RUNNING';
+      this.progress.write({ type: 'BACKLOG_TESTS', backlogId: key, status, required: rows.length + 1, executed: passed + failed + skipped,
+        passed, failed, skipped, summary: `acceptance checks ${passed}/${rows.length + 1} passed, including code gate.` });
+      ji.verification = { kind: 'acceptance', status, gateJobId }; this.journal.save();
+      return { kind: 'acceptance', status, required: rows.length + 1, executed: passed + failed + skipped, passed, failed, skipped, source: 'named acceptance checks' };
+    }
     // Item trả lời thuần: đáp án khác với lời giải độc lập thì chưa được nộp, trừ khi checker đã phân xử (refuted).
     const agreement = this.solverAgreement(key, answerRoot);
     if (agreement?.state === 'disagree' && !disputeChecked) {
@@ -1300,7 +1378,13 @@ export class Runtime {
           await git(['rebase', '--abort'], { cwd: checkoutRoot, allowFail: true });
           fail('PUSH_REJECTED', 'remote moved and rebase conflicts');
         }
-        continue;
+        // Rebase có thể đổi nội dung mà không conflict. Phải gate HEAD mới trước khi push tiếp.
+        for (const it of Object.values(j.data.items)) {
+          if (it.lastGate) it.lastGate = { ...it.lastGate, tree: null, passed: false, failKind: 'remote_changed' };
+          if (it.candidate) it.candidate.state = 'stale';
+        }
+        j.save();
+        fail('GATE_STALE', 'remote moved; rebase succeeded, but publish stopped. Run run_gate where=main on the new HEAD before pushing');
       }
       if (/authentication|denied|403|could not read/i.test(res.tail)) {
         this.blocker('GIT_AUTHENTICATION_REQUIRED', key, 'Git push needs authentication.');
@@ -1415,10 +1499,11 @@ export class Runtime {
     // cursor -1: chỉ sự kiện từ giờ (vòng chờ cuối trận của TOKXKPBV truyền 0, nhận lại 20 sự kiện cũ, root thức vô ích);
     // item đã ra mà chưa làm vẫn thấy trong state.open.
     const from = cursor < 0 ? this.events.seq : cursor;
-    const events = await this.events.wait(from, Math.max(0, Math.min(55_000, timeoutMs)), ctx.signal);
+    const pending = this.workflow.actions();
+    const events = await this.events.wait(from, pending.nextActions.length ? 0 : Math.max(0, Math.min(55_000, timeoutMs, pending.waitMs)), ctx.signal);
     const last = events.length ? events[events.length - 1].seq : from;
     const rows = this.gm.view ? this.itemRows() : [];
-    return { cursor: last, events: events.slice(-50),
+    return { cursor: last, events: events.slice(-50), ...this.workflow.actions(),
       state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), nextReleaseAt: this.gm.view ? this.releases()?.next?.at ?? null : null,
         open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
         working: rows.filter(r => r.status !== 'CLOSED' && ['started', 'published'].includes(r.local)).map(r => r.key),
@@ -1439,9 +1524,9 @@ export class Runtime {
     return { stack: p.stack, root: p.root, commands: p.commands, packageManager: p.packageManager ?? null, testRunner: p.testRunner ?? null };
   }
 
-  async captureEvidence({ steps, viewport, browserProfile, timeoutMs }) {
+  async captureEvidence({ steps, viewport, browserProfile, timeoutMs, context }) {
     if (!this.teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
-    return captureEvidence({ teamWorkspace: this.teamWorkspace, steps, viewport, browserProfile, timeoutMs });
+    return captureEvidence({ teamWorkspace: this.teamWorkspace, steps, viewport, browserProfile, timeoutMs, context });
   }
 
   // ------------------------------------------------------------------ Jev (D9)
@@ -1453,10 +1538,8 @@ export class Runtime {
     return this.deciderObj;
   }
 
-  readResultFile(file) {
-    if (typeof file !== 'string' || !isAbsolute(file)) fail('INVALID_ARGUMENT', 'context.fixResultFile must be an absolute path');
-    if (!resolve(file).toLowerCase().startsWith(resolve(this.session.paths.teamWork, 'results').toLowerCase())) fail('PATH_NOT_ALLOWED', 'result files live in .team-work/results/');
-    try { return JSON.parse(readFileSync(file, 'utf8')); } catch { fail('INVALID_ARGUMENT', 'result file is missing or not JSON'); }
+  readResultFile(file, kind = 'fix-result') {
+    return resultArtifact(join(this.session.paths.teamWork, 'results'), file, kind).value;
   }
 
   // Chỉ gửi thứ cần cho quyết định: đề trên trang + hướng dẫn Start Work (08 §8). Không gửi code. Đề để nguyên:
@@ -1499,7 +1582,7 @@ export class Runtime {
   }
 
   compactTriage(key, ji) {
-    return { ...ji.triage, ...ji.route, by: ji.triageSource, models: this.spawnModels(key, ji.route?.modelTier) };
+    return { ...ji.triage, ...ji.route, reviewer: !this.answerOnlyItem(key), by: ji.triageSource, models: this.spawnModels(key, ji.route?.modelTier) };
   }
 
   // Model cho từng lần spawn (src/decide/models.mjs), tính lại mỗi lần vì allowedModels có thể đổi khi Resume; null khi Player
@@ -1565,6 +1648,11 @@ export class Runtime {
   }
 
   // ------------------------------------------------------------------ poller nền (05 §6)
+  pollDelay(base) {
+    const at = Date.parse(this.releases()?.next?.at);
+    return Number.isFinite(at) && at > Date.now() ? Math.min(base, Math.max(250, at - Date.now() + 250)) : base;
+  }
+
   startPoller() {
     if (this.poller) return;
     const tick = async () => {
@@ -1585,10 +1673,10 @@ export class Runtime {
       if (this.gm.view && TERMINAL.has(this.gm.view.status)) return;
       const level = this.writer?.budgetLevel() ?? 0;
       const base = [15_000, 30_000, 60_000, 90_000][level];
-      this.poller = setTimeout(tick, base + Math.floor(Math.random() * 4000) - 2000);
+      this.poller = setTimeout(tick, this.pollDelay(base + Math.floor(Math.random() * 4000) - 2000));
       this.poller.unref?.();
     };
-    this.poller = setTimeout(tick, 15_000);
+    this.poller = setTimeout(tick, this.pollDelay(15_000));
     this.poller.unref?.();
   }
 

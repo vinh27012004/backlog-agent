@@ -1,12 +1,15 @@
 # Bộ tài liệu dựng Team Orchestrator Pack — MTM 2026
 
+**Workflow hiện hành 31/10/2026:** [13 · Candidate, retry, evidence và publish](13-workflow-toi-uu.md).
+Mặc định worker + reviewer cho code, worker + solver cho answer_only; verifier tất định nằm trong helper.
+
 > **Phiên bản 1.0 · 25/10/2026.** Đã đối chiếu với: MTM Player **0.9.33**, kiểm lại trên **0.9.35** ngày 27/10, **0.9.39** ngày 29/10 và **0.9.41** ngày 30/10
 > (source trong `vendor/mtm-player-0.9.41/app/`), [technical guide **0.5.1**](../btc/technical-guide-0.5.1.md), sample pack **0.5.1**
 > (`vendor/team-orchestrator-pack-0.5.1/`), tài liệu API *Digital Cuder: Start work và Submit*, slide Kick-off
 > 23/10, Game Rules, Q&A, và Codex CLI **0.163.0** trên máy dev.
 >
 > Bộ này **thay thế** kiến trúc cũ `docs/legacy/ARCHITECTURE.md` (đã xoá 30/10, còn ở commit `76d4807`; Python orchestrator
-> gọi `codex exec`). Lý do ở [01-kien-truc.md §2](01-kien-truc.md#2-vì-sao-phải-đổi-kiến-trúc).
+> gọi `codex exec`). Lý do ở [01-kien-truc.md](01-kien-truc.md).
 
 ## Tóm tắt trong 1 phút
 
@@ -93,11 +96,9 @@ Khi BTC phát hành Player bản mới, đối chiếu lại theo [02 §12](02-h
 
 ## Quan hệ với code hiện có
 
-- `orchestrator/` (Python), `monitor/`: giữ làm **tài liệu tham chiếu** và nguồn để
-  port logic (gate, nhận diện stack, log condenser). Không còn là runtime lúc thi. Chi tiết ở
-  [01 §6](01-kien-truc.md#6-giữ--port--bỏ-từ-code-cũ).
-- `agents/` (prompt tiếng Anh): port thành skill theo loại item và developer instructions cho
-  subagent ([06](06-agents-va-skills.md)).
+- `orchestrator/` (Python), `monitor/` và `agents/` cũ đã xoá sau khi port, còn trong lịch sử git.
+  Runtime hiện hành ở `pack/src/`, profiles ở `pack/agents/`, skills ở `pack/skills/`;
+  xem [kiến trúc](01-kien-truc.md), [agent/skill](06-agents-va-skills.md) và [workflow](13-workflow-toi-uu.md).
 - Jev (TypeSafe): **giữ**, port sang helper Node (D9); gọi từ helper, có luật dự phòng và cờ tắt.
 
 ## Lưu ý bảo mật tài liệu

@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { mockTransport } from '../../pack/src/decide/jev.mjs';
-import { fakeGameMaster, hasPlayer, install, makeRemote, McpClient, player, sh, tempDir } from './support.mjs';
+import { fakeGameMaster, hasPlayer, install, makeRemote, McpClient, player, sh, tempDir, validFixResult } from './support.mjs';
 
 const MATCH = 'TEST1234';
 const MATCH_UUID = '2292cde2-2422-4afb-afa6-d4a782c38a25';
@@ -197,7 +197,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
       await sub.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'sub', version: '1' } });
       const fix2 = join(tw, 'matches', MATCH, '.team-work', 'results', 'TASK-02-fixer-1.json');
       mkdirSync(dirname(fix2), { recursive: true });
-      writeFileSync(fix2, JSON.stringify({ status: 'fixed', summary: 'bye()', tests_added: [], needs_dependency: [], test_change: null }));
+      writeFileSync(fix2, JSON.stringify(validFixResult({ summary: 'bye()' })));
       // Build hỏng lúc gate chạy: TASK-02 vẫn chưa có gate pass (integrate bên dưới phải GATE_REQUIRED).
       const lib2 = join(wt2.matchRoot, 'src', 'lib.js');
       const lib2Text = readFileSync(lib2, 'utf8');
@@ -216,11 +216,12 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
       assert.equal(viaProxy.result.where, 'worktree');
       assert.equal(viaProxy.result.passed, false);
       assert.equal(viaProxy.result.failKind, 'compile', JSON.stringify(viaProxy.result.checks));
-      writeFileSync(lib2, lib2Text);
       assert.equal(viaProxy.networkActivity, undefined, 'the root reports its own HTTP activity');
       const again = await sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: fix2 });
       assert.equal(again.jobId, viaProxy.jobId, 'one gate per fix-result file');
       assert.equal(again.reused, true);
+      writeFileSync(lib2, lib2Text);
+      await assert.rejects(sub.call('run_gate', { backlogItemKey: 'TASK-02', fixResultFile: fix2 }), /CANDIDATE_STALE/);
       // Root thấy cùng job (JOB_DONE, job_status) như khi tự gọi run_gate.
       assert.equal((await client.call('job_status', { jobId: viaProxy.jobId })).state, viaProxy.state);
     } finally {
@@ -235,7 +236,8 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const broken = await settle(await client.call('run_gate', { backlogItemKey: 'TASK-01', waitSeconds: 45 }));
     assert.equal(broken.result.passed, false);
     assert.notEqual(broken.result.failKind, 'answer_invalid', JSON.stringify(broken.result.checks));
-    assert.match(broken.result.next, /new spawn_agent team_fixer \(task_name task01_fix2, .*fixer\[1\].*never send_message/);
+    assert.equal(broken.result.repair.kind, 'code');
+    assert.equal(broken.result.repair.continuation, 'consider_new_worker');
     writeFileSync(join(wt1.matchRoot, 'src', 'lib.js'), 'module.exports = { greet: () => "hello world" };\n');
 
     // Chỉ submit.json hỏng (Practice #5 TASK-02): không phải lượt fixer, không cần chạy lại gate.
@@ -269,7 +271,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // code trả false và không hỏi Jev.
     const resultFile = join(tw, 'matches', MATCH, '.team-work', 'results', 'TASK-01-fixer-1.json');
     mkdirSync(dirname(resultFile), { recursive: true });
-    writeFileSync(resultFile, JSON.stringify({ status: 'fixed', summary: 'greet returns hello world', tests_added: [], verification: [] }));
+    writeFileSync(resultFile, JSON.stringify(validFixResult({ summary: 'greet returns hello world' })));
     const callsBefore = jevCalls.length;
     const cause = await client.call('decide', { point: 'root_cause_confirmed', backlogItemKey: 'TASK-01', context: { fixResultFile: resultFile } });
     assert.equal(cause.decisions.root_cause_confirmed.value, false);

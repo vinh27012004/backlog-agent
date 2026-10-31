@@ -88,3 +88,13 @@ test('a worktree gate names the files main changed after the worktree was create
   assert.match(overlap[0].commits[0], /^[0-9a-f]{7,} BUG-02: work$/);
   assert.deepEqual(await rt.mainOverlap(null, ['M1/src/invoice-status.js']), []);
 });
+
+test('remote rebase invalidates gates and stops before pushing an unchecked revision', async () => {
+  const { rt, checkout, bare, integrate } = setup(); integrate('BUG-01', 'fix.js'); const ji = rt.journalObj.item('BUG-01');
+  ji.lastGate = { jobId: 'passing-gate', where: 'main', passed: true, tree: await contentTree(checkout, 'M1', ['M1/answers/BUG-01']) };
+  const peer = join(checkout, '..', 'peer'); sh('git', ['clone', '-q', bare, peer], checkout, env);
+  writeFileSync(join(peer, 'M1', 'src', 'remote.js'), 'invalid JavaScript !!!\n'); sh('git', ['add', '-A'], peer, env); sh('git', ['commit', '-q', '-m', 'remote'], peer, env); sh('git', ['push', '-q', 'origin', 'HEAD:main'], peer, env);
+  const remote = sh('git', ['rev-parse', 'HEAD'], peer, env);
+  await assert.rejects(rt.commitAndPush({ backlogItemKey: 'BUG-01', message: 'fix' }), /GATE_STALE.*rebase succeeded/);
+  assert.equal(ji.lastGate.tree, null); assert.equal(sh('git', ['--git-dir', bare, 'rev-parse', 'refs/heads/main'], checkout, env), remote);
+});

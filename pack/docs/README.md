@@ -1,5 +1,15 @@
 # Vận hành team-sdlc-pack
 
+Workflow 31/10: dùng prepare_item để lấy đủ brief; code item mặc định worker + reviewer, answer_only worker +
+solver độc lập. candidate_preflight kiểm result/answer/evidence trước full review. run_gate là job helper,
+không cần verifier LLM. result_handoff bind review/solver vào candidateId; publish_item quản lý verification,
+integrate/gate main/push/submit có checkpoint. next_actions trả hàng đợi và thời gian chờ.
+
+Mỗi bàn giao dùng results JSON mới, không ghi đè. Sửa answer/evidence thì followup worker cũ với todo đầy đủ.
+Yield worker_checkpoint trước sync/final evidence. capture_evidence có download trong cùng login/profile,
+giữ bytes và trả hash; context scenario/worktree/appMode/before_fix hoặc final ghi vào manifest.
+Source/environment đổi phải kiểm phần mất hiệu lực. Rebase do push rejection luôn dừng để gate lại trước push.
+
 1. Cài: `pwsh -NoProfile -File install.ps1 -TeamWorkspace D:\mtm\<TEAM_ID>`.
 2. Trust TeamWorkspace trong Codex (`%USERPROFILE%\.codex\config.toml`):
    `[projects.'d:\mtm\<team_id>']` + `trust_level = "trusted"`.

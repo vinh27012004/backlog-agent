@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
-import { captureEvidence, findBrowser } from '../../pack/src/env/browser.mjs';
+import { captureEvidence, evidencePath, findBrowser } from '../../pack/src/env/browser.mjs';
 import { install, McpClient, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
@@ -60,6 +60,33 @@ function app() {
 }
 
 const browser = findBrowser();
+
+test('download preserves authenticated HTTP/Blob bytes and reports a download timeout', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-download-'), 'BUN'), bytes = Buffer.from('\ufeffname,value\r\n"Saigon,\nLtd",2\r\n');
+  const server = createServer((req, res) => {
+    if (req.url === '/login') return res.end(`<button onclick="fetch('/authorize').then(()=>location.href='/exports')">Sign in</button>`);
+    if (req.url === '/authorize') { res.setHeader('Set-Cookie', 'auth=yes; Path=/; Max-Age=3600'); return res.end('ok'); }
+    if (!req.headers.cookie?.includes('auth=yes')) { res.writeHead(401); return res.end('Unauthorized'); }
+    if (req.url === '/file.csv') { res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="export.csv"' }); return res.end(bytes); }
+    res.end(`<a id="http" href="/file.csv">Export HTTP</a><button id="blob">Export Blob</button><button id="nothing">No file</button>
+      <button id="late" disabled>Ready</button><script>setTimeout(()=>late.disabled=false,200);
+      blob.onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([Uint8Array.from(atob('${bytes.toString('base64')}'),c=>c.charCodeAt(0))]));a.download='blob.csv';a.click();};</script>`);
+  });
+  await new Promise(ok => server.listen(0, '127.0.0.1', ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  const folder = join(tw, 'matches', 'M1', 'M1', 'answers', 'CR-01', 'evidence');
+  try {
+    const r = await captureEvidence({ teamWorkspace: tw, browserProfile: 'downloads', steps: [
+      { action: 'goto', url: `${url}/login` }, { action: 'click', text: 'Sign in' }, { action: 'waitFor', selector: '#http' },
+      { action: 'waitFor', selector: '#late', state: 'enabled' }, { action: 'download', selector: '#http', path: join(folder, 'http.csv') },
+      { action: 'download', selector: '#blob', path: join(folder, 'blob.csv') }
+    ] });
+    assert.equal(r.downloads.length, 2); for (const d of r.downloads) { assert.deepEqual(readFileSync(d.path), bytes); assert.equal(d.bytes, bytes.length); assert.match(d.sha256, /^[a-f0-9]{64}$/); }
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, browserProfile: 'downloads', steps: [
+      { action: 'goto', url: `${url}/exports` }, { action: 'download', selector: '#nothing', path: join(folder, 'none.csv'), timeoutMs: 500 }
+    ] }), e => e.code === 'DOWNLOAD_TIMEOUT' && e.details.failedStep === 2);
+    assert.throws(() => evidencePath(tw, join(tw, 'outside.csv'), { pngOnly: false }), /PATH_NOT_ALLOWED/);
+  } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});
 
 test('capture_evidence logs in, fills a form and saves a screenshot', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');

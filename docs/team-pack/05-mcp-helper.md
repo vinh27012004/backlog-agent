@@ -1,5 +1,9 @@
 # 05 · Đặc tả MCP helper `team_runtime`
 
+**Cập nhật 31/10:** [13](13-workflow-toi-uu.md) mô tả prepare_item, candidate_preflight, result_handoff,
+worker_checkpoint, next_actions, publish_item, cache và download. Luồng này thay ví dụ cũ mặc định spawn verifier
+hoặc worker mới cho mọi retry; các API cũ bên dưới giữ để tương thích.
+
 Helper là phần **code** quan trọng nhất của pack: giữ credential, nói chuyện với Game Master, ghi progress
 log, điều khiển git, chạy gate. Root gọi helper qua MCP; LLM không tự gọi HTTP, không tự viết JSON log,
 không tự `git push`.
@@ -23,7 +27,7 @@ không tự `git push`.
 - Codex khởi chạy helper khi thread nạp cấu hình MCP. Root có một tiến trình helper. **Mỗi subagent có tiến
   trình riêng** (đã thấy 27/10: `/root/bug02_fix1` gọi `read_item` nhận `NOT_CONFIGURED`). Chỉ tiến trình đã
   `configure_session` mới làm việc có trạng thái; tiến trình khác chỉ trả lời tool không trạng thái, còn tool
-  khác trả `NOT_CONFIGURED`. Đây là lựa chọn cài đặt, không phải luật BTC ([01 D4](01-kien-truc.md#5-quyết-định-thiết-kế)).
+  khác trả `NOT_CONFIGURED`. Đây là lựa chọn cài đặt, không phải luật BTC ([01 D4](01-kien-truc.md#quyết-định-thiết-kế)).
 - Helper tự suy ra **TeamWorkspace** từ vị trí file của nó (`bin/` → `runtime/` → `team-sdlc-pack/` →
   TeamWorkspace), kiểm có `TeamWorkspace/.mtm/team-runtime.json`. Đây là mốc tin cậy để kiểm mọi path
   trong descriptor ("preparation derives paths from trusted cwd").
@@ -222,7 +226,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 ### 5.7 `match_state`
 
 Không gọi mạng. Trả bảng gọn từng item: `key, type, title, status (trang), local (todo|started|working|gate|published|submitted|failed), deadlineIn, maxPoints, attempts`
-và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#4-xếp-lịch)), cùng `lanes` đang bận.
+và `suggestedOrder` theo luật xếp lịch ([07 §4](07-quy-trinh-tran.md#1-tổng-quan-thời-gian)), cùng `lanes` đang bận.
 Mỗi item chưa đóng có `returnBy` (PI thêm `checkpointBy`) tính từ lúc gọi, để lần thử mới lấy hạn mới. `releases` =
 `{minutes, next: {minute, at}}`: mốc ra đề đọc từ `README.md` của thư mục trận (HIET12OA: "Game Master releases briefs
 at minutes 0, 14 and 29"; `parseReleaseMinutes` nhận cả câu tiếng Việt "đề mở ở phút …"), `null` khi README không ghi.

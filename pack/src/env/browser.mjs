@@ -2,12 +2,16 @@
 // không cần Playwright hay dependency nào. Chỉ mở URL loopback (app do đội tự chạy); ảnh chỉ lưu vào
 // answers/<ID>/evidence/ trong thư mục trận. Click/gõ phím dùng sự kiện input thật nên React nhận.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { locate as locateMatchRoot } from './app.mjs';
 import { seededAccount } from './applogin.mjs';
 import { fail, HelperError, sleep } from '../core/util.mjs';
+import { digest, sourceSnapshot } from '../core/candidates.mjs';
+import { detectProfile } from './environment.mjs';
+import { recordEvidence } from './evidence.mjs';
 
 const MAX_TOTAL_MS = 50_000;
 
@@ -32,15 +36,24 @@ const loopback = url => {
 };
 
 // Ảnh chỉ được ghi vào <TeamWorkspace>/matches/<matchId>/.../answers/<ID>/evidence/<file>.png
-export function evidencePath(teamWorkspace, path) {
+export function evidencePath(teamWorkspace, path, { pngOnly = true } = {}) {
   if (typeof path !== 'string' || !isAbsolute(path)) fail('INVALID_ARGUMENT', 'screenshot path must be absolute');
   const abs = resolve(path);
   const rel = relative(join(teamWorkspace, 'matches'), abs);
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) fail('PATH_NOT_ALLOWED', 'screenshot must be inside TeamWorkspace/matches');
   const parts = rel.split(sep);
   const i = parts.lastIndexOf('evidence');
-  if (i < 2 || parts[i - 2] !== 'answers' || i !== parts.length - 2 || !/\.png$/i.test(abs)) {
+  if (i < 2 || parts[i - 2] !== 'answers' || i !== parts.length - 2 || (pngOnly && !/\.png$/i.test(abs))) {
     fail('PATH_NOT_ALLOWED', 'screenshot must be answers/<ID>/evidence/<name>.png');
+  }
+  let ancestor = resolve(teamWorkspace);
+  while (!existsSync(ancestor) && ancestor !== dirname(ancestor)) ancestor = dirname(ancestor);
+  const root = resolve(realpathSync(ancestor), relative(ancestor, resolve(teamWorkspace)));
+  for (let p = abs; p !== dirname(p); p = dirname(p)) {
+    if (!existsSync(p)) continue;
+    const real = resolve(realpathSync(p), relative(p, abs)), inside = relative(root, real);
+    if (inside.startsWith('..') || isAbsolute(inside)) fail('PATH_NOT_ALLOWED', 'evidence path follows a symlink outside TeamWorkspace');
+    break;
   }
   return abs;
 }
@@ -66,7 +79,8 @@ class Cdp {
   send(method, params = {}, sessionId) {
     const id = ++this.id;
     return new Promise((ok, reject) => {
-      this.pending.set(id, { resolve: ok, reject });
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new HelperError('CDP_TIMEOUT', `${method} did not answer in 15 seconds`)); }, 15_000);
+      this.pending.set(id, { resolve: value => { clearTimeout(timer); ok(value); }, reject: error => { clearTimeout(timer); reject(error); } });
       this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
@@ -191,7 +205,7 @@ function routeRule(s, i) {
 }
 
 export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
-  timeoutMs = 45_000 }) {
+  timeoutMs = 45_000, context = null }) {
   if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
   const browser = findBrowser();
   if (!browser) fail('BROWSER_NOT_FOUND', 'no Edge or Chrome installation found');
@@ -203,6 +217,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     if (['goto', 'login'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
     if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
+    if (s.action === 'download') s.path = evidencePath(teamWorkspace, s.path, { pngOnly: false });
     if (s.action === 'route') rules.set(i, routeRule(s, i));
     if (s.action === 'drag') {
       if (!s.to || typeof s.to !== 'object' || (s.to.selector === undefined && s.to.text === undefined)) {
@@ -213,6 +228,24 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     }
     checkSelector(s, i);
   }
+  let provenance = null;
+  if (context) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(context.backlogItemKey ?? '') || !context.scenario
+      || !['before_fix', 'final'].includes(context.phase) || !['dev', 'production'].includes(context.appMode)) fail('INVALID_ARGUMENT', 'evidence context needs backlogItemKey, scenario, phase before_fix|final and appMode dev|production');
+    const where = locateMatchRoot(teamWorkspace, context.matchRoot);
+    for (const s of steps.filter(s => ['screenshot', 'download'].includes(s.action))) {
+      if (dirname(s.path) !== join(where.matchRoot, 'answers', context.backlogItemKey, 'evidence')) fail('PATH_NOT_ALLOWED', 'evidence context and output item/worktree must match');
+    }
+    const snapshot = await sourceSnapshot(dirname(where.matchRoot), basenamePath(where.matchRoot), detectProfile(where.matchRoot));
+    const appState = join(teamWorkspace, 'team-sdlc-pack', 'local', 'apps', `${context.backlogItemKey}.json`);
+    if (existsSync(appState)) {
+      const running = JSON.parse(readFileSync(appState, 'utf8'));
+      if (resolve(running.matchRoot) !== resolve(where.matchRoot) || running.mode !== context.appMode) fail('EVIDENCE_APP_MISMATCH', 'running app worktree/mode differs from evidence context');
+      if (running.snapshot && JSON.stringify(running.snapshot) !== JSON.stringify(snapshot)) fail('EVIDENCE_STALE_APP', 'source/environment changed since app start; restart before evidence');
+    }
+    provenance = { ...snapshot, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
+      teamWork: dirname(where.logDir), key: context.backlogItemKey };
+  }
   const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
     ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', browserProfile)
     : join(tmpdir(), `mtm-browser-${process.pid}-${Date.now()}`);
@@ -221,6 +254,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const log = [];
   const consoleErrors = [];
   const shots = [];
+  const downloads = [];
+  const downloadDir = join(teamWorkspace, 'team-sdlc-pack', 'local', 'downloads', randomUUID());
   let ws;
   let cdp;
   try {
@@ -230,6 +265,19 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
     const send = (m, p) => cdp.send(m, p, sessionId);
+    if (steps.some(s => s.action === 'download')) {
+      mkdirSync(downloadDir, { recursive: true });
+      await cdp.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: downloadDir, eventsEnabled: true });
+    }
+    const saved = (path, kind) => {
+      const bytes = readFileSync(path), sha256 = digest(bytes);
+      const record = { path, bytes: bytes.length, sha256 };
+      if (provenance) {
+        const { teamWork, key, ...origin } = provenance;
+        recordEvidence(teamWork, key, { ...origin, ...record, name: basenamePath(path), kind, capturedAt: new Date().toISOString() });
+      }
+      return record;
+    };
     cdp.listeners.push(msg => {
       if (msg.sessionId !== sessionId) return;
       if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
@@ -450,11 +498,12 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             await evaluate(`(q) => { const el = (${FIND})(q); el.value = q.value; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }`, { ...q, value: s.value });
             break;
           case 'waitFor':
-            if (s.selector) { await locate(q, s.timeoutMs ?? 10_000); break; }
+            if (s.selector && !s.state) { await locate(q, s.timeoutMs ?? 10_000); break; }
             {
               const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
               const want = String(s.text ?? '').toLowerCase();
-              while (!(await evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false))) {
+              if (s.state && !['visible', 'hidden', 'enabled'].includes(s.state)) fail('INVALID_ARGUMENT', 'waitFor state is visible, hidden or enabled');
+              while (!(await evaluate(`(q) => { const el = (${FIND})(q); return q.state === 'hidden' ? !el : q.state === 'enabled' ? !!el && !el.disabled && el.getAttribute('aria-disabled') !== 'true' : q.selector ? !!el : !!document.body && document.body.innerText.toLowerCase().includes(q.want); }`, { ...q, want, state: s.state }).catch(() => false))) {
                 if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', `text "${s.text}"`);
                 await sleep(150);
               }
@@ -488,7 +537,40 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             writeFileSync(s.path, Buffer.from(data, 'base64'));
             const bytes = statSync(s.path).size;
             if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
-            shots.push({ path: s.path, bytes });
+            shots.push(saved(s.path, 'screenshot'));
+            break;
+          }
+          case 'download': {
+            let guid = null, complete = false, cancelled = null;
+            // Listener được đăng ký trước click: cả URL download và Blob dùng cùng profile/cookie của trang.
+            const listener = msg => {
+              if (msg.method === 'Browser.downloadWillBegin' && !guid) {
+                guid = msg.params.guid;
+                const url = msg.params.url;
+                if (!(loopback(url) || (url.startsWith('blob:') && loopback(url.slice(5))))) cancelled = 'download URL must be loopback or a loopback Blob';
+              }
+              if (msg.method === 'Browser.downloadProgress' && msg.params.guid === guid) {
+                if (msg.params.receivedBytes > 5 * 1024 * 1024) cancelled = 'download exceeds 5 MB';
+                if (msg.params.state === 'canceled') cancelled = 'browser canceled download';
+                if (msg.params.state === 'completed') complete = true;
+              }
+            };
+            cdp.listeners.push(listener);
+            try {
+              await click(q, s);
+              const until = Math.min(deadline, Date.now() + Math.min(30_000, s.timeoutMs ?? 20_000));
+              while (!complete && !cancelled && Date.now() < until) await sleep(100);
+              if (cancelled) fail('DOWNLOAD_FAILED', cancelled);
+              if (!complete || !guid) fail('DOWNLOAD_TIMEOUT', 'download did not complete; verify selector and page state');
+              const bytes = readFileSync(join(downloadDir, guid));
+              if (bytes.length > 5 * 1024 * 1024) fail('DOWNLOAD_TOO_LARGE', 'download exceeds 5 MB');
+              mkdirSync(dirname(s.path), { recursive: true });
+              writeFileSync(s.path, bytes);
+              downloads.push(saved(s.path, 'download'));
+            } finally {
+              cdp.listeners = cdp.listeners.filter(l => l !== listener);
+              if (guid && !complete) await cdp.send('Browser.cancelDownload', { guid }).catch(() => null);
+            }
             break;
           }
           default:
@@ -507,7 +589,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const finalUrl = await evaluate('location.href').catch(() => null);
     const title = await evaluate('document.title').catch(() => null);
     const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
-    return { screenshots: shots, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
+    return { screenshots: shots, downloads, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
       ...(rules.size ? { routed: routed.slice(0, 30),
         note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
   } finally {
@@ -517,8 +599,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     try { ws?.close(); } catch { /* bỏ qua */ }
     kill(child);
     if (!browserProfile) await removeLater(profileDir);
+    if (existsSync(downloadDir)) await removeLater(downloadDir);
   }
 }
+
+const basenamePath = path => path.split(/[\\/]/).pop();
 
 async function closeGracefully(cdp, child) {
   if (child.exitCode !== null) return;

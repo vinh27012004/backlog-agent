@@ -271,7 +271,7 @@ id    = hex 8-4-4-4-12 (chữ thường)
   Master, dùng giờ đã hiệu chỉnh cho mọi phép tính deadline. Ưu tiên số liệu trang hiện nếu có.
 - Deadline tính từ lúc đề hiện, bằng phút, không tính thời gian `PAUSED`.
 - Không nộp khi item đã `CLOSED`. Không Start Work một item mà thời gian còn lại ít hơn ngưỡng tối thiểu
-  của loại đó ([07 §4](07-quy-trinh-tran.md#4-xếp-lịch)).
+  của loại đó ([07 §4](07-quy-trinh-tran.md#1-tổng-quan-thời-gian)).
 
 ## 8. Được và không được gọi
 

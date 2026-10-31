@@ -1,27 +1,21 @@
 ---
 name: team-recovery
-description: MTM RESUME turn after a restart. Restore state from the progress log, journal, git and the server, then continue preparation or the game without duplicating work or submissions.
+description: Resume MTM preparation/game from durable journal, git and server state without duplicating work or submissions.
 ---
 
-# Team recovery (RESUME_PREPARATION_V1 / RESUME_GAME_V1)
+# Recovery
+Configure the RESUME frame verbatim, report ORCHESTRATOR_RESTARTED (helper supplies attempt).
+Do not reclone, erase journal, discard work or assume old native threads/jobs survive.
+PREPARE follows game-preparation while skipping completed stages.
 
-1. `configure_session` with the RESUME frame copied verbatim. Its result shows what the log and
-   journal already contain (stages, backlog statuses, open blockers, published revisions, receipts).
-2. `report_progress` with `{"type":"ORCHESTRATOR_RESTARTED","phase":"PREPARATION"|"GAME","reason":"<frame.reason>","summary":"Orchestrator restarted; reconciling state."}`.
-   The helper fills `attempt`.
-3. Never clear, reclone or reset the existing checkout. Never discard uncommitted work blindly:
-   look at `git status` first.
+GAME: login_match, refresh_match, next_actions.
+- Pending submitIntent without receipt: replay submit_work with the original revision before changing candidate.
+- Published candidate: publish_item resumes its checkpoint. Receipt already present means no second POST.
+- Missing RAM jobs: recreate the gate; stable candidate/proofs/reviews remain in journal and are checked again.
+- Pending integration plan: resume publish to reconcile the frozen cherry-pick before allowing worker writes.
+- Incomplete worker/repair: spawn a new native worker with saved worktree/materials and the COMPLETE todo,
+  continue version numbering, register its thread using worker_checkpoint resume.
+- Stale/yielded worktree: sync only without a writer or pending submission, refresh affected evidence, and preflight
+  a new numbered result. Never overwrite a prior handoff to make an old gate look current.
 
-## RESUME_PREPARATION
-Follow `.agents/skills/game-preparation/SKILL.md` but skip stages already COMPLETED. `prepare_checkout`
-verifies the existing checkout instead of cloning. `report_ready` will not write a second, different
-`ENVIRONMENT_READY`.
-
-## RESUME_GAME
-1. `login_match`, then `refresh_match`.
-2. For every item the journal shows with a `submitIntent` but no receipt: call `submit_work` with the
-   same revision; the helper resends the identical body and gets the stored receipt.
-3. Items `published` but not submitted: `submit_work`. Items `started`: their worktrees survive the
-   restart (`worktree status`); subagents do not. Run `run_gate` on the worktree to see where the item
-   stands, then brief a new `team_fixer` with that result as `<previous_attempt>`.
-4. Continue with `.agents/skills/team-orchestrator/SKILL.md` from "Priorities and time".
+Continue .agents/skills/team-orchestrator/SKILL.md. Only root performs native agent operations.

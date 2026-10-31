@@ -1,10 +1,14 @@
 # Evidence playbook (screenshots, running app, scenario data)
 
-Read this before the first MVS scenario that needs a screenshot, a running app or data. Evidence is where items lost
-the most time and points in practice (CV8WV1JM: BUG-02 fixed in 2 minutes, then 9 minutes of evidence and the item
-closed unsubmitted; BC3JL6ZC: BUG-02 scored 30/150 because 6 `capture_evidence` calls never finished). The budget in
-your rules holds: one call per scenario, at most 2 retries, at most a third of your time, then `NOT_RUN` with the
-reason.
+Read before screenshot, download or data scenarios. Use one call per scenario, at most two repaired retries and
+about a third of the time box; report unfinished checks NOT_RUN. Before final evidence, yield with
+worker_checkpoint ready_for_evidence, stop writes and message root once. After sync/root says resume, call
+worker_checkpoint resume and restart the app.
+
+Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
+phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
+outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale after source/env changes;
+reviewer still inspects their content. A manifest proves provenance, not correct UI.
 
 ## 0. Evidence the item text asks for
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
@@ -75,9 +79,8 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 - On a UI-layout bug, the cover is the bug: that failure is your "before" evidence.
 - Otherwise retry that click with `force: true` (Practice #5: BUG-01's sidebar covered the Accounting tabs in every
   other item's worktree). Say in the scenario note that a shared layout bug was clicked through.
-- Never copy another item's files into your worktree to get rid of it, and never pause to wait for a sync: the
-  orchestrator syncs between attempts. "Waiting for the other item's fix" is never a reason to mark a scenario
-  `NOT_RUN` or to reply `partial` (Practice TOKXKPBV: CR-01 did, and its evidence-only second attempt cost 6 minutes).
+- Never copy another item's files. Root syncs at a yielded checkpoint; keep unrelated code work moving,
+  then resume evidence within the time box after that checkpoint is resolved.
 
 ## 5. A failing server (500, timeout, offline, slow)
 Add a `route` step before the action that sends the request, e.g. `{action: "route", url: "/api/invoices/export",
@@ -96,6 +99,10 @@ seed deletes every invoice; a misclick voided BUG-02's invoice and the later sce
 4. `app_data {action: "unlock"}` once the evidence or report that reads the data is written.
 Never create records the MVS did not ask for.
 
-## 7. What `capture_evidence` cannot do
-A file download or an API-only check: write a small script under `<checkoutRoot>/.team-work/scratch/<ID>/` (never in
-the match folder), save its output as the evidence file, and fix it at most twice.
+## 7. Download and observable waits
+Use {action: "download", selector: "button", text: "Export CSV", path: "<absolute evidence/file.csv>"} in the
+same flow/profile as login/navigation. Helper registers listeners before click and saves completed HTTP/Blob
+download bytes unchanged, including BOM/CRLF. downloads gives path, bytes and sha256. Never recreate CSV from source.
+waitFor supports selector with state visible, hidden or enabled. Prefer a real observable state over sleep.
+Only unsupported operations such as API-only checks need a scratch script in .team-work/scratch/<ID>/;
+do not put it in product source, and fix it at most twice.

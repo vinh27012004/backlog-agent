@@ -189,7 +189,8 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null,
   // Tham chiếu nằm trong câu văn: bỏ dấu câu dính cuối ("…/mvs-tests.log." FMC0ZXFC: answer_invalid sai 3 lần).
   for (const raw of JSON.stringify(answer).match(/evidence\/[^"\\\s]+/g) ?? []) {
     const ref = raw.replace(/[.,;:)\]}'`]+$/, '');
-    if (!existsSync(join(matchRoot, 'answers', key, ref))) problems.push(`missing ${ref}`);
+    const evidenceFile = join(matchRoot, 'answers', key, ref);
+    if (!existsSync(evidenceFile)) problems.push(`missing ${ref}`);
   }
   if (/DRAFT/.test(JSON.stringify(answer.status ?? ''))) problems.push('submit.json status is still DRAFT');
   const missingEvidence = [];
@@ -486,7 +487,7 @@ const fallbackSignature = (kind, text, root) => {
 // sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
 // root còn publish được theo luật cơ hội cuối.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits }) {
+  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits, cachedCode = null }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -555,6 +556,13 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   const scan = await codeScan(checkoutRoot, base, files, folder);
   checks.push({ name: 'code-scan', status: scan.length ? 'warn' : 'ok', ...(scan.length ? { warnings: scan } : {}) });
 
+  if (cachedCode) {
+    // Caller đã so source, test targets, policy và môi trường trước khi cấp proof.
+    checks.push(...cachedCode.checks.filter(c => ['typecheck', 'build', 'tests-added', 'regression', 'tests-kept', 'fail-before', 'reproduction'].includes(c.name)));
+    Object.assign(result, { codePassed: true, regression: cachedCode.regression, testsAdded: cachedCode.testsAdded,
+      baselineFailures: cachedCode.baselineFailures, fixesBaseline: cachedCode.fixesBaseline, reusedCode: true });
+    result.tree = await contentTree(checkoutRoot, folder, [`${folder}/answers/${key}`]);
+  } else {
   const c = profile.commands;
   const cwd = profile.root;
   const logSignature = (kind, res, name) => (res.timedOut ? `timeout:${name}`
@@ -698,6 +706,7 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     if (problem) return done('not_reproduced', problem[1], `not_reproduced:${problem[0]}`);
   }
 
+  }
   const { problems, warnings, missingEvidence } = answerCheck(matchRoot, key, template, schema, mvs, requiredEvidence);
   // Bảng yêu cầu chỉ có khi gate chạy từ fix-result (verifier); gate main của root thì bỏ qua.
   let status = null;

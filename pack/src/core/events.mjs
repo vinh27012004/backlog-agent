@@ -18,9 +18,9 @@ export class EventQueue {
   since(cursor) { return this.events.filter(e => e.seq > cursor); }
 
   async wait(cursor, timeoutMs, signal) {
-    if (this.since(cursor).length) return this.since(cursor);
+    if (this.since(cursor).length || signal?.aborted) return this.since(cursor);
     await new Promise(resolve => {
-      const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(); };
+      const done = () => { clearTimeout(timer); this.waiters.delete(done); signal?.removeEventListener('abort', done); resolve(); };
       const timer = setTimeout(done, timeoutMs);
       this.waiters.add(done);
       signal?.addEventListener('abort', done, { once: true });

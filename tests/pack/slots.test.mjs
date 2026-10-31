@@ -68,7 +68,6 @@ test('the newest fix-result with no gate after it is reported once as FIX_RESULT
   const notice = rt.itemNotice();
   assert.deepEqual(notice.ungated, [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
   assert.equal(notice.newItems, undefined, 'no item waiting to start');
-  assert.match(notice.hint, /spawn the verifier .*CR-01-fixer-2\.json/);
   const tool = { name: 'submit_work', handler: () => ({ status: 'SUBMITTED' }) };
   assert.deepEqual((await callTool(rt, tool, {}, {})).structuredContent.notice.ungated.map(r => r.key), ['CR-01']);
   rt.warnUngated();

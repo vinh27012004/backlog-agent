@@ -2,13 +2,14 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { redact } from './redact.mjs';
 
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i;
 
 export function childEnv(extra = {}) {
   const env = {};
-  for (const [k, v] of Object.entries(process.env)) if (!SECRET_ENV.test(k)) env[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (!SECRET_ENV.test(k) || /^GIT_CONFIG_KEY_\d+$/.test(k)) env[k] = v;
   return { ...env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', PRISMA_HIDE_UPDATE_MESSAGE: '1',
     CHECKPOINT_DISABLE: '1', NEXT_TELEMETRY_DISABLED: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
 }
@@ -63,12 +64,13 @@ export class Jobs {
   constructor(onDone) {
     this.jobs = new Map();
     this.seq = 0;
+    this.runId = randomUUID().slice(0, 8);
     this.onDone = onDone;
   }
 
   // meta.key: item của job (gate, chuẩn bị worktree), để onDone ghi thời gian chạy vào đúng item.
   start(kind, fn, meta = {}) {
-    const id = `job-${++this.seq}-${kind}`;
+    const id = `job-${++this.seq}-${kind}-${this.runId}`;
     const job = { id, kind, ...meta, state: 'running', startedAt: Date.now(), result: null, error: null, progress: [] };
     this.jobs.set(id, job);
     job.promise = (async () => {

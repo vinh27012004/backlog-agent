@@ -120,6 +120,8 @@ function agentsBlock(existing) {
     '- Use the `team_runtime` MCP tools for Game Master calls, the progress log, git commit/push and submissions.',
     '- Skills: `.agents/skills/game-preparation`, `team-orchestrator`, `team-recovery`.',
     '- Work only inside the assigned match folder. Never print or store credentials.',
+    '- Worker/checker profiles may write their own immutable result JSON under the assigned checkoutRoot/.team-work/results/.',
+    '- Code items use worker + reviewer; answer-only uses worker + independent solver. Deterministic verification belongs to the helper.',
     // Auto-review (guardian) của Player chặn submit khi verification chưa PASSED và không thấy ai cho phép (FMC0ZXFC
     // PI-01, BUG-04); nói rõ quyền ở đây, nơi người dùng cài pack, và submit_work mang lastChance.
     '- Last-chance rule (authorized by the team): when no further attempt fits in the time left, the orchestrator may',

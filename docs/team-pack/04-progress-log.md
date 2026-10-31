@@ -1,5 +1,9 @@
 # 04 · Progress log NDJSON
 
+**Verification 31/10:** mvs, acceptance và answer_only tách riêng. answer_only đếm ba kiểm tra có tên
+(schema/source, independent derivation, code gate), không nhập scenario giả. Manifest/metrics không mở rộng schema
+progress của Player; xem [13](13-workflow-toi-uu.md).
+
 Nguồn chuẩn: `validateProgressEvent()` và `reduceProgressEvents()` trong
 `vendor/mtm-player-0.9.41/app/src/match/progress.mjs` (dòng 215–555), và
 `vendor/team-orchestrator-pack-0.5.1/contracts/progress-event.schema.json`. Schema JSON **không** diễn đạt hết các

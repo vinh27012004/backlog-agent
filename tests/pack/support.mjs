@@ -8,6 +8,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+export const validFixResult = (overrides = {}) => ({ status: 'fixed', summary: 'fixture', criteria: [], suspects: [], root_cause: null,
+  hypotheses: [], changed_files: [], tests_added: [], verification: [], needs_dependency: [], test_change: null, risks: [], confidence: 0.8, requirements: [], ...overrides });
 export const REPO = resolve(here, '..', '..');
 export const PACK = join(REPO, 'pack');
 export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.41', 'app', 'src');

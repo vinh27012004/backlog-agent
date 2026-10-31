@@ -3,6 +3,11 @@
 `<previous_attempt>` tells you why the last attempt failed. The worktree still holds the previous
 attempt's change (`git diff HEAD`): keep what is right and change what the failure points at.
 
+Answer/evidence repair normally continues this worker through followup_task: keepImplementation, the COMPLETE
+todo list, a short return_by and the next numbered results path. Resume writes with worker_checkpoint resume;
+do not re-investigate accepted code. Failed implementation, a new hypothesis or model escalation can use a new
+worker. Each handoff is a new immutable result version, even in one thread; never overwrite a gated result.
+
 | fail_kind | Meaning | What to do differently |
 |---|---|---|
 | `compile` | build/compile/type check failed | Read the compiler error lines first. Usually a wrong import, signature or type. Fix only that and re-run the build before anything else. |

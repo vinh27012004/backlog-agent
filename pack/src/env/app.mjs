@@ -6,7 +6,8 @@
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { sourceSnapshot } from '../core/candidates.mjs';
 import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
 import { childEnv, killTree } from '../core/jobs.mjs';
@@ -191,6 +192,7 @@ async function launch(teamWorkspace, key, where, mode, build, retries) {
   const cmd = appCommand(where.matchRoot, port, mode);
   if (cmd.error) fail('UNSUPPORTED_APP', cmd.error);
   const steps = [build && cmd.build, cmd.start].filter(Boolean);
+  const snapshot = existsSync(join(dirname(where.matchRoot), '.git')) ? await sourceSnapshot(dirname(where.matchRoot), basename(where.matchRoot), cmd.profile) : null;
   // Build rồi start trong một tiến trình tách rời, sống tiếp khi helper của subagent kết thúc. Vỏ là node: trên Windows
   // pwsh chạy detached (không console) không ghi gì ra file log, còn pwsh con của một node detached thì ghi được.
   const shell = process.platform === 'win32'
@@ -212,5 +214,6 @@ async function launch(teamWorkspace, key, where, mode, build, retries) {
   child.unref();
   writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: cmd.mode, requestedMode: mode,
     built: steps.length > 1, retries, matchRoot: where.matchRoot, log, logFrom, startedAt: new Date().toISOString(),
+    ...(snapshot ? { snapshot } : {}),
     ...(Object.keys(authEnv).length ? { authEnv } : {}) }));
 }
