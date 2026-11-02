@@ -312,7 +312,10 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // Journal có thời gian từng job và mốc kết thúc item, để đo sau trận (tools/judge/usage.mjs).
     const journal = JSON.parse(readFileSync(join(tw, 'matches', MATCH, '.team-work', 'journal.json'), 'utf8'));
     const done = journal.items['TASK-01'];
-    assert.deepEqual([...new Set(done.jobs.map(x => x.kind))].sort(), ['run_gate', 'worktree_setup']);
+    // drop_databases: push xong thì dọn database riêng của worktree (fixture không có Prisma nên job không xoá gì).
+    assert.deepEqual([...new Set(done.jobs.map(x => x.kind))].sort(), ['drop_databases', 'run_gate', 'worktree_setup']);
+    assert.ok(pushed.databaseCleanupJobId);
+    assert.equal(done.databasesDropped, undefined);
     assert.ok(done.jobs.every(x => Number.isInteger(x.ms) && x.ms >= 0 && x.state === 'done'));
     assert.equal(done.outcome, 'SUBMITTED');
     assert.ok(Date.parse(done.endedAt) >= Date.parse(done.startedAt));

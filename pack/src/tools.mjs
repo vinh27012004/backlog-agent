@@ -8,7 +8,7 @@ import { CompanyTools } from './match/company.mjs';
 import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
-import { detectProfile, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
+import { dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
 import { modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
 import { EventQueue } from './core/events.mjs';
@@ -229,10 +229,10 @@ export class Runtime {
         handler: a => app({ teamWorkspace: this.teamWorkspace, ...a }) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
       // lặp lại khi chờ khoá, qua auto_review mỗi lần thì tốn token vô ích.
-      { name: 'app_data', description: 'Any agent: lock for the app database that every worktree shares. lock before running a seed script or creating data through the app for MVS evidence; unlock once the evidence/report that reads that data is written. While another item holds it, lock returns locked:false: call again (waitSeconds up to 50) and do not seed or create data meanwhile. Expires after `minutes` (default 15, max 30); lock again to renew.',
+      { name: 'app_data', description: 'Any agent: lock for a shared app database. lock before running a seed script or creating data through the app for MVS evidence; unlock once the evidence/report that reads that data is written. A worktree with its own database returns locked:true, dedicated:true at once. Otherwise, while another item holds it, lock returns locked:false: call again (waitSeconds up to 50) and do not seed or create data meanwhile. Expires after `minutes` (default 15, max 30); lock again to renew.',
         inputSchema: obj({ action: { type: 'string', enum: ['lock', 'unlock', 'status'] }, backlogItemKey: str('Item key (lock/unlock).'),
           minutes: num('lock: how long to hold it (1-30).'), waitSeconds: num('lock: seconds to wait for a free lock (max 50).') }, ['action']),
-        readOnly: true, handler: a => appDataLock({ teamWorkspace: this.teamWorkspace, ...a }) },
+        readOnly: true, handler: a => appDataLock({ teamWorkspace: this.teamWorkspace, ...a, database: this.itemDatabase(a.backlogItemKey) }) },
       { name: 'decide', description: 'GAME: typed decision by Jev (TypeSafe) with code-rule fallback. triage and route already run inside start_work (see its "triage" field): do not call them again. root_cause_confirmed {fixResultFile} before publishing a PI (the code conditions are required, Jev can only veto). next_action (submit/retry/drop, only valid options) only when genuinely unsure. Advisory: hard rules stay in code.',
         inputSchema: obj({ point: { type: 'string', enum: ['triage', 'route', 'next_action', 'root_cause_confirmed'] },
           backlogItemKey: str('Item key.'),
@@ -829,6 +829,29 @@ export class Runtime {
     return { worktreeRoot: root, matchRoot: join(root, this.session.descriptor.matchId), branch: `team/${key}` };
   }
 
+  // Tên database dev riêng của app trong worktree item (null: chưa có worktree, hoặc dùng chung với checkout chính).
+  itemDatabase(key) {
+    if (!isKey(key) || !this.session?.paths?.matchRoot || !this.session.descriptor?.matchId) return null;
+    return dedicatedAppDatabase(this.wtPaths(key).matchRoot, this.session.paths.matchRoot);
+  }
+
+  // Push xong thì database riêng của worktree item (dev và test) không ai dùng nữa: dừng app của item rồi xoá trong job
+  // nền, không chặn submit. Một lần mỗi item; lỗi chỉ nằm trong kết quả job và log. Worktree dùng lại sau đó thì job
+  // setup migrate tạo lại database và seed.
+  dropItemDatabases(key) {
+    const ji = this.journal.item(key);
+    if (ji.databasesDropped || !this.liveWorktree(key)) return null;
+    stopApp(this.teamWorkspace, key);
+    const { teamWork, matchRoot } = this.session.paths;
+    const job = this.jobs.start('drop_databases', async () => {
+      const res = await dropWorktreeDatabases({ wtMatchRoot: this.wtPaths(key).matchRoot, mainMatchRoot: matchRoot,
+        logFile: join(teamWork, 'logs', `${key}-drop-databases.log`) });
+      if (res.dropped.length) { ji.databasesDropped = res.dropped; this.journal.save(); }
+      return res;
+    }, { key });
+    return job.id;
+  }
+
   // Worktree còn đăng ký với git (có file .git). Sau `remove` trên Windows thư mục có thể còn lại vì file bị khoá
   // (codegraph.db do server codegraph giữ, log của app): thư mục đó không còn là worktree.
   liveWorktree(key) {
@@ -1400,6 +1423,7 @@ export class Runtime {
     if (!remote.out.startsWith(revision)) fail('REVISION_NOT_ON_REMOTE', 'remote branch does not point at HEAD');
     ji.publishedRevision = revision;
     j.save();
+    const databaseCleanup = this.dropItemDatabases(key);
     const log = this.progress.state.backlogs[key]?.status;
     if (log && log !== 'SUBMITTED') this.backlogStatus(key, 'COMPLETED', `Pushed ${revision.slice(0, 12)}; ready to submit.`);
     // Worktree của item khác tạo trước bản này: ảnh/test của chúng chưa có thay đổi vừa lên main (FMC0ZXFC: ảnh CR-01,
@@ -1407,6 +1431,7 @@ export class Runtime {
     const staleWorktrees = Object.entries(j.data.items ?? {}).filter(([k, it]) => k !== key && !it.receipt && !it.endedAt
       && it.worktreeBase && it.worktreeBase !== revision && this.liveWorktree(k)).map(([k]) => k);
     return { revision, branch, ...(alreadyOnRemote ? { alreadyOnRemote: true } : {}), ...(warnings.length ? { answerWarnings: warnings } : {}),
+      ...(databaseCleanup ? { databaseCleanupJobId: databaseCleanup } : {}),
       ...(staleWorktrees.length ? { staleWorktrees, hint: `Main moved: worktree sync ${staleWorktrees.join(', ')} before each one's next fixer, `
         + 'verifier or evidence step (never under a running fixer).' } : {}) };
   }

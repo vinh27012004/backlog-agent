@@ -2,7 +2,7 @@
 // Repo của BTC có thể kèm env-require/ (README, doctor.ps1...): khi có thì doctor.ps1 là thước đo READY.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { runPwsh } from '../core/jobs.mjs';
+import { run, runPwsh } from '../core/jobs.mjs';
 import { baselineOf, runTests } from '../gate/testreport.mjs';
 import { randomSecret } from '../core/util.mjs';
 
@@ -96,10 +96,28 @@ const PLACEHOLDER = /CHANGE_ME|changeme|<[^>]+>/;
 // Thêm hậu tố vào tên DB của TEST_DATABASE_URL (không thêm lần hai). Test DB phải mới theo trận: DB cùng tên còn lại
 // từ trận trước giữ schema cũ mà `migrate deploy` báo "No pending migrations" (Practice #5 BC3JL6ZC: test DB của
 // BUG-01/TASK-01 còn FK CASCADE, gate báo regression sai hai lần).
-export const scopedTestDb = (text, suffix) => text.replace(/^(\s*TEST_DATABASE_URL\s*=\s*["']?[^"'\s?]*?\/)([A-Za-z0-9_]+)(?=["'?\s]|$)/m,
+const dbUrlLine = name => new RegExp(`^(\\s*${name}\\s*=\\s*["']?[^"'\\s?]*?\\/)([A-Za-z0-9_]+)(?=["'?\\s]|$)`, 'm');
+
+export const scopedDb = (text, name, suffix) => text.replace(dbUrlLine(name),
   (m, pre, db) => `${pre}${db.endsWith(suffix) ? db : db + suffix}`);
 
+export const scopedTestDb = (text, suffix) => scopedDb(text, 'TEST_DATABASE_URL', suffix);
+
+// Tên database trong dòng `<name>=...` của .env, null khi không có hoặc không phải URL có tên DB.
+export const dbNameOf = (text, name = 'DATABASE_URL') => text.match(dbUrlLine(name))?.[2] ?? null;
+
 export const dbSuffix = name => `_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+
+// .env của worktree chép từ checkout chính: TEST_DATABASE_URL luôn có hậu tố trận + item; DATABASE_URL cũng vậy khi
+// `appDatabase` (stack tự migrate được, xem prepareWorktreeEnv). Không còn chung database dev: seed của BTC xoá rồi tạo
+// lại dữ liệu (CR-01 "deletes every invoice"), nên trước đây mọi item phải xếp hàng sau khoá app_data (Practice
+// NBDB5U0O: chờ khoá tổng ~11 phút, BUG-01 riêng 5 phút).
+export function worktreeEnvText(mainText, { matchName, key, appDatabase }) {
+  const match = dbSuffix(matchName), item = dbSuffix(key);
+  const scope = (text, name) => dbNameOf(text, name)?.endsWith(match + item) ? text : scopedDb(scopedDb(text, name, match), name, item);
+  const text = scope(mainText, 'TEST_DATABASE_URL');
+  return appDatabase ? scope(text, 'DATABASE_URL') : text;
+}
 
 export function fillEnvFile(appRoot, machine, { testDbSuffix = null } = {}) {
   const example = join(appRoot, '.env.example');
@@ -138,29 +156,75 @@ const step = async (job, name, command, opts) => {
 
 const lastLines = (text, n = 8) => String(text).trim().split(/\r?\n/).slice(-n).join('\n');
 
-// Môi trường cho worktree của một item: .env chép từ checkout chính (gitignored nên worktree không có),
-// TEST_DATABASE_URL riêng theo trận và item (test làm rỗng test DB trước mỗi case), rồi cài dependency + generate.
-export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir }) {
+// Môi trường cho worktree của một item: .env chép từ checkout chính (gitignored nên worktree không có) với test DB
+// và (khi stack có lệnh migrate) database dev riêng theo trận và item, rồi cài dependency + generate, rồi migrate +
+// seed database riêng đó (`prisma migrate deploy` tự tạo database chưa có). Probe chỉ chạy test: `appDatabase: false`.
+export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir, appDatabase = true }) {
   const profile = detectProfile(wtMatchRoot);
   const main = detectProfile(mainMatchRoot);
   const out = { profile: { stack: profile.stack, root: profile.relRoot }, steps: [] };
   if (!profile.root) return { ...out, ok: false, failure: 'no application manifest in worktree' };
-  const mainEnv = main.root ? join(main.root, '.env') : null;
-  if (mainEnv && existsSync(mainEnv) && !existsSync(join(profile.root, '.env'))) {
-    // Thư mục trận mang tên matchId; .env chính tạo trước bản sửa này chưa có hậu tố trận thì thêm ở đây.
-    const suffix = dbSuffix(key);
-    const text = scopedTestDb(scopedTestDb(readFileSync(mainEnv, 'utf8'), dbSuffix(basename(mainMatchRoot))), suffix);
-    writeFileSync(join(profile.root, '.env'), text, 'utf8');
-    out.steps.push({ name: 'env-file', copied: true, testDatabaseSuffix: suffix });
-  }
   const c = profile.commands;
-  for (const name of ['install', 'generate']) {
-    if (!c[name]) continue;
+  const mainEnv = main.root ? join(main.root, '.env') : null;
+  const wtEnv = join(profile.root, '.env');
+  let fresh = false;
+  if (mainEnv && existsSync(mainEnv) && !existsSync(wtEnv)) {
+    // Thư mục trận mang tên matchId; .env chính tạo trước bản sửa này chưa có hậu tố trận thì thêm ở đây.
+    const text = worktreeEnvText(readFileSync(mainEnv, 'utf8'), { matchName: basename(mainMatchRoot), key,
+      appDatabase: appDatabase && Boolean(c.migrate) });
+    writeFileSync(wtEnv, text, 'utf8');
+    fresh = true;
+    out.steps.push({ name: 'env-file', copied: true, testDatabaseSuffix: dbSuffix(key) });
+  }
+  const own = dedicatedAppDatabase(wtMatchRoot, mainMatchRoot);
+  out.database = own ? { name: own, dedicated: true } : { dedicated: false };
+  const names = ['install', 'generate', ...(own ? ['migrate', 'seed'] : [])];
+  for (const name of names) {
+    // Seed khi .env vừa tạo hoặc migrate vừa tạo database (đã bị dropWorktreeDatabases xoá sau push rồi dùng lại).
+    if (!c[name] || name === 'seed' && !fresh && !out.steps.some(s => s.name === 'migrate' && s.created)) continue;
     const res = await step(job, name, c[name], { cwd: profile.root, timeoutMs: 300_000, logFile: join(logDir, `${key}-worktree-${name}.log`) });
-    out.steps.push({ name, code: res.code, seconds: Math.round(res.ms / 1000) });
-    if (res.code !== 0) return { ...out, ok: false, failure: lastLines(res.tail) };
+    out.steps.push({ name, code: res.code, seconds: Math.round(res.ms / 1000), ...(res.code && name === 'seed' ? { tail: lastLines(res.tail, 4) } : {}),
+      ...(name === 'migrate' && /database\b.*\bcreated\b/i.test(res.tail) ? { created: true } : {}) });
+    // Seed lỗi không chặn worktree (như setupEnvironment): MVS thường có seed riêng của BTC.
+    if (res.code !== 0 && name !== 'seed') return { ...out, ok: false, failure: lastLines(res.tail) };
   }
   return { ...out, ok: true };
+}
+
+// URL của dòng `<name>=...` trong .env (null khi không có).
+const dbUrlOf = (text, name) => text.match(new RegExp(`^\\s*${name}\\s*=\\s*["']?([^"'\\s]+)`, 'm'))?.[1] ?? null;
+
+// Xoá database dev riêng và test DB của worktree item sau khi item đã push (evidence đã chụp, gate đã chạy, không ai
+// dùng nữa). Chỉ xoá tên khác database của checkout chính, chỉ PostgreSQL. Chạy Prisma CLI đã cài ở checkout chính
+// trên database quản trị `postgres`; WITH (FORCE) ngắt kết nối còn sót (app, Prisma Studio).
+export async function dropWorktreeDatabases({ wtMatchRoot, mainMatchRoot, logFile = null }) {
+  const own = findAppRoot(wtMatchRoot), main = findAppRoot(mainMatchRoot);
+  const cli = main ? join(main, 'node_modules', 'prisma', 'build', 'index.js') : null;
+  if (!own || !cli || !existsSync(cli) || !existsSync(join(own, '.env')) || !existsSync(join(main, '.env'))) {
+    return { dropped: [], skipped: 'no worktree .env or Prisma CLI' };
+  }
+  const wtText = readFileSync(join(own, '.env'), 'utf8'), mainText = readFileSync(join(main, '.env'), 'utf8');
+  const dropped = [], failed = [];
+  for (const name of ['DATABASE_URL', 'TEST_DATABASE_URL']) {
+    const db = dbNameOf(wtText, name);
+    if (!db || db === dbNameOf(mainText, name)) continue;
+    let admin;
+    try { admin = new URL(dbUrlOf(wtText, name)); } catch { continue; }
+    if (!/^postgres(ql)?:$/.test(admin.protocol)) continue;
+    admin.pathname = '/postgres';
+    const res = await run(process.execPath, [cli, 'db', 'execute', '--url', admin.toString(), '--stdin'],
+      { cwd: main, input: `DROP DATABASE IF EXISTS "${db}" WITH (FORCE);`, timeoutMs: 60_000, logFile });
+    (res.code === 0 ? dropped : failed).push(res.code === 0 ? db : { db, tail: lastLines(res.tail, 3) });
+  }
+  return { dropped, ...(failed.length ? { failed } : {}) };
+}
+
+// Database dev của app trong worktree item có riêng không (khác database của checkout chính).
+export function dedicatedAppDatabase(wtMatchRoot, mainMatchRoot) {
+  const own = findAppRoot(wtMatchRoot), main = findAppRoot(mainMatchRoot);
+  if (!own || !main || !existsSync(join(own, '.env')) || !existsSync(join(main, '.env'))) return null;
+  const name = dbNameOf(readFileSync(join(own, '.env'), 'utf8'));
+  return name && name !== dbNameOf(readFileSync(join(main, '.env'), 'utf8')) ? name : null;
 }
 
 // Job setup_environment. `report(stage, status, summary)` ghi PREPARATION_STATUS.

@@ -305,7 +305,15 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   còn khi có file `.git`; `commit_and_push` cho sửa `answers/<ID>/` trên main dù worktree còn (Practice #6, L41).
 - Branch `team/<ID>` **chỉ** tồn tại cục bộ, không bao giờ push.
 - `.env` của worktree: `TEST_DATABASE_URL` có hậu tố `_<matchid>_<item>` (checkout chính `_<matchid>`), để test DB
-  luôn mới theo trận (Practice #5, L34).
+  luôn mới theo trận (Practice #5, L34). Stack có lệnh `migrate` (Prisma) thì `DATABASE_URL` cũng có hậu tố
+  `_<matchid>_<item>`: job setup chạy `migrate` (tạo database nếu chưa có) và, khi `.env` vừa tạo, `seed`; database dev
+  của checkout chính giữ nguyên. Output job có `database {name, dedicated}`. Sync chạy lại job thì chỉ migrate, không
+  seed lại. Probe của gate chỉ chạy test nên dùng database chung (Practice NBDB5U0O: chờ khoá `app_data` ~11 phút).
+- Push xong (`commit_and_push`, cả bước push của `publish_item`): helper dừng app của item và chạy job nền
+  `drop_databases` xoá database dev riêng và test DB của worktree (`DROP DATABASE IF EXISTS ... WITH (FORCE)` qua Prisma
+  CLI của checkout chính, trên database quản trị `postgres`); không chặn submit, một lần mỗi item (`databasesDropped`
+  trong journal), log ở `logs/<ID>-drop-databases.log`. Chỉ xoá tên khác database của checkout chính. Output push có
+  `databaseCleanupJobId`. Worktree dùng lại sau đó: `migrate` tạo lại database và `seed` chạy vì migrate báo vừa tạo.
 
 ### 5.10 `run_gate` (job)
 
@@ -591,9 +599,10 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 
 ### 5.20 `app_data` (A, mới, mục 8)
 
-- Mọi worktree chạy app trên cùng một database dev (chỉ `TEST_DATABASE_URL` có hậu tố riêng theo item), mà seed của
-  BTC xoá rồi tạo lại dữ liệu (seed CR-01 "deletes every invoice"): hai item cùng seed hay tạo dữ liệu qua app thì
-  làm hỏng evidence của nhau.
+- Seed của BTC xoá rồi tạo lại dữ liệu (seed CR-01 "deletes every invoice"): hai item cùng seed hay tạo dữ liệu qua
+  app trên một database thì làm hỏng evidence của nhau. Worktree item có database dev riêng (§5.9) thì `lock`/`unlock`
+  trả ngay `{locked|unlocked: true, dedicated: true, database}` và không đụng file khoá; khoá chỉ còn cho database dùng
+  chung (checkout chính, worktree tạo trước bản này, stack không có `migrate`).
 - `{action: "lock"|"unlock"|"status", backlogItemKey, minutes? (1–30, mặc định 15), waitSeconds? (≤ 50)}`. Khoá là file
   `team-sdlc-pack/local/app-data.lock.json` tạo độc quyền (subagent có thể gọi helper ở tiến trình khác), tự hết
   hạn, chủ khoá gọi lại để gia hạn. Đang có item khác giữ thì trả `{locked: false, heldBy, until, hint}`.

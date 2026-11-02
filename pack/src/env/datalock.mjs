@@ -1,8 +1,10 @@
-// Khoá dữ liệu của app (mục 8). Mọi worktree chạy app trên cùng một database dev (chỉ TEST_DATABASE_URL có hậu tố
-// riêng), mà seed của BTC xoá rồi tạo lại dữ liệu (CR-01 "deletes every invoice"): hai item cùng seed / tạo dữ liệu
-// qua app thì làm hỏng evidence của nhau. Item giữ khoá từ lúc seed tới lúc ghi xong report/evidence đọc dữ liệu đó.
-// Khoá là một file tạo độc quyền (flag "wx") trong team-sdlc-pack/local/, vì subagent có thể gọi helper ở tiến trình
-// khác; tự hết hạn (mặc định 15 phút) để item bị kill giữa chừng không giữ khoá mãi.
+// Khoá dữ liệu của app (mục 8). Seed của BTC xoá rồi tạo lại dữ liệu (CR-01 "deletes every invoice"): hai item cùng
+// seed / tạo dữ liệu qua app trên một database thì làm hỏng evidence của nhau. Worktree item có database dev riêng
+// (prepareWorktreeEnv, stack có migrate) thì không cần khoá: lock trả ngay `dedicated`. Chỉ app chạy trên database
+// dùng chung (checkout chính, worktree tạo trước bản này, stack không tự migrate) mới xếp hàng: item giữ khoá từ lúc
+// seed tới lúc ghi xong report/evidence đọc dữ liệu đó. Khoá là một file tạo độc quyền (flag "wx") trong
+// team-sdlc-pack/local/, vì subagent có thể gọi helper ở tiến trình khác; tự hết hạn (mặc định 15 phút) để item bị
+// kill giữa chừng không giữ khoá mãi.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fail } from '../core/util.mjs';
@@ -41,7 +43,7 @@ function tryTake(file, key, minutes) {
   }
 }
 
-export async function appDataLock({ teamWorkspace, action, backlogItemKey: key, minutes = 15, waitSeconds = 0 }) {
+export async function appDataLock({ teamWorkspace, action, backlogItemKey: key, minutes = 15, waitSeconds = 0, database = null }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   const file = lockFile(teamWorkspace);
   mkdirSync(dirname(file), { recursive: true });
@@ -50,6 +52,10 @@ export async function appDataLock({ teamWorkspace, action, backlogItemKey: key, 
     return held ? { free: false, ...held } : { free: true };
   }
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
+  if (database && (action === 'lock' || action === 'unlock')) {
+    return { [action === 'lock' ? 'locked' : 'unlocked']: true, dedicated: true, database,
+      hint: 'This worktree app has its own database: no other item sees or changes its data, no lock is needed.' };
+  }
   if (action === 'unlock') {
     const held = current(file);
     if (held && held.heldBy !== key) return { unlocked: false, ...held };

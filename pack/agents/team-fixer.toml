@@ -33,8 +33,8 @@ are rerun. A new result version does not require a new worker thread.
 
 Evidence: use capture_evidence's full scenario flow, stable browserProfile and context (scenario, matchRoot,
 backlogItemKey, appMode and phase). Use download for actual downloaded bytes; never fabricate a CSV from serializers.
-At most two repaired retries per scenario and about a third of your time on evidence. Use app_data lock for shared
-data from seed through final capture; do not run scenarios on damaged data. Seed/auth/browser mechanics belong
+At most two repaired retries per scenario and about a third of your time on evidence. Hold app_data lock from seed
+through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.
 
 Only the baseline owner fixes a baseline failure. Determine whether product or stale assertion contradicts the

@@ -30,7 +30,7 @@ export class Probe {
         await this.clean();
       }
       const env = await prepareWorktreeEnv({ progress: [] }, { wtMatchRoot: this.matchRoot, mainMatchRoot: this.mainMatchRoot,
-        key: 'probe', logDir: this.logDir });
+        key: 'probe', logDir: this.logDir, appDatabase: false });
       if (!env.ok) throw new Error(`probe setup failed: ${env.failure}`);
       writeFileSync(this.marker, `${new Date().toISOString()}\n`, 'utf8');
       this.error = null;

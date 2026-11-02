@@ -89,8 +89,10 @@ cause it. Write in the scenario note and `engineeringRecord` that the failure wa
 lists it in `routed`).
 
 ## 6. Scenario data
-Every worktree's app uses the same app database, and organizer seeds wipe and recreate data (Practice #2: CR-01's
-seed deletes every invoice; a misclick voided BUG-02's invoice and the later scenarios ran on damaged data).
+Organizer seeds wipe and recreate data (Practice #2: CR-01's seed deletes every invoice; a misclick voided BUG-02's
+invoice and the later scenarios ran on damaged data). An item worktree's app normally has its own database, migrated
+and seeded when the worktree was set up, so other items never see or change your data; `app_data lock` then returns
+`dedicated: true` at once. Only a shared database (main checkout, `dedicated` absent) makes items queue.
 1. `app_data {action: "lock", backlogItemKey, waitSeconds: 50}`; repeat while it returns `locked: false`.
 2. Run the seed the MVS names, then every data scenario in MVS order in one pass (later ones often use records an
    earlier one created).

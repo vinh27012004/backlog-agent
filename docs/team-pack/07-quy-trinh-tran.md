@@ -40,7 +40,8 @@ Reviewer chạy cùng gate. decide root_cause_confirmed là advisory, hard gate 
 Giữ template/schema, đúng tên và nội dung evidence MVS. Download lấy bytes trình duyệt, không sinh lại CSV từ source.
 Capture có context scenario/worktree/appMode/phase; manifest giữ source/environment/hash/time.
 Before-fix và final riêng biệt. Reviewer vẫn mở file kiểm nội dung.
-Shared DB giữ app_data lock từ seed đến capture; không seed hai item đồng thời hoặc tiếp tục trên dữ liệu hỏng.
+Worktree item có database dev riêng (migrate + seed khi tạo), nên item không chờ nhau; DB dùng chung (checkout chính)
+mới giữ app_data lock từ seed đến capture. Không tiếp tục trên dữ liệu hỏng.
 answer_only kiểm schema/source/derivation/solver/gate; không bịa số scenario.
 
 ## Recovery và cơ hội cuối
