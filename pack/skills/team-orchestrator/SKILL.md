@@ -94,7 +94,9 @@ otherwise record FAILED for that item and continue; do not bypass the rejection 
 
 ## Priorities and time
 PI first, then least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
-Under four minutes left do not begin a new ordinary item; under two minutes publish ready candidates.
+Under four minutes left do not begin a new ordinary item. In an item's last six minutes next_actions puts its
+entries first with lastCall: stop_worker, run_gate, then publish_item with the lastChance it supplies; do them before
+any other work and skip further review or repair of that item.
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 An unconfirmed PI may use up to three independent hypothesis checkers while the next implementation attempt runs;
 each checks one hypothesis and does not mutate the worker environment.
@@ -103,6 +105,9 @@ Before PI publish call decide root_cause_confirmed; hard gate and last-chance ru
 ## Waiting and root budget
 Use next_actions after every worker/job result or wait. It returns ordered exact inputs and waitMs bounded by
 the nearest release/deadline. Dispatch actionable work before waiting; do not repeatedly recreate agents.
+An entry is dropped only when next_actions stops returning it. A call that failed before reaching the helper
+(usage limit, approval review failure) is retried on the next pass, prepare_item included. A slot frees as soon as an
+item has handed off its candidate, so start the prepare_item it offers even while older items wait for gate or review.
 With native agents running, wait_agent at most waitMs; afterwards drain wait_for_update with the current cursor.
 With no native agents, wait_for_update wakes on helper events. Retain its cursor; do not replay old events.
 Use one exec for background job waits and bounded tool output; never poll shell files or ask workers for progress.

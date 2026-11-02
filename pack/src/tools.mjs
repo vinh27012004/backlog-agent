@@ -565,7 +565,7 @@ export class Runtime {
   itemNotice() {
     if (this.session.phase !== 'GAME' || !this.gm.view) return null;
     const rows = this.itemRows().filter(r => typeOf(r.key) !== 'PI' && r.status !== 'CLOSED');
-    const freeSlots = MAX_ITEMS_IN_FLIGHT - rows.filter(r => r.local === 'started' && !this.answerOnlyItem(r.key)).length;
+    const freeSlots = this.freeSlots(rows);
     const todo = new Set(rows.filter(r => r.local === 'todo' && (r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
     const waiting = this.matchState().suggestedOrder.filter(k => todo.has(k));
     const answerOnly = waiting.filter(k => this.answerOnlyItem(k));
@@ -579,6 +579,22 @@ export class Runtime {
     if (!hints.length) return null;
     return { ...(newItems.length ? { newItems, ...(freeSlots > 0 ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
       ...(ungated.length ? { ungated } : {}), hint: hints.join(' ') };
+  }
+
+  // Item code giữ slot khi còn cần worker: chưa bàn giao candidate (đang chuẩn bị, đang ghi, dừng chờ sync trước
+  // evidence, hay worker chết sau restart), worker đang ghi lại, hoặc candidate phải sửa / làm mới. Item đã bàn giao
+  // và chỉ chờ gate, review, publish hay item khác thì nhả slot (NBDB5U0O: CR-03 ra lúc 17:02 khi CR-01, CR-02, BUG-04
+  // đã xong evidence và chỉ chờ BUG-01; 4 slot vẫn "bận" nên CR-03 không được bắt đầu tới hết trận).
+  holdsSlot(row) {
+    if (row.local !== 'started' || row.status === 'CLOSED' || typeOf(row.key) === 'PI' || this.answerOnlyItem(row.key)) return false;
+    const ji = (this.session.paths ? this.journal?.data.items[row.key] : null) ?? {};
+    if (ji.endedAt) return false;
+    const handedOff = Boolean(ji.candidate) || ji.checkpoint === 'candidate';
+    return !handedOff || ji.workerState === 'writing' || ['repair', 'stale'].includes(ji.candidate?.state);
+  }
+
+  freeSlots(rows = this.itemRows()) {
+    return Math.max(0, MAX_ITEMS_IN_FLIGHT - rows.filter(r => this.holdsSlot(r)).length);
   }
 
   answerOnlyItem(key) {

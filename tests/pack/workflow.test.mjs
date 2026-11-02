@@ -169,3 +169,43 @@ test('answer repair after integration only integrates new commits and submits th
   const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise; const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
 });
+
+test('a slot is held only while an item still needs its worker, so a new item starts when the others only wait', () => {
+  const f = fixture(); const keys = ['BUG-02', 'CR-01', 'CR-02', 'BUG-04'];
+  f.rt.itemRows = () => [...keys.map(key => ({ key, type: key.split('-')[0], status: 'OPEN', local: 'started', minutesLeft: 20 })),
+    { key: 'CR-03', type: 'CR', status: 'OPEN', local: 'todo', minutesLeft: 20 }];
+  f.rt.gm.view.items = f.rt.itemRows().map(r => ({ key: r.key, title: r.key, raw: { descriptionMd: '## Acceptance criteria\n1. Works.' } }));
+  const prepares = () => f.rt.workflow.actions().nextActions.filter(a => a.action === 'prepare_item').map(a => a.key);
+  // NBDB5U0O 17:02: bốn item đang làm (chưa bàn giao) giữ đủ 4 slot.
+  for (const key of keys) Object.assign(f.rt.journal.item(key), { startedAt: new Date().toISOString(), workerState: 'writing' });
+  assert.equal(f.rt.freeSlots(), 0); assert.deepEqual(prepares(), []);
+  // Đã bàn giao candidate, chỉ chờ gate / review / item khác: nhả slot.
+  for (const key of keys.slice(1)) Object.assign(f.rt.journal.item(key), { workerState: 'yielded', checkpoint: 'candidate', candidate: { id: `c-${key}`, state: 'ready', fixResultFile: 'x' } });
+  assert.equal(f.rt.freeSlots(), 3); assert.deepEqual(prepares(), ['CR-03']);
+  // Dừng chờ sync trước evidence, worker chết sau restart, candidate phải sửa: vẫn giữ slot.
+  Object.assign(f.rt.journal.item('CR-01'), { checkpoint: 'ready_for_evidence', candidate: undefined });
+  Object.assign(f.rt.journal.item('CR-02'), { checkpoint: 'resume', candidate: undefined });
+  f.rt.journal.item('BUG-04').candidate.state = 'repair';
+  assert.equal(f.rt.freeSlots(), 0); assert.deepEqual(prepares(), []);
+});
+
+test('in the last minutes a candidate is stopped, gated and published under the last-chance rule first', async () => {
+  const f = fixture(), file = f.result(1); await f.preflight(file);
+  const rows = minutesLeft => [{ key: f.key, type: 'BUG', status: 'OPEN', local: 'started', minutesLeft },
+    { key: 'CR-09', type: 'CR', status: 'OPEN', local: 'todo', minutesLeft: 30 }];
+  f.rt.gm.view.items.push({ key: 'CR-09', title: 'CR-09', raw: { descriptionMd: '## Acceptance criteria\n1. Works.' } });
+  f.rt.itemRows = () => rows(30);
+  assert.ok(f.rt.workflow.actions().nextActions.some(a => a.key === f.key && a.action === 'review_candidate'), 'normal flow waits for review');
+  f.rt.itemRows = () => rows(5);
+  let next = f.rt.workflow.actions().nextActions;
+  assert.deepEqual([next[0].key, next[0].action, next[0].lastCall], [f.key, 'run_gate', true], 'gate first, ahead of the new item');
+  await f.gate(file);
+  next = f.rt.workflow.actions().nextActions;
+  assert.deepEqual([next[0].action, next[0].arguments.candidateId], ['publish_item', f.ji.candidate.id]);
+  assert.match(next[0].arguments.lastChance.reason, /5 min left/);
+  assert.ok(!next.some(a => a.key === f.key && a.action === 'review_candidate'), 'no review at the last call');
+  f.ji.workerState = 'writing';
+  assert.equal(f.rt.workflow.actions().nextActions[0].action, 'stop_worker');
+  f.ji.workerState = 'yielded'; f.ji.lastGate = { ...f.ji.lastGate, tree: null };
+  assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.action === 'publish_item'), 'a broken build/regression is never published');
+});

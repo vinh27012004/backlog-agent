@@ -5,8 +5,10 @@ Cập nhật 31/10/2026; hợp đồng chi tiết ở [13](13-workflow-toi-uu.md
 ## 1. Tổng quan thời gian
 Giữ mục tiêu PREPARE khoảng 7 phút, hard budget helper 8 phút và hợp đồng Player.
 GAME ưu tiên PI, deadline ít slack, shared baseline/layout, điểm rồi BUG > CR > TASK.
-Tối đa bốn item code thường song song; PI và answer_only có thể bắt đầu ngay.
-Dưới bốn phút không mở item thường mới; dưới hai phút tập trung publish candidate sẵn sàng.
+Tối đa bốn item code thường còn cần worker; item đã bàn giao candidate, chỉ chờ gate/review/publish, nhả slot.
+PI và answer_only có thể bắt đầu ngay. Sau restart vẫn làm hết `next_actions`, kể cả `prepare_item`.
+Dưới bốn phút không mở item thường mới; sáu phút cuối của item thì `next_actions` đưa lên đầu: dừng worker, gate,
+rồi publish theo luật cơ hội cuối (bỏ review/sửa thêm).
 
 ## 2. Chuẩn bị
 Configure frame, prepare_checkout, setup_environment và login_match song song; kiểm doctor/build/baseline/index.

@@ -17,5 +17,7 @@ GAME: login_match, refresh_match, next_actions.
   continue version numbering, register its thread using worker_checkpoint resume.
 - Stale/yielded worktree: sync only without a writer or pending submission, refresh affected evidence, and preflight
   a new numbered result. Never overwrite a prior handoff to make an old gate look current.
+- Then work through next_actions in its order like any other turn, prepare_item included: an item that was waiting
+  for a slot before the restart is still owed its start. Recovering old items never replaces that list.
 
 Continue .agents/skills/team-orchestrator/SKILL.md. Only root performs native agent operations.

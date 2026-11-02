@@ -10,6 +10,9 @@ import { fail } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
+// Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
+// cuối (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
+const LAST_CALL_MINUTES = 6;
 
 export class Workflow {
   constructor(runtime) { this.rt = runtime; this.publishOwner = null; }
@@ -284,7 +287,8 @@ export class Workflow {
     const order = r.matchState().suggestedOrder;
     const nextActions = [];
     const add = (key, action, args = {}, extra = {}) => nextActions.push({ key, action, arguments: { backlogItemKey: key, ...args }, ...extra });
-    let free = Math.max(0, 4 - rows.filter(x => ['started', 'published'].includes(x.local) && !r.answerOnlyItem(x.key) && x.type !== 'PI').length);
+    let free = r.freeSlots(rows);
+    const lastCallOf = (row, ji) => row?.minutesLeft != null && row.minutesLeft <= LAST_CALL_MINUTES && ji?.verificationKind !== 'answer_only';
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
@@ -295,6 +299,22 @@ export class Workflow {
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy }); continue; }
+      if (ji.startedAt && lastCallOf(row, ji)) {
+        // Cuối giờ: worker bàn giao ngay, gate rồi nộp; review/sửa thêm không kịp. Gate không qua build + regression thì
+        // không có gì nộp được (luật cơ hội cuối không bao giờ che build/regression hỏng).
+        const extra = { lastCall: true, minutesLeft: row.minutesLeft };
+        if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
+        if (c && c.state !== 'stale') {
+          const gate = c.gateJobId ? r.jobs.jobs.get(c.gateJobId) : null;
+          if (!gate) { add(key, 'run_gate', { fixResultFile: c.fixResultFile }, extra); continue; }
+          if (gate.state === 'running') continue;
+          if (ji.lastGate?.jobId !== c.gateJobId || !ji.lastGate.tree) continue;
+          const verified = gate.result?.passed && c.review?.value.verdict === 'approve';
+          add(key, 'publish_item', { candidateId: c.id, ...(verified ? {} : { lastChance: { reason:
+            `${Math.floor(row.minutesLeft)} min left: no time for another repair or review; unverified scenarios stay FAIL/NOT_RUN` } }) }, extra);
+          continue;
+        }
+      }
       if (ji.prepared && !ji.workerThread && !c) { add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId }); continue; }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
@@ -311,9 +331,18 @@ export class Workflow {
         }
       }
     }
-    for (const u of r.ungatedResults()) if (!items[u.key]?.candidate || items[u.key].candidate.fixResultFile !== u.fixResultFile) add(u.key, 'candidate_preflight', { fixResultFile: u.fixResultFile });
+    for (const u of r.ungatedResults()) {
+      if (items[u.key]?.candidate && items[u.key].candidate.fixResultFile === u.fixResultFile) continue;
+      const row = rows.find(x => x.key === u.key);
+      add(u.key, 'candidate_preflight', { fixResultFile: u.fixResultFile }, lastCallOf(row, items[u.key]) ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
+    }
+    // Việc cuối giờ lên đầu, item ít phút nhất trước; các việc khác giữ thứ tự cũ.
+    const urgency = a => (a.lastCall ? a.minutesLeft : Infinity);
+    nextActions.sort((a, b) => (urgency(a) === urgency(b) ? 0 : urgency(a) - urgency(b)));
     const now = Date.now();
     const wake = [now + 55_000, Date.parse(r.releases()?.next?.at) + 1000,
+      ...rows.filter(x => items[x.key]?.startedAt && !items[x.key]?.endedAt && !items[x.key]?.receipt && x.minutesLeft !== null)
+        .map(x => now + (x.minutesLeft - LAST_CALL_MINUTES) * 60_000 + 1000),
       ...rows.filter(x => !items[x.key]?.endedAt).map(x => Date.parse(items[x.key]?.prepared?.timeBox?.returnBy ?? x.returnBy)),
       ...rows.filter(x => x.deadlineMinutes && x.minutesLeft !== null).map(x => now + Math.max(0, x.minutesLeft * 60_000 - 120_000))].filter(x => Number.isFinite(x) && x > now);
     return { nextActions, waitMs: Math.max(0, Math.min(...wake) - now) };

@@ -487,8 +487,21 @@ mất 56 s đến 1 phút 52 vì root đang chờ).
 Item thường không làm lượt chờ trả sớm (vòng chờ trong `exec` sẽ quay liên tục). Thay vào đó mọi kết quả tool của
 root (trừ `match_state`, `wait_for_update`, `login_match`, `refresh_match`, và không gắn cho lời gọi qua proxy) có
 `notice` = `{newItems, freeSlots, hint}` khi có item không phải PI đã ra mà chưa Start Work (còn ≥ 4 phút) trong lúc
-số item `started` dưới `MAX_ITEMS_IN_FLIGHT` = 4. `newItems` theo `suggestedOrder`. (ZVUYZ41V: TASK-01 ra lúc
+số item giữ slot dưới `MAX_ITEMS_IN_FLIGHT` = 4. `newItems` theo `suggestedOrder`. (ZVUYZ41V: TASK-01 ra lúc
 02:49:49, root chỉ bắt đầu lúc 03:02 vì lặp `wait_agent`/`spawn_agent` mà không gọi `wait_for_update`.)
+
+Giữ slot (`holdsSlot`, dùng chung cho `notice` và `next_actions`): item code (không PI, không answer_only) đã Start
+Work, chưa kết thúc, và còn cần worker: chưa bàn giao candidate (đang chuẩn bị, đang ghi, dừng chờ sync trước evidence,
+worker mất sau restart), worker đang ghi lại, hoặc candidate `repair`/`stale`. Item đã bàn giao chỉ chờ gate, review,
+publish hay item khác thì nhả slot (NBDB5U0O: CR-03 ra 17:02 khi CR-01, CR-02, BUG-04 chỉ chờ BUG-01, không được bắt
+đầu tới hết trận).
+
+Cuối giờ (`next_actions`): còn ≤ 6 phút (`LAST_CALL_MINUTES`, theo hạn item hoặc hết trận) thì việc của item lên đầu,
+item ít phút nhất trước, gắn `lastCall`: worker đang ghi → `stop_worker`; candidate chưa gate → `run_gate`; gate gần
+nhất của candidate qua build + regression → `publish_item`, kèm `lastChance.reason` khi chưa có review approve hoặc
+gate chưa pass hết; gate hỏng build/regression thì không đề xuất nộp. Không còn `review_candidate`/`repair_worker`
+cho item đó. `waitMs` thức root đúng lúc item bước vào 6 phút cuối. (NBDB5U0O: BUG-04 có candidate PARTIAL lúc
+17:16 nhưng không được gate/nộp, item đóng 17:22.)
 
 ### 5.17 `detect_profile` (A)
 
