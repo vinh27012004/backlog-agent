@@ -175,15 +175,18 @@ export class Decider {
     // small, reviewer cãi đáp án, phải chạy lại cả vòng fixer + verifier + reviewer, mất 7,5 phút).
     const flags = new Set(signals?.flags ?? []);
     const trickyAnswer = flags.has('answerOnly') && flags.has('tricky');
-    const needsStrong = type === 'PI' || type === 'CR' || difficulty === 'hard' || trickyAnswer;
-    // Thang model rẻ → đắt (config/models.json): luật chọn cheap cho item easy; Jev được hạ xuống cheap chỉ khi item easy.
-    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : difficulty === 'easy' ? 'cheap' : 'small'),
+    const isCode = ['BUG', 'CR', 'PI'].includes(type) && !flags.has('answerOnly');
+    const needsStrong = type === 'PI' || type === 'CR' || type === 'BUG' || difficulty === 'hard' || trickyAnswer;
+    // Thang model rẻ → đắt (config/models.json): code task tối thiểu tier small, không dùng cheap (tránh sửa sai/hỏng AST).
+    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : (difficulty === 'easy' && !isCode) ? 'cheap' : 'small'),
       new Set(['cheap', 'small', 'strong']));
     if (needsStrong && model.value !== 'strong') {
-      const who = type === 'PI' || type === 'CR' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
+      const who = type === 'PI' || type === 'CR' || type === 'BUG' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
       model = { ...model, value: 'strong', source: 'rule', reason: `${who} always gets the strong tier` };
-    } else if (model.value === 'cheap' && difficulty !== 'easy') {
-      model = { ...model, value: 'small', source: 'rule', reason: `the cheap tier is only for easy items (difficulty ${difficulty})` };
+    } else if (model.value === 'cheap' && (difficulty !== 'easy' || isCode)) {
+      model = { ...model, value: 'small', source: 'rule', reason: isCode
+        ? 'code-changing tasks require at least the small tier to prevent hallucinated fixes'
+        : `the cheap tier is only for easy items (difficulty ${difficulty})` };
     }
     let reviewer;
     // PI sai = 0 điểm và không nộp lại được; reviewer chạy cùng lúc với gate (~1 phút) nên gần như không tốn thêm giờ.

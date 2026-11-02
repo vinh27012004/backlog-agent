@@ -40,3 +40,16 @@ Instead, write a 15-20 line targeted correlation script (`derive.mjs` or `derive
 - **Trap 1: Monitoring Release vs Introducing Release**: If release `rel-2` turned on the bad flag and release `rel-4` added a Prometheus metric for it, the root cause release is `rel-2`, NOT `rel-4`.
 - **Trap 2: Customer Complaint Bias**: Customer tickets only reflect the users who complained. The incident report requires **ALL** affected records across the entire dataset. Always derive from complete logs.
 - **Trap 3: Settle Timing Traps**: Exclude records where payment happened *after* the event was dispatched, or where payments were partial and balance remained overdue.
+
+
+---
+
+## One-Shot PI Submission Rules (Finish in < 4 Minutes on Version 1)
+1. **Upfront Copy Company Facts**:
+   Before handoff, copy the relevant search log files from `.team-work/items/<ID>/company/*` directly into `answers/<ID>/evidence/` byte-for-byte.
+2. **Clean Relative Paths Only**:
+   In `submit.json` and `evidenceFiles`, all paths MUST be `"evidence/<filename>.json"`.
+   **FATAL TRAP**: NEVER append `:line` or `:41` suffixes in path strings. Line numbers belong only in the `incidentRecord` prose, never inside path arrays.
+3. **Deterministic Derivation Script**:
+   Save your derivation script as `answers/<ID>/evidence/derive.mjs`, execute it, and include it in `evidenceFiles`.
+   Validate `submit.json` with schema and hand off immediately on attempt 1!

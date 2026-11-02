@@ -130,3 +130,13 @@ download bytes unchanged, including BOM/CRLF. downloads gives path, bytes and sh
 waitFor supports selector with state visible, hidden or enabled. Prefer a real observable state over sleep.
 Only unsupported operations such as API-only checks need a scratch script in .team-work/scratch/<ID>/;
 do not put it in product source, and fix it at most twice.
+
+## 8. Specific Task Traps & Fast Fixes
+- **BUG-01 (Layout check timeout on /accounting)**:
+  - On `/accounting`, the default Reports tab triggers an infinite polling query loop on `balanceSheet`.
+  - When taking Accounting screenshots, immediately click the Invoices tab (`{action: "click", selector: "[role=tab]", text: "Invoices"}`) to avoid the Reports request loop.
+  - If the supplied `BUG-01-layout-check.mjs` times out waiting for networkidle, do not retry endlessly. Record `not_run`, keep the 5/5 passing geometry tests, and publish under the last-chance rule.
+- **BUG-02 (VND currency report & baseline cascade test)**:
+  - `currency-report.txt` is NOT produced by the browser! Generate it directly in the terminal:
+    `pnpm exec tsx prisma/report-bug02.ts > answers/BUG-02/evidence/currency-report.txt` (after seeding `seed-bug02.ts`).
+  - Fix `tests/cascade.test.ts` (the item explicitly allows correcting this stale baseline test) so `pnpm test` exits 0 for TC-04.

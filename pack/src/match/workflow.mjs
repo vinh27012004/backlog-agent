@@ -403,7 +403,8 @@ export class Workflow {
     const nextActions = [];
     const add = (key, action, args = {}, extra = {}) => nextActions.push({ key, action, arguments: { backlogItemKey: key, ...args }, ...extra });
     let free = r.freeSlots(rows);
-    const lastCallOf = (row, ji) => row?.minutesLeft != null && row.minutesLeft <= LAST_CALL_MINUTES && ji?.verificationKind !== 'answer_only';
+    const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
+    const lastCallOf = (row, ji) => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
@@ -420,6 +421,10 @@ export class Workflow {
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };
         if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
         if (c && c.state !== 'stale') {
+          if (ji.verificationKind === 'answer_only') {
+            add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: ${Math.floor(row.minutesLeft)} min left: deadline approaching, submitting answer immediately } }, extra);
+            continue;
+          }
           const gate = c.gateJobId ? r.jobs.jobs.get(c.gateJobId) : null;
           if (!gate) { add(key, 'run_gate', { fixResultFile: c.fixResultFile }, extra); continue; }
           if (gate.state === 'running') continue;
@@ -439,6 +444,12 @@ export class Workflow {
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
       if (c?.state === 'repair') {
+        const attempts = (ji.gateHistory ?? []).filter(h => h.where === 'worktree').length;
+        if (attempts >= 2 && ji.lastGate?.tree && c.repair?.keepImplementation) {
+          // Code đã pass build và test, nhưng thử chụp evidence 2 lần vẫn kẹt: nộp ngay theo luật cơ hội cuối thay vì lặp vô tận làm nghẽn toàn bộ các task khác.
+          add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: `Evidence repair attempt limit reached (${attempts} attempts); code and regression verified, submitting available evidence under last-chance rule` } });
+          continue;
+        }
         // Worker tier strong đã bàn giao code + test: evidence do worker model nhanh làm tiếp (prepare: evidenceHandoff).
         const handoff = ji.evidenceHandoff?.state === 'pending' && c.repair?.keepImplementation ? ji.evidenceHandoff : null;
         add(key, handoff ? 'spawn_evidence_worker' : 'repair_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair,
@@ -463,14 +474,21 @@ export class Workflow {
       const row = rows.find(x => x.key === u.key);
       add(u.key, 'candidate_preflight', { fixResultFile: u.fixResultFile }, lastCallOf(row, items[u.key]) ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
     }
-    // Ưu tiên tuyệt đối cho PI để đua điểm thời gian (100% -> 90% -> 75% -> 60%); việc cuối giờ kế tiếp.
+    // Ưu tiên tuyệt đối cho PI để đua điểm thời gian; ưu tiên answer_only và task cận deadline kế tiếp.
     const isPI = a => typeOf(a.key) === 'PI';
+    const isAnswer = a => r.answerOnlyItem(a.key);
     const urgency = a => {
       if (isPI(a)) {
         if (a.action === 'submit_work' || a.action === 'publish_item') return -3000;
         if (a.action === 'run_gate' || a.action === 'candidate_preflight') return -2500;
         if (a.action === 'prepare_item' || a.action === 'spawn_worker') return -2000;
         return -1500;
+      }
+      if (isAnswer(a)) {
+        if (a.action === 'submit_work' || a.action === 'publish_item') return -1400;
+        if (a.action === 'run_gate' || a.action === 'candidate_preflight') return -1200;
+        if (a.action === 'prepare_item' || a.action === 'spawn_worker') return -1000;
+        return -800;
       }
       if (a.lastCall) return a.minutesLeft;
       return Infinity;

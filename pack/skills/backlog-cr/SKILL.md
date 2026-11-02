@@ -1,53 +1,65 @@
 ---
 name: implement-cr
-description: Implement a Change Request in any stack. Turn the spec into a delta, change every place it touches, keep everything else unchanged, pass the MVS scenario.
+description: Implement a Change Request in any stack with maximum accuracy (10/10 Grader criteria) and ultra-fast delivery. Use spec delta decomposition, walk the full impact chain, test across 4 viewpoints, and ensure complete backward compatibility.
 ---
 
-# CR (Change Request)
+# CR (Change Request) Playbook
 
-A CR changes how the system should behave. The organizers verify it with an MVS scenario that must
-pass, and existing behaviour outside the change must stay intact.
+In MTM, Change Requests (CR) modify or extend system capabilities.
+High scores require **complete implementation of all acceptance criteria (J1)**, **zero regressions on existing callers (J4)**, and **complete, verifiable evidence (J1 & J9)**.
 
-## 1. Spec delta (write it down before coding)
-| Changes | Stays the same |
+---
+
+## 1. Spec Delta Matrix (1 Minute Upfront)
+Before touching code, write down the explicit delta:
+| Spec Delta (What Changes) | Invariants (What Must Stay The Same) |
 |---|---|
-| new/changed rule, field, endpoint, status code, message, default, permission | everything the spec does not mention |
+| New/changed endpoints, parameters, business rules, status codes, defaults, permissions | All existing routes, unmentioned fields, legacy response formats, authentication models |
 
-Spec unclear? Pick the interpretation that breaks the fewest existing callers and state the assumption
-in `summary`.
+*Rule of Ambiguity*: If the spec is ambiguous on a corner case, choose the interpretation that breaks the fewest existing callers and state the assumption clearly in the `summary`.
 
-## 2. Find every place the change touches
-Use codegraph (`codegraph_impact`, `codegraph_callers`) from the thing you change outward. Typical chain in a web app:
-route/controller → request/response DTO + validation → service/business rule → repository/query →
-schema/migration → serializers/mappers → error handling → tests → API docs (OpenAPI, README) if the
-project keeps them. Frontend in the same repo consumes the API? Check it too.
+---
 
-## 3. Compatibility rules
-- New request fields: optional with a sensible default unless the spec says required.
-- Do not rename or remove response fields unless the spec says so.
-- Schema change: only through the project's migration mechanism (Flyway, Liquibase, Alembic,
-  Django/Rails/EF migrations, Prisma...). Never edit an already-applied migration; add a new one.
-- New error case: use the project's existing error format and status-code conventions.
-- New config value: add a default so existing environments keep working.
+## 2. Walk the Full Impact Chain (Zero Missed Links)
+Do not patch only the UI or only the service. Walk the full call chain outward:
+1. **Route / Controller**: HTTP method, route path, headers, query/path parameters.
+2. **DTO & Validation**: Schema validation, required vs optional flags, default values.
+   - *CRITICAL*: New request fields MUST be optional with sensible defaults unless the spec explicitly states they are mandatory.
+3. **Service / Business Logic**: Core algorithm, entity status transitions, authorization checks.
+4. **Data Persistence / Migration**:
+   - Schema changes must use the project's native migration tool (Prisma, Alembic, Flyway, Liquibase, EF Migrations).
+   - *Forbidden*: Modifying existing historical migrations. Always create a new migration.
+5. **Serialization / Mapping**: DTO $\leftrightarrow$ Entity mappers, date formatting, enum serializations.
+   - *Forbidden*: Renaming or omitting existing response fields unless specifically mandated.
+6. **Frontend / UI (if monorepo)**: Consume the updated API, add requested controls (buttons, modals, dropdowns).
 
-## 4. Tests from the spec & viewpoints
-- For each changed rule, cover the relevant viewpoint dimensions:
-  - **Normal**: test the new behavior with expected inputs and status codes.
-  - **Boundary**: test the limits the spec implies (e.g. limit 5 → test 5 allowed, 6 rejected; min/max boundaries).
-  - **Error & Cross-field**: test rejection of invalid inputs or conflicting parameters introduced by the delta.
-- One test that shows behaviour outside the delta is unchanged, where the change is risky.
-- Test data hygiene: isolate test records (unique prefixes, cleanup on teardown) to keep existing regression test suites green.
-- Update an existing test **only** where the spec changes its expected result; list each one in
-  `summary` with the reason.
+---
 
-## 5. Implement
-Follow the existing layering and naming. Put rules where similar rules already live. Need a new
-library? Edit the build file and list it in `needs_dependency` (no network in the sandbox; the
-orchestrator downloads it). Remove all debug leftovers (`console.log`, `print`, `debugger`, stubs).
+## 3. The 4-Dimensional Test Matrix (J5 & J4 Protection)
+For every feature or modification introduced in the CR, write tests covering 4 key viewpoints:
+1. **Dimension 1: Happy Path**:
+   - Verify expected behavior with valid inputs, expected status codes (e.g. 200, 201), and full response payloads.
+2. **Dimension 2: Boundary & Limits**:
+   - Verify thresholds implied by the spec (e.g. pagination limit, max upload size, date range limits).
+   - Test exact boundary and one past the boundary (e.g. limit 5 $\to$ test 5 accepted, 6 rejected).
+3. **Dimension 3: Negative & Error Path**:
+   - Verify invalid, malformed, or missing required fields return appropriate status codes (e.g. 400, 422) in the project's standard error format.
+   - Verify unauthenticated or unauthorized access returns 401/403 without data leakage (J7).
+4. **Dimension 4: Backward Compatibility**:
+   - Verify requests omitting the new fields continue to work seamlessly using defaults.
 
-## 6. Verify
-New tests · existing tests of touched modules · MVS via the MVS scenarios in the brief · build.
+---
 
-## Done when
-Every row of the spec delta has a passing test · callers updated · MVS passes (or reported as not
-runnable) · no debug leftovers · no unrelated changes.
+## 4. Focused Loop & Evidence Acquisition (Speed Maximizer)
+1. **Focused Testing**:
+   - Loop using `test_one` on your new CR test suite (takes 2–4 seconds per run).
+   - Only after all 4 test dimensions pass, run the touched module tests to confirm zero regressions.
+2. **Required Evidence Pre-Flight**:
+   - Check the Submission section of the item description:
+     - CSV exports, data dumps, JSON/TXT reports must be generated and saved into `answers/<ID>/evidence/`.
+     - *Golden Rule*: Generate data exports and reports directly via backend scripts or API calls, ensuring exact row counts, byte sizes, and BOM/CRLF standards.
+     - For UI screenshots, verify controls (e.g. export buttons, new columns) are clearly visible.
+3. **Diff Hygiene (J3)**:
+   - Verify `git diff`: ensure zero leftover debug statements (`console.log`, `print`, temporary stubs), no unrelated file touches, and no formatting churn.
+4. **Candidate Checkpoint**:
+   - Checkpoint candidate, trigger gate, and notify orchestrator for publish.

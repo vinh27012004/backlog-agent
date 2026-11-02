@@ -5,8 +5,16 @@ description: Implement a TASK item in any stack. No MVS exists, so derive accept
 
 # TASK
 
-A TASK asks for new work (feature, endpoint, report, refactor, technical task). There is no MVS, so
-the team's own tests are the only proof, and the grader judges the result against the description.
+## 0. Fast-Path Classification (Answer-Only vs Feature)
+Check the item description immediately upon opening:
+- **Form A: Answer-Only / Calculation TASK** (e.g. "Which value does...", "Trace the ledger...", "Question(s)...", or Out of scope states "changing application source is out of scope"):
+  - **DO NOT build or run the web app**.
+  - **DO NOT modify application source code**.
+  - **Write a targeted 10-20 line calculation script** in `answers/<ID>/evidence/derive.mjs` (or `.ts`) that imports or computes directly from the canonical source / QA test data.
+  - Fill `answers/<ID>/submit.json` with the exact computed values, ensuring correct string/integer types matching `challenge/<ID>-submit.schema.json`.
+  - Checkpoint candidate and hand off within 2�3 minutes!
+- **Form B: Code Feature / Endpoint TASK**:
+  - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
 
 ## 1. Acceptance criteria & test viewpoints
 Derive criteria from the description. Cover the 4 core test viewpoint dimensions without inventing unrequested features:

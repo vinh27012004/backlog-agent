@@ -618,7 +618,8 @@ export class Runtime {
     const ji = (this.session.paths ? this.journal?.data.items[row.key] : null) ?? {};
     if (ji.endedAt) return false;
     const handedOff = Boolean(ji.candidate) || ji.checkpoint === 'candidate';
-    return !handedOff || ji.workerState === 'writing' || ['repair', 'stale'].includes(ji.candidate?.state);
+    const repairHoldsSlot = ji.candidate?.state === 'repair' && !ji.candidate.repair?.keepImplementation;
+    return !handedOff || ji.workerState === 'writing' || repairHoldsSlot || ji.candidate?.state === 'stale';
   }
 
   freeSlots(rows = this.itemRows()) {
@@ -721,8 +722,8 @@ export class Runtime {
     const typeRank = { PI: 0, BUG: 1, CR: 2, TASK: 3 };
     const suggestedOrder = open.sort((a, b) => {
       if ((a.type === 'PI') !== (b.type === 'PI')) return a.type === 'PI' ? -1 : 1;
-      const da = (a.deadlineMinutes || a.minutesLeft !== null) ? (a.minutesLeft ?? 999) : 999;
-      const db = (b.deadlineMinutes || b.minutesLeft !== null) ? (b.minutesLeft ?? 999) : 999;
+      const da = a.minutesLeft ?? a.deadlineMinutes ?? 999;
+      const db = b.minutesLeft ?? b.deadlineMinutes ?? 999;
       if (da !== db) return da - db;
       // Item chỉ trả lời xong trong vài phút (MZP27104 TASK-01: 4m41s) nên đi trước item phải sửa code.
       const oa = this.answerOnlyItem(a.key), ob = this.answerOnlyItem(b.key);
@@ -787,8 +788,9 @@ export class Runtime {
         executed: 0, passed: 0, failed: 0, skipped: 0, summary: ji.verificationKind === 'answer_only' ? 'answer_only: schema/source, independent derivation and code gate not checked yet.' : `${ji.requiredScenarios} scenario(s) plus regression.` });
     }
     const pi = typeOf(key) === 'PI';
-    // Trước worktree create: commit mới (nếu có) phải vào main để worktree của PI có nó.
-    const remote = pi ? await this.catchUpRemote() : null;
+    const isBug = typeOf(key) === 'BUG';
+    // Trước worktree create: commit mới (nếu có) phải vào main để worktree của PI/BUG có nó; recentChanges giúp định vị commit gây lỗi.
+    const remote = (pi || isBug) ? await this.catchUpRemote() : null;
     const triage = await this.autoTriage(key);
     const baselineFailures = this.baselineBrief(key);
     // Evidence mô tả đòi ngoài MVS (ZVUYZ41V BUG-01): root đưa vào brief, gate chặn khi thiếu.
@@ -807,7 +809,8 @@ export class Runtime {
       ...(independentAnswer ? { independentAnswer } : {}), ...(remote ? { remote } : {}),
       next: 'worktree create, then spawn_agent team_fixer with fork_turns "none", model/reasoning_effort from triage.models.fixer[0] '
         + 'and the full brief (return_by = timeBox.returnBy'
-        + (pi ? ', checkpoint_by = timeBox.checkpointBy in <item_meta>; <recent_changes> from remote' : ' in <item_meta>')
+        + (pi ? ', checkpoint_by = timeBox.checkpointBy in <item_meta>' : ' in <item_meta>')
+        + (remote?.recentChanges?.length ? `; <recent_changes> from remote: ${remote.recentChanges.join('; ')}` : '')
         + (baselineFailures?.failing.length ? `; <baseline_failures> with youFix=${baselineFailures.youFix}` : '')
         + (requiredEvidence.length ? `; <required_evidence> = requiredEvidence as given${requiredEvidence.some(e => e.beforeFix) ? ' (beforeFix files are captured first, on the unfixed code)' : ''}` : '')
         + (requirements.length ? `; <requirements> = ${join(dir, 'requirements.json')} (the fixer reports each id in its fix-result)` : '')
