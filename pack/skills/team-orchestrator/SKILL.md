@@ -78,9 +78,10 @@ list and a short time limit, resume writes, and specify the next result version.
 Use a new worker when implementation failed, the hypothesis must change, a stronger model is needed, or context
 has become unproductive. Pass prior hypotheses and exact failing checks. Gate repeat=3 normally stops the item.
 After source/dependency/environment changes, preflight again; helper reruns invalidated checks. Never force cache reuse.
-Before retrying, sync a yielded stale worktree. Changes to the item's own files or environment invalidate final
-captures; a sync that only brings other items' files does not. Before-fix artifacts remain distinct. Missing required
-files must be captured; do not relabel absent evidence as PASS.
+Before retrying, sync a yielded stale worktree. Changes to the item's own files, environment or runtime files synced
+from other items invalidate final captures. Only syncs limited to tests and non-runtime documentation keep final
+captures valid. Before-fix artifacts remain distinct. Missing required files must be captured; do not relabel absent
+evidence as PASS.
 Never sync only to pick up another item's baseline fix: the gate and main gate already account for baseline failures
 another item owns (4D895OVI: BUG-01 synced for BUG-02's fix and recaptured four screenshots). A todo that cites only
 such failures is answered by a followup asking the worker to report them in the summary and set DONE, without a sync.

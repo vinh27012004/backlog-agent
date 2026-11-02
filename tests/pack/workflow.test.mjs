@@ -263,27 +263,43 @@ test('an answer-only item publishes after main moved since its worktree was crea
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
 });
 
-// 4D895OVI BUG-01: sync chỉ để lấy bản sửa baseline của item khác làm 4 ảnh final bị coi là cũ và phải chụp lại.
-test('final evidence survives a sync that only brought other items\' files, not a later change to the item\'s own files', async () => {
+test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {
   const f = fixture(), shot = join(f.dir, 'evidence', 'final.png'); writeFileSync(shot, 'png');
   const head = sh('git', ['rev-parse', 'HEAD'], f.wt.worktreeRoot), snapshot = await f.rt.workflow.snapshot(f.key);
   recordEvidence(f.rt.session.paths.teamWork, f.key, { path: shot, name: 'final.png', phase: 'final', ...snapshot, base: head, sha256: digest(readFileSync(shot)) });
-  writeFileSync(join(f.checkout, 'M1', 'src', 'baseline.js'), 'export const fixed=true;\n');
-  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'baseline fix'], f.checkout);
+  mkdirSync(join(f.checkout, 'M1', 'src', 'tests'));
+  mkdirSync(join(f.checkout, 'M1', 'docs'));
+  writeFileSync(join(f.checkout, 'M1', 'src', 'tests', 'baseline.test.js'), 'export const fixed=true;\n');
+  writeFileSync(join(f.checkout, 'M1', 'docs', 'practice.md'), 'Test notes\n');
+  writeFileSync(join(f.checkout, 'M1', 'src', 'BUILD_REPORT.md'), 'Build passed\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'tests and documentation'], f.checkout);
   assert.equal((await f.rt.worktree({ action: 'sync', backlogItemKey: f.key })).synced, true);
   const stale = p => p.repair.todo.filter(t => /older source/.test(t.action));
-  assert.deepEqual(stale(await f.preflight(f.result(1))), [], 'main brought only baseline.js');
+  assert.deepEqual(stale(await f.preflight(f.result(1))), [], 'main brought only tests and documentation');
   writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=5;\n');
   assert.equal(stale(await f.preflight(f.result(2))).length, 1, 'the item changed its own file after capture');
 });
 
+for (const file of ['layout.tsx', 'globals.css', 'api.js', 'unknown.js']) {
+  test(`final evidence is stale after syncing another item's runtime file: ${file}`, async () => {
+    const f = fixture(), shot = join(f.dir, 'evidence', 'final.png'); writeFileSync(shot, 'png');
+    const snapshot = await f.rt.workflow.snapshot(f.key), base = sh('git', ['rev-parse', 'HEAD'], f.wt.worktreeRoot);
+    recordEvidence(f.rt.session.paths.teamWork, f.key, { path: shot, name: 'final.png', phase: 'final', ...snapshot, base, sha256: digest(readFileSync(shot)) });
+    writeFileSync(join(f.checkout, 'M1', 'src', file), 'changed by another item\n');
+    sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'runtime change'], f.checkout);
+    await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+    assert.ok((await f.preflight(f.result(1))).repair.todo.some(t => /older source/.test(t.action)));
+  });
+}
+
 // 4D895OVI: CR-01, CR-02 dừng ở ready_for_evidence khoảng 1 phút chờ root sync rồi gửi resume.
-test('ready_for_evidence syncs the yielded worktree and resumes the worker without a root round trip', async () => {
+for (const via of ['direct', 'proxy']) test(`ready_for_evidence syncs and resumes without a root round trip (${via})`, async () => {
+  const checkpoint = (rt, args) => via === 'proxy' ? rt.proxyCall('worker_checkpoint', args)
+    : rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
   const f = fixture(); f.ji.workerThread = '/root/bug01';
   writeFileSync(join(f.checkout, 'M1', 'src', 'shared.js'), 'export const shared=1;\n');
   sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout);
-  const handler = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
-  const res = await handler({ backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  const res = await checkpoint(f.rt, { backlogItemKey: f.key, phase: 'ready_for_evidence' });
   assert.equal(res.writesAllowed, true, JSON.stringify(res)); assert.equal(res.synced.synced, true);
   assert.deepEqual([f.ji.workerState, f.ji.checkpoint, f.ji.workerThread], ['writing', 'resume', '/root/bug01']);
   assert.equal(f.ji.worktreeBase, sh('git', ['rev-parse', 'HEAD'], f.checkout));
@@ -292,6 +308,17 @@ test('ready_for_evidence syncs the yielded worktree and resumes the worker witho
   const g = fixture();
   writeFileSync(join(g.checkout, 'M1', 'src', 'lib.js'), 'export const value=9;\n');
   sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
-  const conflict = await g.rt.definitions().find(t => t.name === 'worker_checkpoint').handler({ backlogItemKey: g.key, phase: 'ready_for_evidence' });
+  const conflict = await checkpoint(g.rt, { backlogItemKey: g.key, phase: 'ready_for_evidence' });
   assert.equal(conflict.writesAllowed, false); assert.equal(conflict.syncError.code, 'WORKTREE_CONFLICT'); assert.equal(g.ji.workerState, 'yielded');
+});
+
+test('proxy evidence checkpoint keeps the worker yielded while dependency setup is pending', async () => {
+  const f = fixture(); f.ji.workerState = 'writing';
+  f.rt.worktree = async args => {
+    assert.equal(args.action, 'sync'); assert.equal(f.ji.workerState, 'yielded');
+    return { synced: true, setupJobId: 'pending-setup' };
+  };
+  const res = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(res.writesAllowed, false); assert.equal(res.synced.setupJobId, 'pending-setup');
+  assert.equal(f.ji.workerState, 'yielded'); assert.match(res.hint, /Dependencies changed/);
 });

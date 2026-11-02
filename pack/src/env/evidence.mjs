@@ -15,9 +15,8 @@ export function recordEvidence(teamWork, key, entry) {
   return entry;
 }
 
-// Evidence final chụp trên source cũ vẫn dùng được khi môi trường như cũ và `unchangedForItem(entry)` xác nhận mọi
-// file đổi từ lúc chụp đều do sync kéo từ main về, không phải file của item: như integrate không cần sync
-// (4D895OVI: BUG-01 chụp lại 4 ảnh sau khi sync lấy bản sửa baseline của BUG-02).
+// Evidence final chụp trên source cũ chỉ dùng lại khi môi trường như cũ và `unchangedForItem(entry)` xác nhận sync
+// chỉ mang về test/tài liệu không chạy trong app. File runtime của item khác cũng có thể làm ảnh không còn đúng.
 export async function evidenceProblems(teamWork, key, matchRoot, snapshot, { unchangedForItem = null } = {}) {
   const file = manifestFile(teamWork, key);
   if (!existsSync(file)) return []; // Artifact cũ vẫn được reviewer kiểm nội dung.

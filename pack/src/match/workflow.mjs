@@ -163,13 +163,20 @@ export class Workflow {
     if (Array.isArray(template?.testResults) && template.testResults.length) ji.requiredScenarios = new Set(template.testResults.map(x => x.id)).size;
     const status = submitted.status;
     const req = requirementsCheck(r.itemRequirements(key), artifact.value.requirements, status);
-    // Ảnh final chụp trước sync: mọi file đổi từ lúc chụp phải là file main mang về (entry.base → base hiện tại) và
-    // item không sửa file đó; worker tự sửa hay hoàn tác file sau khi chụp thì vẫn phải chụp lại.
+    // Chỉ miễn chụp lại khi sync mang về test/tài liệu không chạy trong app. File runtime của item khác vẫn có thể
+    // đổi layout hoặc dữ liệu trên màn hình; không suy ra độc lập chỉ từ quyền sở hữu file.
     const unchangedForItem = async entry => {
       if (!entry.base || !ji.worktreeBase || !r.liveWorktree(key)) return false;
       const [moved, fromMain, own] = await Promise.all([this.changedPaths(entry.source, snapshot.source),
         this.changedPaths(entry.base, ji.worktreeBase), this.changedPaths(ji.worktreeBase, snapshot.source)]);
-      return moved.every(p => fromMain.includes(p) && !own.includes(p));
+      const folder = r.session.descriptor.matchId;
+      const nonRuntime = p => {
+        const path = p.slice(folder.length + 1);
+        return p.startsWith(`${folder}/`) && (/^(?:src\/)?tests\//.test(path)
+          || /^docs\/.*\.(?:md|txt|rst)$/.test(path)
+          || /^(?:src\/)?(?:README|DECISIONS|BUILD_REPORT|BUILD_STATE)\.md$/.test(path));
+      };
+      return moved.every(p => nonRuntime(p) && fromMain.includes(p) && !own.includes(p));
     };
     const evidence = await evidenceProblems(r.session.paths.teamWork, key, paths.matchRoot, snapshot, { unchangedForItem });
     const review = reviewFile ? this.artifact(reviewFile, 'review').value : old?.review?.value;

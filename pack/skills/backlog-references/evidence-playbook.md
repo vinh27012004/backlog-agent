@@ -9,8 +9,9 @@ hint and wait for resume.
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
 outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale when your own files or the
-environment change after capture; a sync that only brings other items' files keeps them valid. Reviewer still inspects
-their content. A manifest proves provenance, not correct UI.
+environment change after capture; runtime changes synced from other items also invalidate them. Only syncs limited to
+tests and non-runtime documentation keep them valid. Reviewer still inspects their content. A manifest proves
+provenance, not correct UI.
 
 ## 0. Evidence the item text asks for
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
@@ -94,8 +95,8 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 - The cover also hides what your screenshot must show: when the scenario names no viewport, capture at a width below
   the app's desktop breakpoint (e.g. 1023 or 767 px, where the sidebar collapses) so the content is visible, and say so.
 - Never copy another item's files and never wait or yield for another item's fix (Practice 4D895OVI: CR-01 and CR-02
-  yielded for BUG-01's layout fix, which never reached main, and neither was submitted). Capture now; if the fix
-  lands later, publish still integrates your item and its evidence stays valid.
+  yielded for BUG-01's layout fix, which never reached main, and neither was submitted). Capture now; if you later
+  sync runtime changes, recapture final evidence from that updated worktree before handoff.
 
 ## 5. A failing server (500, timeout, offline, slow)
 Add a `route` step before the action that sends the request, e.g. `{action: "route", url: "/api/invoices/export",

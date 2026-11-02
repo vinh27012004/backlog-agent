@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
 import { captureEvidence, evidencePath, findBrowser } from '../../pack/src/env/browser.mjs';
-import { install, McpClient, tempDir } from './support.mjs';
+import { install, McpClient, sh, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
 
@@ -373,6 +373,14 @@ test('evidence paths may be relative to context.matchRoot', () => {
 
 test('screenshot waits for pending requests and loading indicators; assertText waits for the text', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-settle-'), 'BUN'), root = join(tw, 'matches', 'M1', 'M1'); mkdirSync(root, { recursive: true });
+  const checkout = join(tw, 'matches', 'M1');
+  sh('git', ['init', '-q'], checkout);
+  sh('git', ['config', 'user.name', 'test'], checkout);
+  sh('git', ['config', 'user.email', 'test@example.test'], checkout);
+  mkdirSync(join(root, 'src'));
+  writeFileSync(join(root, 'src', 'app.js'), 'export const app = true;\n');
+  sh('git', ['add', 'M1'], checkout);
+  sh('git', ['commit', '-q', '-m', 'browser fixture'], checkout);
   const server = createServer((req, res) => {
     if (req.url === '/api/stats') return setTimeout(() => res.end('16'), 1500);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

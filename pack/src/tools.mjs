@@ -184,7 +184,7 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key.'), kind: { type: 'string', enum: ['review', 'hypothesis'] }, purpose: { type: 'string', enum: ['solver', 'hypothesis', 'arbitration'] }, resultFile: str('Absolute results JSON path.'), candidateId: str('Current candidateId from preflight.') }, ['backlogItemKey', 'kind', 'resultFile', 'candidateId']), readOnly: true, handler: a => this.workflow.handoff(a) },
       { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded, message root once and wait for resume. resume grants writes again; REVIEW_PENDING while the current candidate is under review: hand off the review first. Root never syncs a writing worker.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.'),
-          abandonReview: bool('resume only: drop the unfinished review of the current candidate (reviewer gone); it must be reviewed again.') }, ['backlogItemKey', 'phase']), readOnly: true, handler: a => a.phase === 'ready_for_evidence' ? this.workflow.evidenceCheckpoint(a) : this.workflow.checkpoint(a) },
+          abandonReview: bool('resume only: drop the unfinished review of the current candidate (reviewer gone); it must be reviewed again.') }, ['backlogItemKey', 'phase']), readOnly: true, handler: a => this.workerCheckpoint(a) },
       { name: 'next_actions', description: 'GAME: ordered actions for new items, preflight, repair, gate, review, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
         inputSchema: obj({}), readOnly: true, handler: () => { this.session.require('GAME'); return this.workflow.actions(); } },
       { name: 'publish_item', description: 'GAME: serialized recoverable job: verification, integrate, main gate if content changed, push and idempotent submit. Requires candidateId, independent review/solver and gate. Stops at errors; job_status gives checkpoint. A remote rebase always stops for a fresh gate.',
@@ -296,10 +296,16 @@ export class Runtime {
 
   // Lời gọi từ helper của subagent. Danh sách đóng, kiểm ở đây chứ không tin phía gửi: không Game Master, không git
   // publish, không progress; run_gate chỉ từ file fix-result trên worktree; chờ job không trả sớm vì PI (việc của root).
+  workerCheckpoint(args) {
+    return args.phase === 'ready_for_evidence'
+      ? this.workflow.evidenceCheckpoint(args)
+      : this.workflow.checkpoint(args);
+  }
+
   proxyCall(name, args) {
     switch (name) {
       case 'read_item': return this.readItem(args);
-      case 'worker_checkpoint': return this.workflow.checkpoint(args);
+      case 'worker_checkpoint': return this.workerCheckpoint(args);
       case 'job_status': return this.jobStatus(args, { pi: false });
       case 'worktree':
         if (args.action !== 'status') fail('PROXY_DENIED', 'subagents may only call worktree status');
