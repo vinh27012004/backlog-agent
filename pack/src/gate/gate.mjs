@@ -490,7 +490,7 @@ const fallbackSignature = (kind, text, root) => {
   return first ? `${kind}:${first}` : kind;
 };
 
-// requireReproduction (PI, gate trên worktree): bằng chứng nguyên nhân gốc là một test mới fail trên code chưa sửa và pass
+// requireReproduction (BUG/PI, gate trên worktree): bằng chứng nguyên nhân gốc là một test mới fail trên code chưa sửa và pass
 // sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
 // root còn publish được theo luật cơ hội cuối.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
@@ -702,14 +702,13 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   } else if (requireReproduction) {
     const fb = checks.find(x => x.name === 'fail-before');
     let problem = null;
-    let warning = null;
-    if (!c.test_one) warning = 'no test_one command for this stack: reproduction not checked';
-    else if (!targets.length) problem = ['none', 'no test declared in tests_added: a PI needs a new test that fails on the unfixed code and passes with the fix'];
+    if (!c.test_one) problem = ['unverified', 'no test_one command for this stack: reproduction not checked'];
+    else if (!targets.length) problem = ['none', 'no test declared in tests_added: a BUG/PI needs a new test that fails on the unfixed code and passes with the fix'];
     else if (fb?.status === 'skipped' && /no new test/.test(fb.reason ?? '')) problem = ['existing-only', 'only existing tests were declared: add a new test that fails on the unfixed code'];
-    else if (fb?.status === 'skipped') warning = `fail-before could not run (${fb.reason}): reproduction not checked`;
+    else if (fb?.status === 'skipped') problem = ['unverified', `fail-before could not run (${fb.reason}): reproduction not checked`];
     else if (fb?.reproduced === false) problem = ['passes-before', `every new test also passes on the unfixed code, so none reproduces the incident: ${(fb.warnings ?? []).join('; ')}`];
-    checks.push({ name: 'reproduction', status: problem ? 'fail' : warning ? 'warn' : 'ok', ...(problem ? { problems: [problem[1]] } : {}),
-      ...(warning ? { warnings: [warning] } : {}) });
+    else if (fb?.reproduced !== true) problem = ['unverified', 'no successful fail-before proof: reproduction not checked'];
+    checks.push({ name: 'reproduction', status: problem ? 'fail' : 'ok', ...(problem ? { problems: [problem[1]] } : {}) });
     if (problem) return done('not_reproduced', problem[1], `not_reproduced:${problem[0]}`);
   }
 

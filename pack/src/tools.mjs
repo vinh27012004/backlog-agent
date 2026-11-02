@@ -1182,7 +1182,7 @@ export class Runtime {
       const profile = detectProfile(matchRoot);
       const snapshot = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
       const policy = digest({ testsAdded, needsDependency, testChange, base, baseline: j.data.preparation?.baseline,
-        acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [], reproduction: inWorktree && typeOf(key) === 'PI' });
+        acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [], reproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)), reproductionPolicy: 2 });
       const proof = ji.codeGate;
       let cachedCode = proof && proof.policy === policy && JSON.stringify(proof.snapshot) === JSON.stringify(snapshot)
         && !testsAdded.some(t => /(^|[\\/])answers[\\/]/.test(t)) ? proof.result : null;
@@ -1196,7 +1196,7 @@ export class Runtime {
         profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode,
         requirements: ledger === undefined ? [] : this.itemRequirements(key), ledger, needsDependency,
         testsAdded, allowTestChange: testChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
-        probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && typeOf(key) === 'PI',
+        probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)),
         logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
       const after = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
       if (ji.candidate && JSON.stringify(snapshot) !== JSON.stringify(after)) fail('GATE_STALE', 'source/environment changed while gate was running; checkpoint a new candidate');

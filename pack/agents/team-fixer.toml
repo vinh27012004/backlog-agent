@@ -11,7 +11,10 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    BUG: read .agents/skills/backlog-references/bug-patterns.md.
    PI: read .agents/skills/backlog-references/pi-triage.md; record every hypothesis and deciding evidence.
 3. Run the narrowest meaningful tests from project_profile. List tests_added exactly as test_one targets.
-   A BUG/PI test should fail on unfixed code and pass after the fix. Add assertions for expected behaviour,
+   A BUG/PI test must fail on unfixed code for the reported reason before production edits and pass after the fix.
+   Record expected/actual or the error signature and the observed fail-before result in verification.
+   If reproduction is unavailable, return partial with attempts and remaining hypotheses; do not guess a fix.
+   Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself. Full helper gate runs after handoff.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
    Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:

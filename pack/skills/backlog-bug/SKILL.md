@@ -30,8 +30,9 @@ MVS scenario that must pass, and they check that nothing else broke.
 - Run only that test (see `test_one` in the project profile). Confirm it fails with the signature.
   If it passes on the unfixed code, it checks the wrong behaviour: fix the test before you touch production
   code (the gate rejects a test that passes on the unfixed code).
-- Cannot reproduce in ~1/3 of your time? Record what you tried in `verification`, fix the most likely
-  cause from the evidence, lower `confidence`.
+- Cannot reproduce in ~1/3 of your time? Stop before changing production code. Return `partial`, record
+  what you tried and the remaining hypotheses in `verification`, and ask root for the next investigation.
+  Missing test commands or an unavailable probe mean unverified reproduction, never a passing proof.
 
 ## 4. Root cause, then fix
 - Write the root cause in one or two sentences: which code, which condition, why wrong.

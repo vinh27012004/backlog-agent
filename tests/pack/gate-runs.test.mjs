@@ -227,7 +227,7 @@ test('fail-before runs the new tests on the unfixed code in the probe worktree',
   assert.doesNotMatch(readFileSync(join(probe.matchRoot, 'src', 'tests', 'money.test.js'), 'utf8'), /zero again/);
 });
 
-test('a PI needs a new test that fails on the unfixed code; without one the gate keeps the tree for the last chance', { timeout: 180_000 }, async () => {
+test('BUG/PI reproduction requires a new failing test and fails closed when the probe is unavailable', { timeout: 180_000 }, async () => {
   const r = appRepo();
   writeFileSync(join(r.root, '.runs'), '5');   // flaky test đã "ấm", không làm nhiễu
   writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
@@ -258,9 +258,13 @@ test('a PI needs a new test that fails on the unfixed code; without one the gate
   assert.equal(ok.checks.find(c => c.name === 'reproduction').status, 'ok');
   assert.equal(ok.checks.find(c => c.name === 'fail-before').status, 'ok', 'the edge-case test that also passes before is a control, not a warning');
 
-  // Không phải PI: không có check reproduction.
-  const bug = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });
-  assert.equal(bug.checks.some(c => c.name === 'reproduction'), false);
+  const unavailable = await gate(r, { testsAdded: ['tests/money.test.js'], requireReproduction: true });
+  assert.equal(unavailable.failKind, 'not_reproduced');
+  assert.equal(unavailable.signature, 'not_reproduced:unverified');
+
+  // CR/TASK do not request the mandatory reproduction policy.
+  const optional = await gate(r, { probe, testsAdded: ['tests/money.test.js'] });
+  assert.equal(optional.checks.some(c => c.name === 'reproduction'), false);
 });
 
 // FMC0ZXFC PI-01: đề cấm sửa source, chỉ nộp báo cáo; gate cũ fail not_reproduced, guardian chặn submit (160 điểm).

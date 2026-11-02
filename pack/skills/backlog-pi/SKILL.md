@@ -52,7 +52,8 @@ reproduction. Use `.agents/skills/backlog-references/pi-triage.md` to map sympto
 
 ## Rules
 - The gate fails a PI whose declared tests include no new test that fails on the unfixed code (`not_reproduced`),
-  unless the stack has no test runner.
+  except report-only items with no source changes. Missing test commands or an unavailable probe block
+  reproduction verification; return partial with the limitation, never claim a confirmed cause.
 - Not acceptable: catching and ignoring the error, a null check that hides missing data, special-casing the
   reported input, changing a test's expectation.
 - A configuration or data-handling fix is fine if that is the root cause; say so in `root_cause`.

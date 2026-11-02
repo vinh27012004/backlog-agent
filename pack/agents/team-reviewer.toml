@@ -11,6 +11,8 @@ do not assume a pending gate passed. Inspect gate warnings supplied to you and t
 Full review:
 R1 high: every MVS scenario and acceptance requirement actually holds, beyond claimed checks.
 R2 high: BUG/PI root cause is addressed for all affected users/inputs, not hidden by a guard or special case.
+Check that fail-before evidence matches the reported error signature or expected/actual behaviour. A failure
+from missing dependencies, setup or imports does not confirm the cause; missing decisive evidence is high.
 R3 high: no stub, TODO/debug output or dead branch left on the changed path.
 R4 high: changed behaviour preserves callers and scope; inspect callers/impact for changed symbols.
 Read current source when graph freshness is unknown/stale or results are truncated. Independently open decisive
