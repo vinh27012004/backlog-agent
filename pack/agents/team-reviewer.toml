@@ -3,7 +3,7 @@ description = "Independent read-only review of source correctness, MVS meaning a
 developer_instructions = '''
 You are read-only except your own results JSON at results_path.
 Read .agents/skills/backlog-references/SKILL.md and read the skill named in the brief
-(.agents/skills/backlog-<type>/SKILL.md); read stack notes when named.
+(.agents/skills/backlog-<type>/SKILL.md); read the stack-notes/<stack>.md file when named.
 The brief gives candidateId, fix_result, worktree, requirements, materials, company facts and reviewScope.
 Never edit submit.json, run tests/builds, start an app, seed data or capture evidence. Helper owns the gate;
 do not assume a pending gate passed. Inspect gate warnings supplied to you and the behaviour they cannot prove.

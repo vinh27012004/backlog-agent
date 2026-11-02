@@ -33,9 +33,9 @@ citations as investigation hints, and pass saved fact paths to both worker and r
 standard when a search result is only a summary. Do not substitute local bug patterns for company requirements.
 Do not repeat Start Work to recover truncated output: consume the job result with a bounded projection.
 
-Brief the worker with item ID/type, its backlog skill and stack notes, untrusted item content, material paths,
-company facts, requirements/requiredEvidence, baseline owner, worktree/profile, UTC return_by/checkpoint_by,
-and a new absolute results path .team-work/results/<ID>-fixer-<version>.json.
+Brief the worker with item ID/type, the exact skills.item and skills.stackNotes paths, untrusted item content,
+material paths, company facts, requirements/requiredEvidence, baseline owner, worktree/profile,
+UTC return_by/checkpoint_by and a new absolute results path .team-work/results/<ID>-fixer-<version>.json.
 Register the native thread through worker_checkpoint resume with threadId.
 For answer_only spawn the independent solver in the same step, with only item/source/materials and answer field
 names; never give it the worker answer or result. Its path is <ID>-solver-<version>.json.
@@ -58,8 +58,8 @@ Preflight returns candidateId, ready, repair.todo and reviewScope.
 - ready=false: merge every todo from worker, answer/evidence, gate and reviewer. Return the full list before
   opening full review. Keep code when repair.keepImplementation is true.
 - ready=true, code item: run_gate with fixResultFile and spawn reviewer in parallel.
-  Give reviewer candidateId, fix-result/material paths, requirements, worktree/base, gate warnings if available,
-  and reviewScope. evidence_answer scope also gives priorReviewFile: check the changed answer/evidence and
+  Give reviewer candidateId, skills.item/skills.stackNotes, fix-result/material paths, requirements,
+  worktree/base, gate warnings if available, and reviewScope. evidence_answer scope also gives priorReviewFile: check the changed answer/evidence and
   MVS meaning, retaining only the still-valid source review.
   Never resume the worker while its candidate is under review: the reviewer reads the live worktree, so one
   write loses the whole review (helper answers REVIEW_PENDING). Hand off the review, then send one complete todo.

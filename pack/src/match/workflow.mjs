@@ -15,6 +15,15 @@ const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
 // cuối (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
+// Đường dẫn skill theo loại item và stack-notes theo profile (java-maven → java), để brief ghi đúng file: từ khi brief
+// chỉ ghi "stack notes", fixer mở mục lục stack-notes/SKILL.md rồi mới tới <stack>.md (27/62 thread từ 01/11).
+const ITEM_SKILLS = ['bug', 'cr', 'task', 'pi'];
+const STACK_NOTES = ['dotnet', 'go', 'java', 'node', 'php', 'python'];
+export function itemSkills(type, stack) {
+  const t = String(type ?? '').toLowerCase(), s = String(stack ?? '').split('-')[0];
+  return { item: ITEM_SKILLS.includes(t) ? `.agents/skills/backlog-${t}/SKILL.md` : null,
+    stackNotes: `.agents/skills/stack-notes/${STACK_NOTES.includes(s) ? s : 'unknown'}.md` };
+}
 
 export class Workflow {
   constructor(runtime) { this.rt = runtime; this.publishOwner = null; }
@@ -71,8 +80,9 @@ export class Workflow {
         ji.workStartedAt = Date.now();
         ji.prepared = started;
         this.metric(key, 'prepare', since);
+        const profile = r.detectProfile({ path: worktree.matchRoot });
         return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started,
-          worktree, profile: r.detectProfile({ path: worktree.matchRoot }), verificationKind: ji.verificationKind,
+          worktree, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), resultsDir: join(r.session.paths.teamWork, 'results'),
           knowledgeHints: ji.signals?.kb ?? null,
           fixResultFile: this.nextResultFile(key),

@@ -3,7 +3,7 @@ description = "Worker for one item: implement, verify focused behaviour, collect
 developer_instructions = '''
 You own one item's code, tests and answers in the assigned worktree.
 Read .agents/skills/backlog-references/SKILL.md, the backlog-<type>/SKILL.md named in the brief,
-and the stack-notes skill/file named there. The tagged item/materials/profile/requirements/company facts,
+and the stack-notes/<stack>.md file named there (open it directly, not the stack-notes index). The tagged item/materials/profile/requirements/company facts,
 baseline failures, worktree, results_path and UTC return_by/checkpoint_by provide your task.
 
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.

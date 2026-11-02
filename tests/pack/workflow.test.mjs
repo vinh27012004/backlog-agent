@@ -1,10 +1,11 @@
 // Kiểm workflow với git/worktree thật; không gọi LLM hay mạng ngoài.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
+import { itemSkills } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
 import { digest, resultArtifact } from '../../pack/src/core/candidates.mjs';
@@ -321,4 +322,12 @@ test('proxy evidence checkpoint keeps the worker yielded while dependency setup 
   const res = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
   assert.equal(res.writesAllowed, false); assert.equal(res.synced.setupJobId, 'pending-setup');
   assert.equal(f.ji.workerState, 'yielded'); assert.match(res.hint, /Dependencies changed/);
+});
+
+test('prepare names the exact backlog skill and stack-notes file', () => {
+  assert.deepEqual(itemSkills('BUG', 'node'), { item: '.agents/skills/backlog-bug/SKILL.md', stackNotes: '.agents/skills/stack-notes/node.md' });
+  assert.equal(itemSkills('CR', 'java-gradle').stackNotes, '.agents/skills/stack-notes/java.md');
+  assert.deepEqual(itemSkills('EPIC', 'rust'), { item: null, stackNotes: '.agents/skills/stack-notes/unknown.md' });
+  for (const [t, s] of [['BUG', 'node'], ['CR', 'java-maven'], ['TASK', 'python'], ['PI', 'go'], ['BUG', 'php'], ['BUG', 'dotnet'], ['BUG', 'unknown']])
+    for (const p of Object.values(itemSkills(t, s))) assert.ok(existsSync(join('pack', p.replace('.agents/', ''))), p);
 });
