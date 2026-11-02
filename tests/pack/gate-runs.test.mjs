@@ -1,6 +1,6 @@
 // Gate chạy test thật (mục 5, 7, 9, 10): runner giả nhỏ ghi báo cáo cùng dạng JSON với vitest, repo git tạm, probe thật.
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
@@ -135,6 +135,25 @@ tick();\n`);
   assert.equal(broken.detail, 'build failed');
   assert.equal(broken.regression, null, 'test results of a failed build are dropped, as if they never ran');
   assert.equal(broken.checks.some(c => c.name === 'regression'), false);
+});
+
+// NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app evidence vừa build xong.
+test('a gate given a prebuilt build of the same source runs the tests without building', { timeout: 60_000 }, async () => {
+  const r = appRepo();
+  writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
+  writeFileSync(join(r.root, 'M1', 'answers', 'BUG-09', 'submit.json'), '{"status":"DONE"}');
+  const logs = join(r.root, '.logs'), counter = join(logs, 'builds.txt');
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(logs, 'build.cjs'), `require('fs').appendFileSync(${JSON.stringify(counter)}, 'x');\n`);
+  const profile = { ...r.profile, parallelBuild: true, commands: { ...r.profile.commands, build: `node "${join(logs, 'build.cjs')}"` } };
+  const reused = await gate(r, { profile, prebuilt: { by: 'app', at: '2026-11-02T10:00:00.000Z' } });
+  assert.equal(reused.passed, true, JSON.stringify(reused.checks));
+  assert.deepEqual(reused.checks.find(c => c.name === 'build'), { name: 'build', status: 'ok', seconds: 0, reused: 'app' });
+  assert.equal(existsSync(counter), false, 'no build ran');
+  assert.equal(reused.regression.total, 3, 'the tests still ran');
+  const built = await gate(r, { profile });
+  assert.equal(built.passed, true, JSON.stringify(built.checks));
+  assert.equal(readFileSync(counter, 'utf8'), 'x');
 });
 
 test('parallelBuild only for a node build that the test script does not depend on', () => {

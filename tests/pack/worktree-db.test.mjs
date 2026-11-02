@@ -4,9 +4,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { appDataLock } from '../../pack/src/env/datalock.mjs';
-import { dbNameOf, dedicatedAppDatabase, dropWorktreeDatabases, worktreeEnvText } from '../../pack/src/env/environment.mjs';
+import { dbNameOf, dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, worktreeEnvText } from '../../pack/src/env/environment.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
-import { pnpmModulesText } from '../../pack/src/core/candidates.mjs';
+import { environmentFingerprint, pnpmModulesText } from '../../pack/src/core/candidates.mjs';
 import { tempDir } from './support.mjs';
 
 const MAIN = [
@@ -109,4 +109,26 @@ test('pnpm rewriting its modules file does not change the environment fingerprin
   assert.notEqual(pnpmModulesText(JSON.stringify(json)), pnpmModulesText(JSON.stringify({ ...json, skipped: ['b'] })), 'real dependency change');
   const yaml = 'layoutVersion: 5\nprunedAt: Mon, 02 Nov 2026 03:19:05 GMT\nignoredBuilds:\n  - esbuild\nskipped: []\n';
   assert.equal(pnpmModulesText(yaml), pnpmModulesText('layoutVersion: 5\nprunedAt: Tue, 03 Nov 2026 01:00:00 GMT\nskipped: []\n'));
+});
+
+// NBDB5U0O: PI-01, TASK-03, TASK-04 cùng source tree mà mỗi item một gate đầy đủ (52–69 s): .env của worktree có tên
+// database riêng theo trận/item, .modules.yaml ghi virtualStoreDir tuyệt đối, nên proof của checkout khác không khớp.
+test('main and worktree share an environment fingerprint when only helper database names and virtualStoreDir differ', () => {
+  const dir = tempDir('mtm-envfp-');
+  const main = join(dir, 'main', 'NBDB5U0O'), wt = join(dir, 'wt', 'TASK-03', 'NBDB5U0O');
+  for (const root of [main, wt]) {
+    mkdirSync(join(root, 'src', 'node_modules'), { recursive: true });
+    writeFileSync(join(root, 'src', 'package.json'), '{}');
+    writeFileSync(join(root, 'src', 'node_modules', '.modules.yaml'), JSON.stringify({ layoutVersion: 5, nodeLinker: 'isolated',
+      virtualStoreDir: join(root, 'src', 'node_modules', '.pnpm'), skipped: [] }));
+  }
+  const fp = root => environmentFingerprint(root, detectProfile(root));
+  const scoped = text => worktreeEnvText(text, { matchName: 'NBDB5U0O', key: 'TASK-03', appDatabase: true });
+  writeFileSync(join(main, 'src', '.env'), MAIN);
+  writeFileSync(join(wt, 'src', '.env'), scoped(MAIN));
+  assert.equal(fp(wt), fp(main));
+  writeFileSync(join(wt, 'src', '.env'), scoped(MAIN.replace('5433/freelanceos"', '5433/billing"')));
+  assert.notEqual(fp(wt), fp(main), 'another base database still counts');
+  writeFileSync(join(wt, 'src', '.env'), `${scoped(MAIN)}\nFEATURE_FLAG="1"\n`);
+  assert.notEqual(fp(wt), fp(main), 'any other .env change still counts');
 });

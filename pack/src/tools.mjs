@@ -1,7 +1,7 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
-import { app, readState as appState, stopApp } from './env/app.mjs';
+import { app, forgetBuild, readState as appState, rememberBuild, reusableBuild, stopApp } from './env/app.mjs';
 import { captureEvidence } from './env/browser.mjs';
 import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
 import { CompanyTools } from './match/company.mjs';
@@ -222,11 +222,11 @@ export class Runtime {
           browserProfile: str('Optional name to reuse cookies (e.g. "solova-admin").'), timeoutMs: num('Total budget, max 50000.'),
           context: obj({ backlogItemKey: str('Item key.'), matchRoot: str('Absolute worktree matchRoot.'), scenario: str('Scenario or requirement ID.'), appMode: { type: 'string', enum: ['dev', 'production'] }, phase: { type: 'string', enum: ['before_fix', 'final'] } }, ['backlogItemKey', 'matchRoot', 'scenario', 'appMode', 'phase']) }, ['steps']),
         handler: a => this.captureEvidence(a) },
-      { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version (mode "dev": runs the dev script instead, no build, only when a scenario needs the development app) and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
+      { name: 'app', description: 'Any agent: run the app of a worktree for evidence. start builds the production version, or reuses the build already in the folder when source and environment are unchanged since that build (an earlier start or the gate made it; the result shows reusedBuild) (mode "dev": runs the dev script instead, no build, only when a scenario needs the development app) and starts it on a free localhost port (3100+), detached, with its log in .team-work/logs/<ID>-app.log, then waits up to waitSeconds (max 50) until it answers HTTP: state ready gives the url for capture_evidence; starting means call status again; failed gives the log tail. start again after changing code (it stops the old one first); build:false only right after you built yourself. stop when your evidence is written (worktree remove also stops it). Node apps only; other stacks return UNSUPPORTED_APP.',
         inputSchema: obj({ action: { type: 'string', enum: ['start', 'status', 'stop'] }, backlogItemKey: str('Item key.'),
           matchRoot: str('start: absolute matchRoot of the worktree (from the brief).'),
           mode: { type: 'string', enum: ['production', 'dev'], description: 'start: production (default) or dev.' },
-          build: bool('start: build first (default true; ignored for dev).'),
+          build: bool('start: build first (default true; an unchanged build is reused; ignored for dev).'),
           waitSeconds: num('start/status: seconds to wait for the app to answer (max 50, default 50).') }, ['action', 'backlogItemKey']),
         handler: a => app({ teamWorkspace: this.teamWorkspace, ...a }) },
       // readOnly: chỉ ghi file khoá nội bộ của helper (như journal), không đổi code, git, trận hay Game Master; agent gọi
@@ -915,6 +915,7 @@ export class Runtime {
         if (process.platform === 'win32') await git(['config', 'core.longpaths', 'true'], { cwd: checkoutRoot, allowFail: true });
         await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
         await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
+        forgetBuild(this.teamWorkspace, detectProfile(wt.matchRoot).root);   // worktree mới chưa có bản build nào
         ji.worktreeBase = base;
         ji.mainEnvironment = environmentFingerprint(matchRoot, detectProfile(matchRoot));
       }
@@ -1192,13 +1193,21 @@ export class Runtime {
         if (shared) cachedCode = { ...shared.result, testsAdded: null,
           checks: shared.result.checks.filter(c => ['typecheck', 'build', 'regression', 'tests-kept'].includes(c.name)) };
       }
+      // Thư mục app đã có bản build thành công của đúng snapshot (app evidence vừa build, hay gate trước): không build lại,
+      // chỉ khi test không đọc gì build sinh ra (parallelBuild; `dotnet test --no-build`, script test tự build thì có).
+      // Gate sắp tự build thì bản ghi cũ hết đúng; build xong mà source không đổi thì ghi bản của gate cho app start sau.
+      const buildRoot = !cachedCode && profile.commands?.build ? profile.root : null;
+      const prebuilt = buildRoot && profile.parallelBuild ? reusableBuild(this.teamWorkspace, buildRoot, snapshot, { output: false }) : null;
+      if (buildRoot && !prebuilt) forgetBuild(this.teamWorkspace, buildRoot);
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
-        profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode,
+        profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode, prebuilt,
         requirements: ledger === undefined ? [] : this.itemRequirements(key), ledger, needsDependency,
         testsAdded, allowTestChange: testChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
         probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)),
         logDir: join(teamWork, 'logs'), limits: GATE_LIMITS });
       const after = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
+      if (buildRoot && !prebuilt && result.checks.some(c => c.name === 'build' && c.status === 'ok')
+        && JSON.stringify(snapshot) === JSON.stringify(after)) rememberBuild(this.teamWorkspace, buildRoot, after, 'gate');
       if (ji.candidate && JSON.stringify(snapshot) !== JSON.stringify(after)) fail('GATE_STALE', 'source/environment changed while gate was running; checkpoint a new candidate');
       result.environment = after.environment;
       if (result.codePassed && result.failKind !== 'not_reproduced') ji.codeGate = { snapshot: after, policy, result: structuredClone(result) };

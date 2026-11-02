@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { validateSchema } from './jsonschema.mjs';
 import { contentTree } from './git.mjs';
 import { fail } from './util.mjs';
+import { unscopedDbText } from '../env/environment.mjs';
 
 export const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const schemas = Object.fromEntries(['fix-result', 'review', 'hypothesis'].map(name =>
@@ -30,7 +31,8 @@ export function resultArtifact(dir, file, kind) {
 // pnpm ghi lại node_modules/.modules.yaml ở mỗi lệnh `pnpm run/test/exec` (đổi prunedAt, thêm/bỏ ignoredBuilds) dù
 // dependency y nguyên. Hash cả file thì app vừa start đã "stale" (4D895OVI: EVIDENCE_STALE_APP 4 lần, TASK-03
 // GATE_STALE "main environment changed"). Bỏ các khoá đó trước khi hash; pnpm cũ ghi YAML, pnpm mới ghi JSON.
-const VOLATILE_PNPM = ['prunedAt', 'ignoredBuilds', 'pendingBuilds'];
+// virtualStoreDir là đường dẫn tuyệt đối của từng checkout (khác nhau ở mọi worktree), không phải trạng thái dependency.
+const VOLATILE_PNPM = ['prunedAt', 'ignoredBuilds', 'pendingBuilds', 'virtualStoreDir'];
 export function pnpmModulesText(text) {
   try {
     const value = JSON.parse(text);
@@ -48,7 +50,9 @@ export function pnpmModulesText(text) {
   return out.join('\n');
 }
 
-// Bao gồm cả .env bị gitignore, marker dependency và phiên bản runtime; chỉ hash rời khỏi helper.
+// Bao gồm cả .env bị gitignore, marker dependency và phiên bản runtime; chỉ hash rời khỏi helper. Phần riêng của từng
+// checkout (hậu tố database theo trận/item, virtualStoreDir) không tính: cùng source ở checkout chính và ở worktree cho
+// cùng dấu vân tay, nên proof dùng chung cho answer_only (tools.mjs, runGate) khớp được giữa các checkout.
 export function environmentFingerprint(matchRoot, profile, epoch = 0) {
   const roots = [...new Set([matchRoot, profile.root].filter(Boolean))];
   const inputs = [];
@@ -58,7 +62,9 @@ export function environmentFingerprint(matchRoot, profile, epoch = 0) {
       const file = join(root, name);
       if (!existsSync(file) || !statSync(file).isFile()) continue;
       const raw = readFileSync(file);
-      inputs.push([relative(matchRoot, file), digest(name.endsWith('.modules.yaml') ? pnpmModulesText(raw.toString('utf8')) : raw)]);
+      const text = name.endsWith('.modules.yaml') ? pnpmModulesText(raw.toString('utf8'))
+        : name.startsWith('.env') ? unscopedDbText(raw.toString('utf8'), basename(matchRoot)) : raw;
+      inputs.push([relative(matchRoot, file), digest(text)]);
     }
   }
   return digest({ inputs, node: process.version, platform: process.platform, arch: process.arch,

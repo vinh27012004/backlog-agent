@@ -108,6 +108,17 @@ export const dbNameOf = (text, name = 'DATABASE_URL') => text.match(dbUrlLine(na
 
 export const dbSuffix = name => `_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
+// Bỏ hậu tố trận/item mà helper gắn vào tên database (`_<trận>`, `_<trận>_<item>`) ở DATABASE_URL và TEST_DATABASE_URL,
+// cho dấu vân tay môi trường: checkout chính và mỗi worktree chỉ khác nhau ở phần này (NBDB5U0O: PI-01, TASK-03, TASK-04
+// cùng source tree mà mỗi item vẫn chạy một gate đầy đủ 52–69 s vì không khớp proof nào). Tên database gốc vẫn được tính.
+export function unscopedDbText(text, matchName) {
+  const match = dbSuffix(matchName);
+  return ['DATABASE_URL', 'TEST_DATABASE_URL'].reduce((out, name) => out.replace(dbUrlLine(name), (line, pre, db) => {
+    const at = db.lastIndexOf(match);
+    return at > 0 && /^(_[a-z0-9]+)?$/.test(db.slice(at + match.length)) ? `${pre}${db.slice(0, at)}` : line;
+  }), text);
+}
+
 // .env của worktree chép từ checkout chính: TEST_DATABASE_URL luôn có hậu tố trận + item; DATABASE_URL cũng vậy khi
 // `appDatabase` (stack tự migrate được, xem prepareWorktreeEnv). Không còn chung database dev: seed của BTC xoá rồi tạo
 // lại dữ liệu (CR-01 "deletes every invoice"), nên trước đây mọi item phải xếp hàng sau khoá app_data (Practice

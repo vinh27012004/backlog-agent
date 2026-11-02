@@ -31,10 +31,14 @@ từ worker, answer/evidence, gate và review high. Answer/evidence repair thư�
 time box ngắn; code thất bại/đổi giả thuyết/model escalation mới cân nhắc worker mới. Yield trước sync/capture final.
 
 Proof code chỉ tái dùng khi source/test/dependency/config/môi trường/policy khớp. Snapshot loại answers/; environment
-hash env files, marker dependency, runtime/commands và biến build/test liên quan, không xuất secret. Guard/answer/schema/
-evidence/requirements vẫn kiểm lại. Reproduction chưa đạt không trở thành cache pass. Proof chung cho answer_only chỉ
-khi snapshot khớp và diff chỉ thuộc answers item đó. Dịch vụ/DB ngoài có thể đổi mà fingerprint không thấy; khi nghi ngờ
-phải chạy lại gate. Invalidation bảo thủ theo toàn source, chưa dùng dependency graph.
+hash env files, marker dependency, runtime/commands và biến build/test liên quan, không xuất secret. Hậu tố database
+theo trận/item mà helper gắn vào DATABASE_URL/TEST_DATABASE_URL và virtualStoreDir (đường dẫn tuyệt đối) không tính, nên
+checkout chính và worktree cùng source có cùng fingerprint (NBDB5U0O: PI-01, TASK-03, TASK-04 cùng source tree mà vẫn
+chạy ba gate đầy đủ 52–69 s). Guard/answer/schema/evidence/requirements vẫn kiểm lại. Reproduction chưa đạt không trở
+thành cache pass. Proof chung cho answer_only chỉ khi snapshot khớp và diff chỉ thuộc answers item đó. Bản build
+production thành công của đúng snapshot (app evidence hay gate trước) cho gate bỏ bước build khi test không đọc thứ build
+sinh ra (05 §5.10). Dịch vụ/DB ngoài có thể đổi mà fingerprint không thấy; khi nghi ngờ phải chạy lại gate.
+Invalidation bảo thủ theo toàn source, chưa dùng dependency graph.
 
 Verification tách mvs (testResults thật + gate), acceptance (check/requirement có tên + gate), answer_only
 (schema/source, independent derivation/đủ field và code proof/gate). BACKLOG_TESTS đếm kiểm tra được nêu rõ,

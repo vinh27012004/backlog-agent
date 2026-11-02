@@ -4,10 +4,10 @@
 // Trạng thái là file trong team-sdlc-pack/local/apps/ vì helper của subagent là tiến trình khác helper của root;
 // `worktree remove` của root dừng app của item qua file đó.
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { sourceSnapshot } from '../core/candidates.mjs';
+import { digest, sourceSnapshot } from '../core/candidates.mjs';
 import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
 import { childEnv, killTree } from '../core/jobs.mjs';
@@ -27,6 +27,35 @@ const stateFile = (teamWorkspace, key) => join(appsDir(teamWorkspace), `${key}.j
 
 export function readState(teamWorkspace, key) {
   try { return JSON.parse(readFileSync(stateFile(teamWorkspace, key), 'utf8')); } catch { return null; }
+}
+
+// Bản build production gần nhất của một thư mục app: snapshot source/môi trường lúc build và dấu của thư mục build
+// (.next/BUILD_ID của Next.js). Start lại cùng snapshot thì chỉ start (NBDB5U0O: BUG-02 build hai lần đúng một source,
+// ~35 s mỗi lần); gate cùng snapshot coi bước build đã pass (tools.mjs, runGate). Ai build thư mục đó (app, gate) thì ghi.
+const buildsDir = teamWorkspace => join(teamWorkspace, 'team-sdlc-pack', 'local', 'builds');
+const buildFile = (teamWorkspace, root) => join(buildsDir(teamWorkspace),
+  `${digest(process.platform === 'win32' ? resolve(root).toLowerCase() : resolve(root)).slice(0, 24)}.json`);
+const buildMarker = root => { try { return statSync(join(root, '.next', 'BUILD_ID')).mtimeMs; } catch { return null; } };
+
+export function rememberBuild(teamWorkspace, root, snapshot, by) {
+  if (!teamWorkspace || !root || !snapshot) return;
+  writeFileAtomic(buildFile(teamWorkspace, root), JSON.stringify({ root: resolve(root), snapshot, marker: buildMarker(root), by,
+    at: new Date().toISOString() }));
+}
+
+export function forgetBuild(teamWorkspace, root) {
+  if (teamWorkspace && root) rmSync(buildFile(teamWorkspace, root), { force: true });
+}
+
+// `output`: app cần chính bản build đó còn nguyên trong thư mục (dấu build không đổi: không ai build tay hay chạy dev
+// đè lên); gate chỉ cần biết đúng source và môi trường này đã build được.
+export function reusableBuild(teamWorkspace, root, snapshot, { output = true } = {}) {
+  if (!teamWorkspace || !root || !snapshot) return null;
+  let rec;
+  try { rec = JSON.parse(readFileSync(buildFile(teamWorkspace, root), 'utf8')); } catch { return null; }
+  if (JSON.stringify(rec.snapshot) !== JSON.stringify(snapshot)) return null;
+  if (output && (rec.marker ?? null) !== buildMarker(root)) return null;
+  return { by: rec.by, at: rec.at };
 }
 
 function alive(pid) {
@@ -140,27 +169,43 @@ async function settle(teamWorkspace, key, waitSeconds) {
     const s = readState(teamWorkspace, key);
     if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
     if (alive(s.pid) && await responds(s.port) && alive(s.pid)) {
+      if (s.built && !s.recorded) await noteBuild(teamWorkspace, key, s);
       return { state: 'ready', url: `http://localhost:${s.port}`, port: s.port, pid: s.pid, mode: s.mode, log: s.log,
-        ...(s.authEnv ? { authEnv: s.authEnv } : {}),
+        ...(s.reusedBuild ? { reusedBuild: s.reusedBuild } : {}), ...(s.authEnv ? { authEnv: s.authEnv } : {}),
         hint: `Use this url in capture_evidence. Call app stop once your evidence is written.${s.authEnv
           ? ` ${Object.keys(s.authEnv).join('/')} already point at this port for this app: do not edit .env for it.` : ''}` };
     }
     if (!alive(s.pid)) {
       const retries = s.retries ?? 0;
       if (retries < PORT_RETRIES && /EADDRINUSE/.test(sinceLaunch(s))) {
-        await launch(teamWorkspace, key, locate(teamWorkspace, s.matchRoot), s.requestedMode ?? s.mode, false, retries + 1);
+        await launch(teamWorkspace, key, locate(teamWorkspace, s.matchRoot), s.requestedMode ?? s.mode, false, retries + 1,
+          { built: s.built, snapshot: s.snapshot ?? null, reusedBuild: s.reusedBuild });
         continue;
       }
       rmSync(stateFile(teamWorkspace, key), { force: true });
+      // Bản build dùng lại không start được (thư mục build hỏng, build tay dở dang): lần start sau phải build lại.
+      if (s.reusedBuild) forgetBuild(teamWorkspace, s.appRoot);
       return { state: 'failed', log: s.log, tail: tail(s.log),
-        hint: 'The build or the app exited: read the tail, fix the cause, then call app start again.' };
+        hint: s.reusedBuild ? 'The reused build did not start: call app start again, it builds afresh.'
+          : 'The build or the app exited: read the tail, fix the cause, then call app start again.' };
     }
     if (Date.now() >= deadline) {
       return { state: 'starting', port: s.port, pid: s.pid, log: s.log, seconds: Math.round((Date.now() - Date.parse(s.startedAt)) / 1000),
+        ...(s.reusedBuild ? { reusedBuild: s.reusedBuild } : {}),
         hint: 'Still building or starting: call app status with waitSeconds (up to 50).' };
     }
     await sleep(1000);
   }
+}
+
+// Build vừa xong và app đã trả lời: ghi bản build cho lần start sau và cho gate. Source hay môi trường đổi giữa lúc start
+// và lúc này thì không ghi, vì không biết bản build khớp snapshot nào. Mỗi lần start xét một lần.
+async function noteBuild(teamWorkspace, key, s) {
+  const profile = detectProfile(s.matchRoot);
+  const now = s.snapshot ? await sourceSnapshot(dirname(s.matchRoot), basename(s.matchRoot), profile).catch(() => null) : null;
+  if (now && JSON.stringify(now) === JSON.stringify(s.snapshot)) rememberBuild(teamWorkspace, s.appRoot ?? profile.root, s.snapshot, 'app');
+  const current = readState(teamWorkspace, key);
+  if (current?.pid === s.pid) writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ ...current, recorded: true }));
 }
 
 export function stopApp(teamWorkspace, key) {
@@ -181,18 +226,27 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
   if (!['production', 'dev'].includes(mode)) fail('INVALID_ARGUMENT', 'mode');
 
   const where = locate(teamWorkspace, matchRoot);
-  stopApp(teamWorkspace, key);   // start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là bản mới
+  // Start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là tiến trình mới; build lại khi source hay môi
+  // trường khác bản build còn trong thư mục.
+  stopApp(teamWorkspace, key);
   await launch(teamWorkspace, key, where, mode, build, 0);
   return settle(teamWorkspace, key, waitSeconds);
 }
 
-// Lần thử lại vì port (retries > 0) ghi tiếp vào log để vẫn thấy dòng EADDRINUSE trước đó.
-async function launch(teamWorkspace, key, where, mode, build, retries) {
+// Lần thử lại vì port (retries > 0) ghi tiếp vào log để vẫn thấy dòng EADDRINUSE trước đó, không build, và mang theo
+// `carry` của lần đầu: bản build nó đã làm (built, snapshot) hay đã dùng lại (reusedBuild).
+async function launch(teamWorkspace, key, where, mode, build, retries, carry = null) {
   const port = await freePort(teamWorkspace);
   const cmd = appCommand(where.matchRoot, port, mode);
   if (cmd.error) fail('UNSUPPORTED_APP', cmd.error);
-  const steps = [build && cmd.build, cmd.start].filter(Boolean);
-  const snapshot = existsSync(join(dirname(where.matchRoot), '.git')) ? await sourceSnapshot(dirname(where.matchRoot), basename(where.matchRoot), cmd.profile) : null;
+  const root = cmd.profile.root;
+  const snapshot = carry ? carry.snapshot
+    : existsSync(join(dirname(where.matchRoot), '.git')) ? await sourceSnapshot(dirname(where.matchRoot), basename(where.matchRoot), cmd.profile) : null;
+  const reused = !carry && build && cmd.build ? reusableBuild(teamWorkspace, root, snapshot) : null;
+  const building = Boolean(!carry && build && cmd.build && !reused);
+  // Build mới hay dev server ghi đè thư mục build: bản ghi cũ không còn đúng.
+  if (building || cmd.mode === 'dev') forgetBuild(teamWorkspace, root);
+  const steps = [building && cmd.build, cmd.start].filter(Boolean);
   // Build rồi start trong một tiến trình tách rời, sống tiếp khi helper của subagent kết thúc. Vỏ là node: trên Windows
   // pwsh chạy detached (không console) không ghi gì ra file log, còn pwsh con của một node detached thì ghi được.
   const shell = process.platform === 'win32'
@@ -212,8 +266,9 @@ async function launch(teamWorkspace, key, where, mode, build, retries) {
     closeSync(fd);
   }
   child.unref();
+  const reusedBuild = reused ?? carry?.reusedBuild;
   writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: cmd.mode, requestedMode: mode,
-    built: steps.length > 1, retries, matchRoot: where.matchRoot, log, logFrom, startedAt: new Date().toISOString(),
-    ...(snapshot ? { snapshot } : {}),
+    built: building || Boolean(carry?.built), retries, matchRoot: where.matchRoot, appRoot: root, log, logFrom,
+    startedAt: new Date().toISOString(), ...(snapshot ? { snapshot } : {}), ...(reusedBuild ? { reusedBuild } : {}),
     ...(Object.keys(authEnv).length ? { authEnv } : {}) }));
 }

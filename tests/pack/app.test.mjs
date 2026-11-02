@@ -1,12 +1,12 @@
 // Tool `app` (TOKXKPBV: fixer BUG-01 mất ~6 phút tự chạy và tắt dev server): build rồi start tách rời, port riêng,
 // sống tiếp khi helper của subagent đóng, stop theo file trạng thái.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { app, appCommand, appsDir, authUrlEnv, stopApp } from '../../pack/src/env/app.mjs';
-import { install, McpClient, tempDir } from './support.mjs';
+import { install, McpClient, sh, tempDir } from './support.mjs';
 
 // App node nhỏ trong matches/M1/<wt>/src: build ghi built.txt, server trả nội dung đó trên PORT.
 function appFolder(tw, key, { buildExit = 0 } = {}) {
@@ -114,6 +114,55 @@ test('an app that dies on EADDRINUSE restarts on another port without building a
   const log = readFileSync(res.log, 'utf8');
   assert.match(log, /EADDRINUSE/, 'the log keeps the first failure');
   assert.equal(JSON.parse(readFileSync(join(appsDir(tw), 'CR-02.json'), 'utf8')).retries, 1);
+});
+
+// NBDB5U0O: BUG-02 dừng app rồi start lại trên đúng source, build production lần hai (~35 s). Worktree là repo git nên
+// có snapshot source/môi trường; build tay hay dev server đè lên thư mục build, hoặc bản dùng lại không chạy được, thì build lại.
+test('start on unchanged source reuses the build; a change, dev mode, an overwritten or broken build builds again', { timeout: 180_000 }, async t => {
+  const tw = join(tempDir('mtm-app-'), 'BUN');
+  const root = appFolder(tw, 'BUG-05');
+  const src = join(root, 'src');
+  writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'a', private: true,
+    scripts: { build: 'node build.cjs', start: 'node server.cjs', dev: 'node server.cjs' } }));
+  writeFileSync(join(src, 'build.cjs'), ["const fs = require('fs'); fs.appendFileSync('builds.txt', 'x');",
+    "fs.mkdirSync('.next', { recursive: true }); fs.writeFileSync('.next/BUILD_ID', String(Math.random()));",
+    "fs.writeFileSync('built.txt', 'BUG-05 built');", ''].join('\n'));
+  writeFileSync(join(src, 'server.cjs'), ["const fs = require('fs'); if (!fs.existsSync('built.txt')) process.exit(3);",
+    "require('http').createServer((req, res) => res.end(fs.readFileSync('built.txt', 'utf8'))).listen(Number(process.env.PORT));", ''].join('\n'));
+  writeFileSync(join(src, '.gitignore'), 'builds.txt\nbuilt.txt\n.next/\n');
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
+  for (const args of [['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'seed']]) sh('git', args, dirname(root), gitEnv);
+  t.after(() => stopApp(tw, 'BUG-05'));
+  const start = (mode = 'production') => app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-05', matchRoot: root, mode });
+  const builds = () => readFileSync(join(src, 'builds.txt'), 'utf8').length;
+
+  const first = await start();
+  assert.equal(first.state, 'ready', JSON.stringify(first));
+  assert.equal(builds(), 1);
+  assert.equal(first.reusedBuild, undefined);
+  const again = await start();
+  assert.equal(again.state, 'ready', JSON.stringify(again));
+  assert.equal(builds(), 1, 'unchanged source: no second build');
+  assert.equal(again.reusedBuild.by, 'app');
+  assert.equal(await body(again.url), 'BUG-05 built');
+
+  writeFileSync(join(src, 'page.js'), 'module.exports = 1;\n');
+  assert.equal((await start()).state, 'ready');
+  assert.equal(builds(), 2, 'a source change builds again');
+  assert.equal((await start('dev')).state, 'ready');
+  assert.equal((await start()).state, 'ready');
+  assert.equal(builds(), 3, 'the dev server wrote over the build folder');
+  writeFileSync(join(src, '.next', 'BUILD_ID'), 'built by hand');
+  assert.equal((await start()).state, 'ready');
+  assert.equal(builds(), 4, 'a build made outside the helper is not reused');
+
+  rmSync(join(src, 'built.txt'));
+  const broken = await start();
+  assert.equal(broken.state, 'failed', JSON.stringify(broken));
+  assert.match(broken.hint, /builds afresh/);
+  assert.equal(builds(), 4);
+  assert.equal((await start()).state, 'ready');
+  assert.equal(builds(), 5, 'a reused build that did not start is built again');
 });
 
 test('a localhost AUTH_URL in .env follows the chosen port for the app process only; .env stays as it is', { timeout: 60_000 }, async t => {

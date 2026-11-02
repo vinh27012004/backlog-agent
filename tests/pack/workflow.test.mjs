@@ -2,14 +2,16 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
 import { itemSkills } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
-import { digest, resultArtifact } from '../../pack/src/core/candidates.mjs';
+import { digest, resultArtifact, sourceSnapshot } from '../../pack/src/core/candidates.mjs';
 import { recordEvidence, evidenceProblems } from '../../pack/src/env/evidence.mjs';
+import { detectProfile, worktreeEnvText } from '../../pack/src/env/environment.mjs';
+import { rememberBuild, reusableBuild } from '../../pack/src/env/app.mjs';
 import { sh, tempDir, validFixResult } from './support.mjs';
 
 const fix = overrides => validFixResult({ summary: 'Fixed value', criteria: ['correct'], verification: [{ check: 'TC-1', command: null, result: 'pass', note: 'observed' }],
@@ -17,11 +19,13 @@ const fix = overrides => validFixResult({ summary: 'Fixed value', criteria: ['co
 const review = { verdict: 'approve', root_cause_addressed: true, issues: [], requirements: [{ id: 'AC-1', verdict: 'met', note: 'inspected' }], summary: 'Correct' };
 const solver = value => ({ hypothesis: 'independent answer', verdict: 'supported', evidence: ['src/lib.js:1 derives value'], fix_location: null, next_check: null, answer_values: [{ field: 'position', value }] });
 
-function fixture(key = 'BUG-01', answerOnly = false) {
+// files: thêm file (đường dẫn trong M1/) vào commit gốc, có mặt ở cả checkout chính lẫn worktree.
+function fixture(key = 'BUG-01', answerOnly = false, files = {}) {
   const root = tempDir('mtm-workflow-'), bare = join(root, 'remote.git'), checkout = join(root, 'checkout');
   sh('git', ['init', '-q', '--bare', '-b', 'main', bare], root); sh('git', ['clone', '-q', bare, checkout], root);
   sh('git', ['config', 'user.name', 'test'], checkout); sh('git', ['config', 'user.email', 'test@example.test'], checkout);
   mkdirSync(join(checkout, 'M1', 'src'), { recursive: true }); writeFileSync(join(checkout, 'M1', 'src', 'lib.js'), 'export const value=1;\n');
+  for (const [rel, text] of Object.entries(files)) { mkdirSync(dirname(join(checkout, 'M1', rel)), { recursive: true }); writeFileSync(join(checkout, 'M1', rel), text); }
   writeFileSync(join(checkout, '.git', 'info', 'exclude'), '.team-work/\n.env\n');
   sh('git', ['add', 'M1'], checkout); sh('git', ['commit', '-q', '-m', 'seed'], checkout); sh('git', ['push', '-q', 'origin', 'HEAD:main'], checkout);
   const rt = new Runtime({ teamWorkspace: root }), teamWork = join(checkout, '.team-work'); mkdirSync(teamWork);
@@ -262,6 +266,40 @@ test('an answer-only item publishes after main moved since its worktree was crea
   const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise;
   const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
+});
+
+// NBDB5U0O: PI-01, TASK-03, TASK-04 cùng source tree với checkout chính mà mỗi item vẫn chạy gate đầy đủ (52–69 s): .env
+// của worktree mang tên database riêng theo trận/item nên proof của checkout khác không bao giờ khớp.
+test('an answer-only gate reuses the code proof of the same source from another checkout', async () => {
+  const f = fixture('TASK-01', true), main = f.rt.session.paths.matchRoot;
+  const env = 'TEST_DATABASE_URL="postgresql://app:pw@127.0.0.1:5433/app_test_m1"\n';
+  writeFileSync(join(main, '.env'), env);
+  writeFileSync(join(f.wt.matchRoot, '.env'), worktreeEnvText(env, { matchName: 'M1', key: f.key, appDatabase: true }));
+  f.rt.journal.data.preparation.codeProofs = [{ snapshot: await sourceSnapshot(f.checkout, 'M1', detectProfile(main)), result: { codePassed: true,
+    checks: [{ name: 'build', status: 'ok' }, { name: 'regression', status: 'ok' }], regression: null, baselineFailures: [], testsAdded: null } }];
+  const file = f.result(1); await f.preflight(file);
+  const g = await f.gate(file);
+  assert.equal(g.result.reusedCode, true, JSON.stringify(g.result.checks));
+});
+
+// NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app evidence vừa build; gate tự build thì ghi lại cho app start sau.
+test('the gate reuses a recorded build of the same source and records its own build for the app', { timeout: 120_000 }, async () => {
+  const f = fixture('CR-01', false, { 'src/package.json': JSON.stringify({ name: 'app', private: true, scripts: { build: 'node build.cjs' } }),
+    'src/build.cjs': "const fs = require('fs'); fs.mkdirSync('out', { recursive: true }); fs.appendFileSync('out/builds.txt', 'x');\n",
+    'src/.gitignore': 'out/\n' });
+  const app = join(f.wt.matchRoot, 'src'), counter = join(app, 'out', 'builds.txt');
+  const builds = () => (existsSync(counter) ? readFileSync(counter, 'utf8').length : 0);
+  rememberBuild(f.rt.teamWorkspace, app, await f.rt.workflow.snapshot(f.key), 'app');
+  const one = f.result(1); await f.preflight(one);
+  const reused = await f.gate(one);
+  assert.deepEqual(reused.result.checks.find(c => c.name === 'build'), { name: 'build', status: 'ok', seconds: 0, reused: 'app' });
+  assert.equal(builds(), 0);
+  writeFileSync(join(app, 'lib.js'), 'export const value=3;\n');
+  const two = f.result(2); await f.preflight(two);
+  const built = await f.gate(two);
+  assert.equal(built.result.checks.find(c => c.name === 'build').status, 'ok', JSON.stringify(built.result.checks));
+  assert.equal(builds(), 1);
+  assert.equal(reusableBuild(f.rt.teamWorkspace, app, await f.rt.workflow.snapshot(f.key))?.by, 'gate');
 });
 
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {

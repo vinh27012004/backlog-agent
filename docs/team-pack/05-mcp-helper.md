@@ -356,6 +356,13 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     `build` chạy cùng lúc với `tests-added` + `regression` + `tests-kept`. Kết quả vẫn ráp theo thứ tự trên: build fail
     thì trả `compile` và bỏ kết quả test như thể chưa chạy, nên `failKind`, `signature` và `checks[]` giống chạy tuần
     tự. `typecheck` (vài giây) vẫn chạy trước. Stack khác (mvn/gradle cùng ghi `target/`) vẫn tuần tự.
+  - Dùng lại bản build (02/11, sau NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app evidence vừa build):
+    helper ghi bản build production thành công gần nhất của mỗi thư mục app ở `team-sdlc-pack/local/builds/` (khoá theo
+    đường dẫn thư mục; ghi snapshot source/môi trường lúc build, dấu `.next/BUILD_ID`, ai build). Gate có `parallelBuild`
+    mà snapshot trùng bản ghi thì check `build` lấy kết quả đó (`{status: "ok", seconds: 0, reused: "app"|"gate"}`) và
+    chỉ chạy test; stack mà test đọc thứ build sinh ra (`dotnet test --no-build`, script test tự build) vẫn build. Gate
+    tự build thì xoá bản ghi trước; build pass mà source không đổi trong lúc gate chạy thì ghi bản của gate, để `app
+    start` sau đó (vòng sửa evidence) dùng lại (§5.23).
   - `code-scan` (mục 4, rubric dev V2/V3 và `security_rules_core.py` của harness; chỉ cảnh báo, chỉ dòng thêm, tối đa
     15): `TODO`/`FIXME` viết hoa, hàm "not implemented", debug output (`console.log`, `debugger`,
     `System.out.println`; bỏ qua test và thư mục `prisma/`, `scripts/`, `seeds/`, `migrations/`…), SQL viết hoa ghép
@@ -724,8 +731,14 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   Windows không có console và không ghi gì ra file log. App sống tiếp khi helper của subagent kết thúc. Log ở
   `<checkoutRoot>/.team-work/logs/<ID>-app.log`; trạng thái `{pid, port, mode, log, matchRoot}` ở
   `team-sdlc-pack/local/apps/<ID>.json`. Chờ tới khi `http://localhost:<port>/` trả lời (mã nào cũng được).
-- Kết quả: `ready {url, port, pid, mode, log}`; `starting` (chưa xong trong `waitSeconds`: gọi `status`); `failed
-  {tail}` (tiến trình thoát, file trạng thái bị xoá).
+- Kết quả: `ready {url, port, pid, mode, log, reusedBuild?}`; `starting` (chưa xong trong `waitSeconds`: gọi
+  `status`); `failed {tail}` (tiến trình thoát, file trạng thái bị xoá).
+- Dùng lại bản build (02/11, sau NBDB5U0O: BUG-02 dừng app rồi start lại đúng source, build lần hai ~35 s): `start`
+  production so snapshot source/môi trường hiện tại với bản ghi build của thư mục app (§5.10). Trùng, và dấu
+  `.next/BUILD_ID` không đổi (không ai build tay hay chạy dev đè lên), thì chỉ start; kết quả có `reusedBuild {by, at}`.
+  Build mới hay `mode: "dev"` xoá bản ghi trước khi chạy; build xong, app trả lời mà source không đổi từ lúc start thì
+  ghi bản ghi (`by: "app"`). Bản dùng lại không start được thì xoá bản ghi và trả `failed` với hint start lại để build
+  mới. Lần thử lại vì `EADDRINUSE` giữ snapshot và bản build của lần đầu. `worktree create` xoá bản ghi của worktree mới.
 - Lệnh (chỉ stack node; stack khác trả `UNSUPPORTED_APP` và playbook giữ cách tự chạy): có script `start` thì build
   rồi start, `mode: production`; script là `next start` thì `<pm> exec next start -p <port>` (PORT trong `.env` của
   app có thể đè biến môi trường), còn lại `<pm> run start` với `PORT`. Không có `start` thì `dev`, không build.
@@ -736,7 +749,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   thái). `worktree remove` của root gọi `stop` trước khi xoá và trả `stoppedApp`.
 - Không `readOnlyHint`: chạy tiến trình nên qua `auto_review`.
 - Test: `tests/pack/app.test.mjs` (start qua MCP rồi đóng helper mà app vẫn chạy, hai item hai port, start lại thì
-  build lại, build fail trả `tail`, đường dẫn ngoài `matches/` bị chặn, lệnh cho Next/dev/java).
+  build lại, build fail trả `tail`, đường dẫn ngoài `matches/` bị chặn, lệnh cho Next/dev/java; worktree là repo git:
+  start lại trên source không đổi thì dùng lại bản build, đổi source, chạy dev, build tay hay bản dùng lại hỏng thì
+  build lại). Gate dùng lại bản build: `gate-runs.test.mjs`, `workflow.test.mjs`.
 
 ### 5.19 `decide` (R, mới, D9)
 

@@ -493,8 +493,10 @@ const fallbackSignature = (kind, text, root) => {
 // requireReproduction (BUG/PI, gate trên worktree): bằng chứng nguyên nhân gốc là một test mới fail trên code chưa sửa và pass
 // sau khi sửa (Agentless, SWE-bench). Thiếu thì fail `not_reproduced` sau khi build/test đã pass: tree vẫn được lưu nên
 // root còn publish được theo luật cơ hội cuối.
+// prebuilt {by, at}: thư mục app đã có bản build thành công của đúng source và môi trường này (app evidence hay gate trước,
+// tools.mjs xét), nên check build lấy kết quả đó thay vì build lại.
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits, cachedCode = null }) {
+  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits, cachedCode = null, prebuilt = null }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -665,9 +667,14 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   // Build song song với test khi profile cho phép (node: `next build` ~40 s, 65% thời gian gate ở TOKXKPBV, mà vitest
   // không đọc gì build sinh ra). Stack khác (mvn package / mvn test cùng ghi target/) vẫn tuần tự: build trước, fail thì
   // không chạy test.
+  // Bản build của đúng snapshot đã pass thì chỉ chạy test (NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app
+  // evidence vừa build xong).
   let build = null;
   let tests = null;
-  if (c.build && profile.parallelBuild) {
+  if (c.build && prebuilt) {
+    build = { res: { code: 0 }, check: { name: 'build', status: 'ok', seconds: 0, reused: prebuilt.by } };
+    tests = await testPhase();
+  } else if (c.build && profile.parallelBuild) {
     const settled = await Promise.allSettled([compileStep('build'), testPhase()]);
     for (const s of settled) if (s.status === 'rejected') throw s.reason;
     [build, tests] = settled.map(s => s.value);
