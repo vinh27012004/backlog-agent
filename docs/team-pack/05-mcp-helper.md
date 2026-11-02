@@ -46,7 +46,9 @@ không tự `git push`.
   `additionalProperties: false`), `annotations` (`readOnlyHint` cho tool chỉ đọc; xem Spike S3).
   Tool có `readOnlyHint` thì Codex không gửi cho `auto_review`; tool không có thì mỗi lời gọi tốn một lượt
   guardian (Practice #2: 88 lượt cho root, khoảng 17% token cả trận). Chỉ đọc: `match_state`, `read_item`,
-  `wait_for_update`, `job_status`, `detect_profile`, `decide` (chỉ ghi sổ nội bộ), `company_tools`.
+  `wait_for_update`, `job_status`, `detect_profile`, `decide` (chỉ ghi sổ nội bộ), `company_tools`, và các tool chỉ
+  ghi journal: `worker_checkpoint`, `candidate_preflight`, `result_handoff`, `app_data` (NBDB5U0O: guardian duyệt ba
+  tool đầu 101 lượt, 8,2M/24,2M token guardian; hạn mức gói hết sau 30 phút).
 - `tools/call` → `{content: [{type: "text", text: "<JSON gọn>"}], structuredContent: {...kết quả..., networkActivity?: [...]}, isError}`.
 - Method lạ → lỗi `-32601`; JSON hỏng → `-32700`; tham số sai → `-32602`.
 - Giới hạn: request ≤ 1 MB; text kết quả ≤ 64 KB (cắt và trỏ tới file nếu dài); **mỗi lời gọi ≤ 55 s**,
@@ -363,8 +365,10 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     (`weak_test`): test mới không có assertion, assertion không thể fail (`expect(x).toBe(x)`, `assertEquals(a, a)`,
     `assertTrue(true)`...). Cảnh báo: `vi.mock`/`jest.mock` đúng file sản phẩm đang sửa, `catch {}` hay
     `except: pass` trong test, assertion cụ thể bị thay bằng `toBeDefined`/`toBeTruthy`/`assertNotNull`, thêm
-    retry hoặc timeout dài hơn (cả trong `vitest/jest/playwright.config`). Chạy trên 6 file test thật của Solova:
-    không báo nhầm.
+    retry hoặc timeout dài hơn (cả trong `vitest/jest/playwright.config`), test đọc file mã nguồn (`readFileSync`,
+    `open` một file `.ts/.tsx/.css/.py`...) rồi so chữ, `vi.mock` chính framework UI (`react`, `vue`...). Reviewer
+    coi hai mẫu sau là trượt R5 (NBDB5U0O: test BUG-01 regex trên `globals.css`, BUG-02 mock `useState`). Chạy trên
+    6 file test thật của Solova: không báo nhầm.
   - Kết quả test máy đọc (`pack/src/gate/testreport.mjs`): vitest `--reporter=default --reporter=json
     --outputFile.json=<log>.json`, jest `--json --outputFile`, pytest `--junitxml`, phpunit `--log-junit`,
     maven/gradle đọc JUnit XML mới ghi trong `target/surefire-reports` / `build/test-results/test`. Với
@@ -495,6 +499,11 @@ Work, chưa kết thúc, và còn cần worker: chưa bàn giao candidate (đang
 worker mất sau restart), worker đang ghi lại, hoặc candidate `repair`/`stale`. Item đã bàn giao chỉ chờ gate, review,
 publish hay item khác thì nhả slot (NBDB5U0O: CR-03 ra 17:02 khi CR-01, CR-02, BUG-04 chỉ chờ BUG-01, không được bắt
 đầu tới hết trận).
+
+Publish khi main đã đổi: item và main (tính từ base của item) sửa file khác nhau thì integrate luôn, evidence giữ
+nguyên, `main_gate` test cây đã gộp; sau integrate main phải trùng candidate ở mọi file của item (không thì
+`CANDIDATE_STALE`). Chỉ khi cùng sửa một file mới báo `SYNC_REQUIRED` kèm tên file (NBDB5U0O: CR-01, CR-02, BUG-04
+chụp lại toàn bộ sau khi BUG-01 lên main, mỗi item ~15 phút).
 
 Cuối giờ (`next_actions`): còn ≤ 6 phút (`LAST_CALL_MINUTES`, theo hạn item hoặc hết trận) thì việc của item lên đầu,
 item ít phút nhất trước, gắn `lastCall`: worker đang ghi → `stop_worker`; candidate chưa gate → `run_gate`; gate gần

@@ -153,7 +153,8 @@ export class Runtime {
 
   // readOnly → annotation readOnlyHint: Codex không gửi lời gọi đó cho auto_review (Practice #2: 88 lần review
   // cho root, 17% token). Chỉ gắn cho tool không đổi code, git, trận hay Game Master; ghi sổ nội bộ của helper
-  // (decisions.ndjson, journal) không tính.
+  // (decisions.ndjson, journal) không tính. NBDB5U0O: guardian duyệt worker_checkpoint 72 lần, candidate_preflight 17,
+  // result_handoff 12 (8,2M/24,2M token của guardian) dù ba tool chỉ ghi journal; hạn mức gói hết sau 30 phút.
   definitions() {
     return [
       { name: 'configure_session', description: 'Load the machine-provided Player frame (marker line, descriptor JSON line and policy blocks, copied verbatim). Call first in every turn.',
@@ -178,11 +179,11 @@ export class Runtime {
       { name: 'prepare_item', description: 'GAME: one background job for Start Work, materials, worktree/environment setup, profile and complete worker brief inputs. Returns worker + reviewer for code items, worker + independent solver for answer_only. Wait with job_status.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start with little time left.'), waitSeconds: num('Wait max 45 seconds.') }, ['backlogItemKey']), handler: a => this.workflow.prepare(a) },
       { name: 'candidate_preflight', description: 'GAME: validate the immutable numbered fixer result, schema, answer, required evidence, scenario claims and source/environment fingerprint before opening full review. Returns candidateId and a merged typed repair todo. Worker must have yielded writes.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), fixResultFile: str('Absolute <ID>-fixer-<version>.json; each handoff uses a new version.'), reviewFile: str('Optional previous review to merge all high findings.') }, ['backlogItemKey', 'fixResultFile']), handler: a => this.workflow.preflight(a) },
+        inputSchema: obj({ backlogItemKey: str('Item key.'), fixResultFile: str('Absolute <ID>-fixer-<version>.json; each handoff uses a new version.'), reviewFile: str('Optional previous review to merge all high findings.') }, ['backlogItemKey', 'fixResultFile']), readOnly: true, handler: a => this.workflow.preflight(a) },
       { name: 'result_handoff', description: 'GAME: validate a reviewer or independent solver result against its strict contract and bind it to candidateId. Errors name the bad field. Never overwrite a handed-off file.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), kind: { type: 'string', enum: ['review', 'hypothesis'] }, purpose: { type: 'string', enum: ['solver', 'hypothesis', 'arbitration'] }, resultFile: str('Absolute results JSON path.'), candidateId: str('Current candidateId from preflight.') }, ['backlogItemKey', 'kind', 'resultFile', 'candidateId']), handler: a => this.workflow.handoff(a) },
+        inputSchema: obj({ backlogItemKey: str('Item key.'), kind: { type: 'string', enum: ['review', 'hypothesis'] }, purpose: { type: 'string', enum: ['solver', 'hypothesis', 'arbitration'] }, resultFile: str('Absolute results JSON path.'), candidateId: str('Current candidateId from preflight.') }, ['backlogItemKey', 'kind', 'resultFile', 'candidateId']), readOnly: true, handler: a => this.workflow.handoff(a) },
       { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. Wait for root to sync and send resume before continuing. resume grants writes again. Root never syncs a writing worker.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.') }, ['backlogItemKey', 'phase']), handler: a => this.workflow.checkpoint(a) },
+        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.') }, ['backlogItemKey', 'phase']), readOnly: true, handler: a => this.workflow.checkpoint(a) },
       { name: 'next_actions', description: 'GAME: ordered actions for new items, preflight, repair, gate, review, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
         inputSchema: obj({}), readOnly: true, handler: () => { this.session.require('GAME'); return this.workflow.actions(); } },
       { name: 'publish_item', description: 'GAME: serialized recoverable job: verification, integrate, main gate if content changed, push and idempotent submit. Requires candidateId, independent review/solver and gate. Stops at errors; job_status gives checkpoint. A remote rebase always stops for a fresh gate.',
@@ -1448,8 +1449,9 @@ export class Runtime {
       && it.worktreeBase && it.worktreeBase !== revision && this.liveWorktree(k)).map(([k]) => k);
     return { revision, branch, ...(alreadyOnRemote ? { alreadyOnRemote: true } : {}), ...(warnings.length ? { answerWarnings: warnings } : {}),
       ...(databaseCleanup ? { databaseCleanupJobId: databaseCleanup } : {}),
-      ...(staleWorktrees.length ? { staleWorktrees, hint: `Main moved: worktree sync ${staleWorktrees.join(', ')} before each one's next fixer, `
-        + 'verifier or evidence step (never under a running fixer).' } : {}) };
+      ...(staleWorktrees.length ? { staleWorktrees, hint: `Main moved: worktree sync ${staleWorktrees.join(', ')} before each one's next code `
+        + 'repair or evidence not captured yet (never under a running fixer). Evidence already captured stays valid: publish integrates '
+        + 'when the item and main changed different files, so do not recapture only because main moved.' } : {}) };
   }
 
   async submitWork({ backlogItemKey: key, gitRevision, lastChance = null }) {

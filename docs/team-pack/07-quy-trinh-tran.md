@@ -9,6 +9,8 @@ Tối đa bốn item code thường còn cần worker; item đã bàn giao candi
 PI và answer_only có thể bắt đầu ngay. Sau restart vẫn làm hết `next_actions`, kể cả `prepare_item`.
 Dưới bốn phút không mở item thường mới; sáu phút cuối của item thì `next_actions` đưa lên đầu: dừng worker, gate,
 rồi publish theo luật cơ hội cuối (bỏ review/sửa thêm).
+Không giữ evidence hay publish của item này để chờ item khác (kể cả bản sửa layout dùng chung) trừ khi MVS của chính
+nó cần; main đổi ở file khác thì publish integrate luôn, chỉ sync khi hai bên cùng sửa một file.
 
 ## 2. Chuẩn bị
 Configure frame, prepare_checkout, setup_environment và login_match song song; kiểm doctor/build/baseline/index.

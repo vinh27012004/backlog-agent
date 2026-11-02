@@ -104,6 +104,15 @@ export function parseTranscript(file, keys = []) {
   const t = { file, id: null, sessionId: null, parent: null, role: null, agentPath: null, item: null, model: null, effort: null, serviceTier: null,
     start: null, end: null, busyMs: 0, tokens: zero(), calls: 0, maxContext: 0, quota: { first: null, last: null, plan: null },
     limitErrors: 0, limitAt: null, triggers: {}, warnings: 0 };
+  // Thread không có khoá item trong agent_path (NBDB5U0O: /root/pi_worker, /root/review01): lấy item được nhắc nhiều
+  // nhất trong lời gọi tool và tin nhắn giao việc (backlogItemKey, results/<ID>-…, items/<ID>/, answers/<ID>/).
+  const votes = new Map();
+  const vote = text => {
+    for (const m of String(text ?? '').matchAll(/backlogItemKey\\?["']?\s*:\s*\\?["']([A-Za-z]+-\d+)|(?:results|items|answers|wt)[\\/]+([A-Za-z]+-\d+)/g)) {
+      const key = itemOf(m[1] ?? m[2], keys);
+      if (key) votes.set(key, (votes.get(key) ?? 0) + 1);
+    }
+  };
   const bump = label => (t.triggers[label] ??= { calls: 0, input: 0 });
   const callLabel = new Map();
   let totals = null;
@@ -128,6 +137,7 @@ export function parseTranscript(file, keys = []) {
       if (p.type === 'function_call' || p.type === 'custom_tool_call') {
         const label = toolLabel(p);
         callLabel.set(p.call_id, label);
+        if (t.role !== 'root' && t.role !== 'guardian') vote(p.arguments ?? p.input);
         bump(label).calls++;
       } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
         trigger = callLabel.get(p.call_id) ?? 'tool';
@@ -139,6 +149,7 @@ export function parseTranscript(file, keys = []) {
         } else {
           trigger = 'message';
           if (!t.item && t.role !== 'root') t.item = itemOf(text.match(/\bItem\s+([A-Za-z]+-\d+)/)?.[1], keys);
+          if (t.role !== 'root') vote(text);
         }
       }
     } else if (r.type === 'event_msg') {
@@ -167,6 +178,7 @@ export function parseTranscript(file, keys = []) {
     }
   }
   if (turnStart !== null && t.end !== null) t.busyMs += t.end - turnStart;   // lượt còn chạy khi transcript dừng
+  if (!t.item && votes.size) t.item = [...votes].sort((a, b) => b[1] - a[1])[0][0];
   return t;
 }
 

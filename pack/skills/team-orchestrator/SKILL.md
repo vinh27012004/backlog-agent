@@ -81,7 +81,10 @@ remain distinct. Missing required files must be captured; do not relabel absent 
 Call publish_item with candidateId and a concise commit message after independent review/solver and gate.
 It serializes verification -> integrate -> main gate if needed -> push -> idempotent submit.
 Wait with job_status. On failure act on code/hint, then call publish_item again: successful steps/receipts survive.
-SYNC_REQUIRED: sync a yielded worker, repair affected evidence and preflight. GATE_STALE after remote rebase:
+Publish integrates an item whose files main did not change since its base, evidence as captured; main gate tests the
+merged tree. SYNC_REQUIRED (both changed a file): sync a yielded worker, repair affected evidence and preflight.
+Never hold an item's evidence or publish to wait for another item (a shared layout fix included) unless that item's
+own MVS requires the other change. GATE_STALE after remote rebase:
 run_gate where=main, review affected changes/evidence, then resume publish. Never push unverified rebased content.
 Do not call git, edit main, kill arbitrary processes or delete helper state by hand.
 After SUBMITTED, worktree remove stops the app; locked leftover folders may remain.

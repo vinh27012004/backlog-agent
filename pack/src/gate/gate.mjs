@@ -321,6 +321,10 @@ const SWALLOW = [
 const RETRY = /\b(?:retry|retries|retryTimes)\s*[:(=]|@RepeatedTest|@Retry\b|@flaky\b|pytest\.mark\.flaky|\b(?:jest|vi)\.setTimeout\s*\(|\b(?:testTimeout|hookTimeout)\s*[:=]|,\s*\{\s*timeout\s*:\s*\d|this\.timeout\s*\(\s*\d/;
 const RUNNER_CONFIG = /(^|\/)((vitest|jest|playwright)\.config\.[cm]?[jt]s|pytest\.ini|conftest\.py)$/;
 const MOCK = /(?:vi|jest)\.(?:mock|doMock)\s*\(\s*['"]([^'"]+)['"]/g;
+// Test đọc file mã nguồn rồi so chữ (NBDB5U0O BUG-01: regex trên globals.css và tên class) không kiểm hành vi; mock
+// chính framework UI (BUG-02: vi.mock("react") thay useState bằng bộ đếm) thì component không còn chạy thật.
+const SOURCE_READ = /\b(?:readFileSync|readFile|open)\s*\(\s*(?:join\([^)]*?)?['"`]([^'"`]+\.(?:[cm]?[jt]sx?|css|scss|vue|py|java|go|cs|php))['"`]/g;
+const FRAMEWORK = new Set(['react', 'react-dom', 'vue', 'preact', 'svelte', '@angular/core']);
 const STRONG = /\.(?:toBe|toEqual|toStrictEqual|toThrow\w*|toHaveBeenCalledWith|toMatchObject|toHaveLength|toContain\w*)\s*\(|\.rejects\b|\bassert(?:Equals?|Same|Throws|Raises|That|In)\s*\(|pytest\.raises/g;
 const WEAK = /\.(?:toBeDefined|toBeTruthy|toBeFalsy|toBeUndefined)\s*\(\s*\)|\.not\.toBeNull\s*\(\s*\)|\bassert(?:NotNull|IsNotNone|True)\s*\(|^\s*assert\s+\w+\s*(?:is not None)?\s*$/gm;
 const stripExt = p => p.replace(/\.[cm]?[jt]sx?$/, '');
@@ -378,7 +382,10 @@ export async function testQuality(checkoutRoot, base, files, appRel) {
     for (const m of addedText.matchAll(MOCK)) {
       const target = resolveSpec(m[1], f.path, appRel);
       if (target && product.some(p => p === target || p === `${target}/index`)) warnings.push(`${f.path}: mocks ${m[1]}, the code this change fixes`);
+      if (FRAMEWORK.has(m[1])) warnings.push(`${f.path}: mocks the UI framework ${m[1]} itself, so components do not really run; render the real component and assert what the user sees`);
     }
+    const sources = [...new Set([...addedText.matchAll(SOURCE_READ)].map(m => m[1]).filter(p => !TEST_FILE.test(p)))];
+    if (sources.length) warnings.push(`${f.path}: reads source ${sources.slice(0, 3).join(', ')} and checks its text; assert behaviour (a call, a render, a report value) instead`);
     const count = (re, xs) => xs.reduce((n, l) => n + (l.match(re) ?? []).length, 0);
     if (f.status === 'M' && count(STRONG, removed) > count(STRONG, plus) && count(WEAK, plus) > count(WEAK, removed)) {
       warnings.push(`${f.path}: replaces specific assertions with weaker ones (toBeDefined/toBeTruthy/assertNotNull)`);

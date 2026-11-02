@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { answerAgreement, answerCheck, answerFields, requirementsCheck } from '../gate/gate.mjs';
 import { digest, repairPlan, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
-import { contentTree, revParse } from '../core/git.mjs';
+import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { fail } from '../core/util.mjs';
@@ -35,6 +35,12 @@ export class Workflow {
   snapshot(key, paths = this.paths(key)) {
     const checkout = paths.worktreeRoot ?? paths.checkoutRoot;
     return sourceSnapshot(checkout, this.rt.session.descriptor.matchId, detectProfile(paths.matchRoot), this.item(key).environmentEpoch ?? 0);
+  }
+  // File trong thư mục trận khác nhau giữa hai commit/tree, bỏ answers/ (mỗi item chỉ sửa answers của mình).
+  async changedPaths(a, b, paths = null) {
+    const folder = this.rt.session.descriptor.matchId;
+    const res = await git(['diff', '--name-only', a, b, '--', ...(paths ?? [folder])], { cwd: this.rt.session.paths.checkoutRoot });
+    return res.out.split(/\r?\n/).filter(p => p && !p.startsWith(`${folder}/answers/`));
   }
   metric(key, phase, since, detail = {}) {
     const ji = this.item(key);
@@ -250,11 +256,23 @@ export class Workflow {
         const verification = r.recordVerification({ backlogItemKey: key, gateJobId: c.gateJobId, lastChance: Boolean(lastChance) });
         if (verification.status !== 'PASSED' && !lastChance) fail('VERIFICATION_REQUIRED', verification.hint ?? 'verification has not passed');
         if (!ji.integratedRevision || ji.integratedCandidateId !== c.id) {
-          if (!ji.integratePlan && (await revParse(r.session.paths.checkoutRoot)) !== (ji.integratedRevision ?? ji.worktreeBase)) fail('SYNC_REQUIRED', 'main moved; sync a yielded worker, refresh evidence and preflight before integrate');
+          // Main đổi ở file khác thì integrate luôn, main_gate test cây đã gộp; chỉ khi cả hai cùng sửa một file mới
+          // phải sync và làm lại evidence (NBDB5U0O: CR-01, CR-02, BUG-04 chụp lại toàn bộ sau BUG-01, mỗi item ~15 phút).
+          const base = ji.integratedRevision ?? ji.worktreeBase, head = await revParse(r.session.paths.checkoutRoot);
+          if (!ji.integratePlan && head !== base) {
+            const others = new Set(await this.changedPaths(base, head));
+            const shared = (await this.changedPaths(base, c.snapshot.source)).filter(p => others.has(p));
+            if (shared.length) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and preflight before integrate`);
+          }
           step('integrate'); await r.worktree({ action: 'integrate', backlogItemKey: key, message });
           ji.integratedCandidateId = c.id; r.journal.save();
         }
-        if ((await this.snapshot(key, r.session.paths)).source !== c.snapshot.source) fail('CANDIDATE_STALE', 'main source differs from reviewed candidate; sync, refresh evidence and review a new candidate');
+        // Main phải chứa đúng nội dung đã review ở mọi file của item; file khác là thay đổi của item khác.
+        const mainSource = (await this.snapshot(key, r.session.paths)).source;
+        if (mainSource !== c.snapshot.source) {
+          const own = await this.changedPaths(ji.worktreeBase, c.snapshot.source);
+          if (!own.length || (await this.changedPaths(c.snapshot.source, mainSource, own)).length) fail('CANDIDATE_STALE', 'main source differs from reviewed candidate in this item\'s files; sync, refresh evidence and review a new candidate');
+        }
         step('main_gate');
         try { await r.requireGate(key, r.session.paths.checkoutRoot); }
         catch (e) {

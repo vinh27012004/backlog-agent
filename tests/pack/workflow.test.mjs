@@ -209,3 +209,20 @@ test('in the last minutes a candidate is stopped, gated and published under the 
   f.ji.workerState = 'yielded'; f.ji.lastGate = { ...f.ji.lastGate, tree: null };
   assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.action === 'publish_item'), 'a broken build/regression is never published');
 });
+
+test('publish integrates when main moved in other files and asks for a sync only when both changed a file', async () => {
+  const f = fixture(), file = f.result(1), p = await f.preflight(file); await f.gate(file); await f.approve(p);
+  f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() }); f.rt.gm.postSubmission = async () => ({ kind: 'SUBMITTED', submission: { id: randomUUID() } });
+  // NBDB5U0O: BUG-01 lên main (file khác) sau khi CR-01 đã chụp evidence; CR-01 không phải sync và chụp lại.
+  writeFileSync(join(f.checkout, 'M1', 'src', 'layout.js'), 'export const offset=240;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout);
+  const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
+  assert.equal(readFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), 'utf8').replace(/\r\n/g, '\n'), 'export const value=2;\n');
+  const g = fixture(), gfile = g.result(1), q = await g.preflight(gfile); await g.gate(gfile); await g.approve(q);
+  writeFileSync(join(g.checkout, 'M1', 'src', 'lib.js'), 'export const value=9;\n');
+  sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
+  const k = await g.rt.workflow.publish({ backlogItemKey: g.key, candidateId: q.candidateId }); await g.rt.jobs.jobs.get(k.jobId).promise;
+  assert.match(JSON.stringify(g.rt.jobs.view(g.rt.jobs.jobs.get(k.jobId))), /SYNC_REQUIRED.*lib\.js/);
+});

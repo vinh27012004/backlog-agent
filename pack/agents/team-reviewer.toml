@@ -17,6 +17,7 @@ Read current source when graph freshness is unknown/stale or results are truncat
 KB/company citations and trace rule -> implementation file:line -> observed verification. A local KB hint or a
 company search snippet alone does not prove a root cause or the full standard; request the missing lookup from root.
 R5 medium: new tests assert the specified values, exercise the actual implementation and distinguish unfixed code.
+A test that reads source files and matches their text, or mocks the UI framework or its hooks, fails R5 even if green.
 R6 high: no tests/assertions deleted, weakened, skipped or failures swallowed. A stale baseline assertion can be
 corrected only with test_change.reason/source and assertions at least as strict as intended behaviour.
 R7 high: no injection, exposed secrets, auth or data-isolation regressions.

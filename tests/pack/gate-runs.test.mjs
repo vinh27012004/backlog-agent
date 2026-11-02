@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
-import { runGate } from '../../pack/src/gate/gate.mjs';
+import { changedFiles, runGate, testQuality } from '../../pack/src/gate/gate.mjs';
 import { Probe } from '../../pack/src/gate/probe.mjs';
 import { sh, tempDir } from './support.mjs';
 
@@ -277,4 +277,17 @@ test('a PI that only changes its answers needs no reproduction test; evidence re
   assert.equal(report.passed, true, JSON.stringify(report.checks));
   assert.equal(report.checks.find(c => c.name === 'reproduction').status, 'skipped');
   assert.deepEqual(report.changed, []);
+});
+
+// NBDB5U0O: BUG-01 so regex trên globals.css, BUG-02 vi.mock("react") thay useState; gate và reviewer đều cho qua.
+test('test quality warns about a test that reads source text or mocks the UI framework', async () => {
+  const r = appRepo();
+  writeFileSync(join(r.app, 'tests', 'money.test.js'), `${readFileSync(join(r.app, 'tests', 'money.test.js'), 'utf8')}${[
+    "vi.mock('react', () => ({ useState: () => ['vnd', () => {}] }));",
+    "const src = require('fs').readFileSync('lib.js', 'utf8');",
+    "it('vnd text', () => { expect(src).toContain('10000'); });"].join('\n')}\n`);
+  const q = await testQuality(r.root, 'HEAD', await changedFiles(r.root, 'HEAD'), 'M1/src');
+  assert.deepEqual(q.problems, []);
+  assert.match(q.warnings.join('\n'), /mocks the UI framework react/);
+  assert.match(q.warnings.join('\n'), /reads source lib\.js and checks its text/);
 });
