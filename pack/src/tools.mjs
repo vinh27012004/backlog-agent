@@ -1745,12 +1745,10 @@ export class Runtime {
         this.events.push('POLL_ERROR', { code: error.code ?? 'ERROR', message: oneLine(error.message, 160) });
       }
       if (this.gm.view && TERMINAL.has(this.gm.view.status)) return;
-      const level = this.writer?.budgetLevel() ?? 0;
-      const base = [15_000, 30_000, 60_000, 90_000][level];
-      this.poller = setTimeout(tick, this.pollDelay(base + Math.floor(Math.random() * 4000) - 2000));
+      this.poller = setTimeout(tick, this.pollDelay(1_000));
       this.poller.unref?.();
     };
-    this.poller = setTimeout(tick, this.pollDelay(15_000));
+    this.poller = setTimeout(tick, this.pollDelay(1_000));
     this.poller.unref?.();
   }
 
