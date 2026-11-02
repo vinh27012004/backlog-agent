@@ -185,20 +185,63 @@ function checkSelector(s, i) {
   }
 }
 
-// Khi một bước lỗi: trang đang ở đâu và có gì bấm được, để lần gọi sau sửa bước mà không phải đoán.
-const PAGE_STATE = `() => {
+// Khi một bước lỗi: trang đang ở đâu và có gì bấm được, để lần gọi sau sửa bước mà không phải đoán. Phần tử gần bước
+// hỏng lên đầu (chữ trùng, khớp selector của bước, trong dialog/listbox/main), link điều hướng xuống cuối (NBDB5U0O:
+// BUG-02 hỏng [role=option] mà candidates chỉ là link sidebar). exact: phần tử có đúng chữ của bước; options: số option đang mở.
+const PAGE_STATE = `(q) => {
   const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
   const els = [...document.querySelectorAll('button,a[href],[role=tab],[role=button],[role=option],[role=menuitem],[role=combobox],input,select,textarea')].filter(visible);
-  const candidates = els.slice(0, 50).map(el => {
+  const describe = el => {
     const role = el.getAttribute('role'); const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name');
     const text = (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
     return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (role ? '[role=' + role + ']' : '') +
       (name ? '[' + (el.getAttribute('aria-label') ? 'aria-label' : el.getAttribute('placeholder') ? 'placeholder' : 'name') + '="' + name.slice(0, 40) + '"]' : '') +
       (text ? ' "' + text + '"' : '');
-  });
-  return { url: location.href, title: document.title, visibleText: (document.body && document.body.innerText || '').slice(0, 800), candidates };
+  };
+  const label = el => (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().replace(/\\s+/g, ' ').toLowerCase();
+  const want = q && q.text ? String(q.text).trim().replace(/\\s+/g, ' ').toLowerCase() : '';
+  let same = new Set();
+  try { if (q && q.selector) same = new Set(document.querySelectorAll(q.selector)); } catch (e) { /* selector đã kiểm trước */ }
+  const score = el => { const t = label(el); let s = 0;
+    if (want && t === want) s += 8; else if (want && t.length > 2 && (t.includes(want) || want.includes(t))) s += 4;
+    if (same.has(el)) s += 3;
+    if (el.closest('[role=dialog],[role=listbox],[role=menu],main,[role=main]')) s += 2;
+    if (el.closest('nav,aside,header,[role=navigation]')) s -= 1;
+    return s; };
+  const ranked = els.map((el, i) => ({ el, i, s: score(el) })).sort((a, b) => b.s - a.s || a.i - b.i).map(x => x.el);
+  const exact = want ? ranked.find(el => label(el) === want) : null;
+  const combo = els.find(el => el.getAttribute('role') === 'combobox');
+  return { url: location.href, title: document.title, visibleText: (document.body && document.body.innerText || '').slice(0, 800),
+    candidates: ranked.slice(0, 40).map(describe), exact: exact ? describe(exact) : null,
+    options: els.filter(el => el.getAttribute('role') === 'option').length, combobox: combo ? describe(combo) : null };
 }`;
+
+// Gợi ý cho các lỗi hay gặp, từ trạng thái trang lúc hỏng.
+export function failureHint(step, state, code) {
+  if (!state) return null;
+  if (state.url === 'about:blank') return 'This call never opened a page: start it with goto to the screen (each call opens a new blank page; browserProfile keeps the login cookie).';
+  if (code !== 'ELEMENT_NOT_FOUND') return null;
+  if (/role=["']?option/.test(step.selector ?? '') && !state.options) {
+    return `No option list is open: a custom select renders its options only after a click on its trigger${state.combobox ? ` (${state.combobox})` : ''}; click it first.`;
+  }
+  if (state.exact && step.text !== undefined && step.text !== null) return `"${step.text}" is on the page as ${state.exact}: use that selector.`;
+  return null;
+}
+
+// Pre-gate (tools.mjs) chạy test của item trong lúc worker chụp. Hỏng thì kết quả chụp báo luôn, để worker sửa code ngay
+// thay vì chụp xong mới biết (helper của subagent không có session nên đọc journal của trận).
+export function preGateNotice(teamWork, key) {
+  try {
+    const p = JSON.parse(readFileSync(join(teamWork, 'journal.json'), 'utf8')).items?.[key]?.preGate;
+    return p?.state === 'failed' ? { jobId: p.jobId, failKind: p.failKind, detail: p.detail,
+      hint: 'Your tests failed the early checks: stop evidence, fix the code, rerun the focused tests, then worker_checkpoint ready_for_evidence again.' } : null;
+  } catch { return null; }
+}
+
+// Mỗi lần gọi mở một trang trắng: bước thao tác trước goto/login chắc chắn hỏng sau khi chờ hết giờ (NBDB5U0O BUG-02:
+// click "New invoice" trên about:blank). Báo ngay, không mở trình duyệt.
+const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download']);
 
 // Chỉ báo đang tải còn hiện: aria-busy, progressbar không xác định, skeleton/spinner phổ biến. null = không có.
 const BUSY = `() => {
@@ -239,6 +282,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const rules = new Map();
   const accounts = new Map();
   const output = { base: context?.matchRoot ? locateMatchRoot(teamWorkspace, context.matchRoot).matchRoot : null, key: context?.backlogItemKey ?? null };
+  let opened = false;
   for (const [i, s] of steps.entries()) {
     if (['goto', 'login'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
     if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
@@ -253,6 +297,10 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       checkSelector(s.to, i);
     }
     checkSelector(s, i);
+    if (['goto', 'login'].includes(s.action)) opened = true;
+    else if (PAGE_ACTIONS.has(s.action) && !opened) {
+      fail('INVALID_ARGUMENT', `step ${i + 1} (${s.action}) comes before any goto or login: each call opens a new blank page, so start with goto to the screen (browserProfile keeps the login cookie)`);
+    }
   }
   let provenance = null;
   if (context) {
@@ -648,15 +696,21 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     } catch (error) {
       // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).
       if (error instanceof HelperError && at >= 0) {
-        const state = await evaluate(`(${PAGE_STATE})()`).catch(() => null);
-        error.details = { failedStep: at + 1, action: steps[at].action, ...(state ?? {}), stepsDone: log, consoleErrors: consoleErrors.slice(0, 5) };
+        const step = steps[at];
+        const state = await evaluate(PAGE_STATE, { selector: step.selector ?? null, text: step.text ?? null }).catch(() => null);
+        const hint = failureHint(step, state, error.code);
+        const preGateFailed = provenance ? preGateNotice(provenance.teamWork, provenance.key) : null;
+        error.details = { failedStep: at + 1, action: step.action, ...(state ?? {}), ...(hint ? { hint } : {}), stepsDone: log,
+          consoleErrors: consoleErrors.slice(0, 5), ...(preGateFailed ? { preGateFailed } : {}) };
       }
       throw error;
     }
     const finalUrl = await evaluate('location.href').catch(() => null);
     const title = await evaluate('document.title').catch(() => null);
     const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
+    const preGateFailed = provenance ? preGateNotice(provenance.teamWork, provenance.key) : null;
     return { screenshots: shots, downloads, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
+      ...(preGateFailed ? { preGateFailed } : {}),
       ...(rules.size ? { routed: routed.slice(0, 30),
         note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
   } finally {

@@ -286,8 +286,9 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 
 - `create {backlogItemKey}`: `git worktree add -b team/<ID> <checkoutRoot>/.team-work/wt/<ID> <HEAD chính>`;
   chép template thành `<wt>/<folder>/answers/<ID>/submit.json` (nếu chưa có), tạo `evidence/`. Nếu stack
-  cần cài lại dependency cho worktree (vd `node_modules`), bắt đầu job cài. **Output**:
-  `{worktreeRoot, matchRoot, baseRevision, setupJobId?}`.
+  cần cài lại dependency cho worktree (vd `node_modules`), bắt đầu job cài; từ 02/11 job cài chạy cùng lúc với index
+  codegraph của worktree (như `setup_environment` của checkout chính), index vẫn xong trước khi trả về. Xoá bản ghi
+  build cũ của thư mục app (§5.23). **Output**: `{worktreeRoot, matchRoot, baseRevision, setupJobId?}`.
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
   `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
   `{integrated, headRevision, baseChanged, baselineFixed?, syncWorktrees?, hint}`. Gate cuối của item làm pass test fail ở
@@ -363,6 +364,17 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
     chỉ chạy test; stack mà test đọc thứ build sinh ra (`dotnet test --no-build`, script test tự build) vẫn build. Gate
     tự build thì xoá bản ghi trước; build pass mà source không đổi trong lúc gate chạy thì ghi bản của gate, để `app
     start` sau đó (vòng sửa evidence) dùng lại (§5.23).
+  - Pre-gate (02/11): job `pre_gate` chạy `runGate` chế độ `codeOnly` trên worktree trong lúc worker chụp evidence:
+    diff/guard/test-quality/code-scan, test khai, regression, tests-kept, fail-before và tái hiện; **không** build (app
+    evidence đang build cùng thư mục), **không** typecheck (`next build` ghi `.next/types` mà tsconfig của Next đọc, chạy
+    cùng lúc có thể báo lỗi giả), không kiểm answer. Kích hoạt khi `worker_checkpoint ready_for_evidence` có `testsAdded`
+    (kèm `needsDependency`, `testChange` như fix-result sắp ghi), hoặc khi preflight thấy candidate chỉ còn sửa
+    evidence/answer (lấy giá trị từ fix-result). Pass: `testProof {snapshot, policy, result}`; gate của candidate cùng
+    snapshot và policy lấy kết quả test đó (`reusedTests`), chỉ còn typecheck và build (hay `prebuilt`). Hỏng:
+    `preGate {state: failed, failKind, detail}`, `next_actions` trả `pre_gate_failed` khi worker còn đang ghi, kết quả
+    `capture_evidence` của item có `preGateFailed` (§5.24). Worker sửa source trong lúc chạy thì kết quả bỏ (`stale`).
+    Pre-gate không đụng `lastGate`, `codeGate`, `gateHistory`: nó không thay gate. Policy chuẩn hoá thứ tự `testsAdded` và
+    khoá của `test_change` để tham số của checkpoint và fix-result cho cùng một khoá.
   - `code-scan` (mục 4, rubric dev V2/V3 và `security_rules_core.py` của harness; chỉ cảnh báo, chỉ dòng thêm, tối đa
     15): `TODO`/`FIXME` viết hoa, hàm "not implemented", debug output (`console.log`, `debugger`,
     `System.out.println`; bỏ qua test và thư mục `prisma/`, `scripts/`, `seeds/`, `migrations/`…), SQL viết hoa ghép
@@ -500,7 +512,8 @@ mất 56 s đến 1 phút 52 vì root đang chờ).
 Item thường không làm lượt chờ trả sớm (vòng chờ trong `exec` sẽ quay liên tục). Thay vào đó mọi kết quả tool của
 root (trừ `match_state`, `wait_for_update`, `login_match`, `refresh_match`, và không gắn cho lời gọi qua proxy) có
 `notice` = `{newItems, freeSlots, hint}` khi có item không phải PI đã ra mà chưa Start Work (còn ≥ 4 phút) trong lúc
-số item giữ slot dưới `MAX_ITEMS_IN_FLIGHT` = 4. `newItems` theo `suggestedOrder`. (ZVUYZ41V: TASK-01 ra lúc
+số item giữ slot dưới `maxItemsInFlight` (`config/runtime.json`, 5 từ 02/11; `team-sdlc-pack/local/runtime.json` ghi đè,
+đọc lại mỗi lần nên đổi file là có tác dụng ngay; giá trị ngoài 1–8 thành 4). `newItems` theo `suggestedOrder`. (ZVUYZ41V: TASK-01 ra lúc
 02:49:49, root chỉ bắt đầu lúc 03:02 vì lặp `wait_agent`/`spawn_agent` mà không gọi `wait_for_update`.)
 
 Giữ slot (`holdsSlot`, dùng chung cho `notice` và `next_actions`): item code (không PI, không answer_only) đã Start
@@ -752,6 +765,18 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   build lại, build fail trả `tail`, đường dẫn ngoài `matches/` bị chặn, lệnh cho Next/dev/java; worktree là repo git:
   start lại trên source không đổi thì dùng lại bản build, đổi source, chạy dev, build tay hay bản dùng lại hỏng thì
   build lại). Gate dùng lại bản build: `gate-runs.test.mjs`, `workflow.test.mjs`.
+
+### 5.24 `capture_evidence`: bước hỏng và pre-gate (02/11, sau NBDB5U0O)
+
+- Bước thao tác (click, fill, select, press, drag, waitFor, assertText, screenshot, download) đứng trước mọi `goto`/`login`
+  bị từ chối ngay (`INVALID_ARGUMENT`), không mở trình duyệt: mỗi lần gọi mở một trang trắng (BUG-02 click "New
+  invoice" trên `about:blank`, chờ hết giờ mới báo `ELEMENT_NOT_FOUND`).
+- Bước hỏng: `candidates` xếp phần tử gần bước đó lên đầu (chữ trùng, khớp selector của bước, nằm trong
+  dialog/listbox/main), link điều hướng xuống cuối, tối đa 40 (trước đây 50 phần tử đầu DOM, toàn link sidebar).
+  `error.details.hint`: trang trắng → mở đầu bằng `goto`; `[role=option]` mà chưa có option nào mở → click combobox trước;
+  có đúng chữ của bước dưới selector khác → dùng selector đó.
+- Có `context`: kết quả (thành công hay `error.details`) mang `preGateFailed {jobId, failKind, detail, hint}` khi pre-gate
+  của item hỏng (§5.10), đọc từ journal của trận vì helper của subagent không có session.
 
 ### 5.19 `decide` (R, mới, D9)
 

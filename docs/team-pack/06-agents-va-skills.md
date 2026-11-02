@@ -46,8 +46,12 @@ medium. Jev (hoặc luật khi Jev tắt/dưới ngưỡng) chọn bậc lần 1
 item hard và câu trả lời có bẫy, còn lại small. Lần 2 trở đi strong; lần cuối của item có deadline hoặc PI top.
 Reviewer và verifier small, checker giả thuyết strong. Bậc không có trong allowedModels thì lên bậc gần nhất, hết thì xuống.
 Thang fixer tăng theo implementation attempt; sửa ảnh/answer không tự tăng tier.
+Vai trò evidence (small, 02/11): item MVS không phải PI mà fixer lần 1 ở tier strong/top thì worker đó chỉ làm code
+và test rồi bàn giao candidate partial; root spawn worker evidence (triage.models.evidence) theo next_actions
+spawn_evidence_worker. Đo trên NBDB5U0O/PXWV53VC: sol 9–14 s mỗi lượt, terra 4 s; hạ effort của sol không nhanh hơn.
 Giới hạn native thread: chờ capacity rồi thử lại, không bỏ kiểm chứng để lách giới hạn.
 
 ## Đo
-journal.metrics: prepare, code_test, evidence, handoff, publish; jobs: gate/setup.
+journal.metrics: prepare, code_test, evidence, handoff, publish; jobs: gate/setup/pre_gate.
 usage.mjs xuất bảng giai đoạn, token/credit/thread. Hoạt động song song không cộng thành thời gian toàn trận.
+items.mjs gom mọi trận đã chấm thành bảng so sánh theo trận và từng item (runs/judge/_items/items.md, items.csv).

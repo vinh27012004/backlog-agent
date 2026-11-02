@@ -156,6 +156,37 @@ test('a gate given a prebuilt build of the same source runs the tests without bu
   assert.equal(readFileSync(counter, 'utf8'), 'x');
 });
 
+// Pre-gate: test chạy trong lúc worker chụp evidence, không build/typecheck (app đang build cùng thư mục), không kiểm
+// answer (đang viết); gate của candidate lấy kết quả test đó, chỉ còn typecheck và build.
+test('a code-only pre-gate skips build, typecheck and answer; the candidate gate reuses its test results', { timeout: 60_000 }, async () => {
+  const r = appRepo();
+  writeFileSync(join(r.app, 'lib.js'), 'exports.vnd = n => n * 100;\n');
+  const logs = join(r.root, '.logs'), builds = join(logs, 'builds.txt'), typechecks = join(logs, 'typechecks.txt');
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(logs, 'build.cjs'), `require('fs').appendFileSync(${JSON.stringify(builds)}, 'x');\n`);
+  writeFileSync(join(logs, 'typecheck.cjs'), `require('fs').appendFileSync(${JSON.stringify(typechecks)}, 'x');\n`);
+  const profile = { ...r.profile, parallelBuild: true, commands: { ...r.profile.commands,
+    build: `node "${join(logs, 'build.cjs')}"`, typecheck: `node "${join(logs, 'typecheck.cjs')}"` } };
+  const pre = await gate(r, { profile, codeOnly: true });   // chưa có submit.json: kiểm answer thì hỏng
+  assert.equal(pre.passed, true, JSON.stringify(pre.checks));
+  assert.equal(pre.codeOnly, true);
+  assert.deepEqual(pre.checks.filter(c => ['build', 'typecheck', 'answer'].includes(c.name)), []);
+  assert.equal(existsSync(builds) || existsSync(typechecks), false);
+  assert.equal(pre.regression.total, 3);
+
+  writeFileSync(join(r.root, 'M1', 'answers', 'BUG-09', 'submit.json'), '{"status":"DONE"}');
+  writeFileSync(join(r.app, 'runner.cjs'), 'process.exit(9);\n');   // test chạy lại lúc này thì hỏng
+  const cachedTests = { checks: pre.checks.filter(c => ['tests-added', 'regression', 'tests-kept', 'fail-before'].includes(c.name)),
+    regression: pre.regression, testsAdded: pre.testsAdded, baselineFailures: pre.baselineFailures, fixesBaseline: pre.fixesBaseline };
+  const final = await gate(r, { profile, cachedTests });
+  assert.equal(final.passed, true, JSON.stringify(final.checks));
+  assert.equal(final.reusedTests, true);
+  assert.deepEqual([readFileSync(builds, 'utf8'), readFileSync(typechecks, 'utf8')], ['x', 'x'], 'typecheck and build ran once');
+  assert.deepEqual(final.regression, pre.regression);
+  assert.deepEqual(final.checks.map(c => c.name).filter(n => ['typecheck', 'build', 'regression', 'answer'].includes(n)),
+    ['typecheck', 'build', 'regression', 'answer']);
+});
+
 test('parallelBuild only for a node build that the test script does not depend on', () => {
   const cases = [[{ build: 'next build', test: 'vitest run' }, true], [{ build: 'tsc', pretest: 'npm run build', test: 'jest' }, false],
     [{ build: 'tsc', test: 'node --test dist/' }, false], [{ build: 'tsc', test: 'npm run build && jest' }, false], [{ test: 'vitest run' }, false]];

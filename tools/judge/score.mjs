@@ -13,7 +13,8 @@ const classify = (verdict, judge) => (verdict === null || judge === null ? 'n/a'
 
 const show = v => (v === null ? '–' : v ? 'pass' : 'fail');
 
-export function scoreMatch(out) {
+// Phán quyết từng item, không ghi gì (items.mjs dùng lại cho bảng qua các trận).
+export function scoreRows(out) {
   const index = readJson(join(out, 'index.json'));
   if (!index) throw new Error(`không có index.json trong ${out}; chạy collect.mjs trước`);
   const rows = index.items.map(item => {
@@ -35,6 +36,11 @@ export function scoreMatch(out) {
   });
   const tally = field => Object.fromEntries(['agree', 'false green', 'false red', 'n/a'].map(k => [k, rows.filter(r => r[field] === k).length]));
   const totals = { gate: tally('gateVsJudge'), reviewer: tally('reviewerVsJudge'), judged: rows.filter(r => r.judged).length };
+  return { index, rows, totals };
+}
+
+export function scoreMatch(out) {
+  const { index, rows, totals } = scoreRows(out);
 
   const lines = [`# Chấm lại trận ${index.matchId}`, '', `Gom lúc ${index.collectedAt}; judge chấm ${totals.judged}/${rows.length} item.`, '',
     '| Item | Loại | Điểm | Judge | Lỗi H | Gate | Reviewer | Nộp | Grader | Gate so với judge | Reviewer so với judge |',

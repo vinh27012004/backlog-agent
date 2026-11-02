@@ -34,5 +34,7 @@ export function modelPlan({ type, modelTier, deadline, allowed, cfg = loadModels
     reviewer: pickModel(cfg.roles.reviewer, allowed, cfg),
     piHypothesis: pickModel(cfg.roles.piHypothesis, allowed, cfg),
     verifier: pickModel(cfg.roles.verifier, allowed, cfg),
+    // Worker chụp evidence sau khi worker tier strong bàn giao code + test (workflow.mjs, evidenceHandoff).
+    evidence: pickModel(cfg.roles.evidence ?? 'small', allowed, cfg),
   };
 }

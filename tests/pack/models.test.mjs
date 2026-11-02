@@ -25,6 +25,8 @@ test('an easy item starts on the cheap tier, a plain one on small, and both move
   assert.deepEqual(plan.piHypothesis, { model: 'gpt-6.1-sol', reasoning_effort: 'high', tier: 'strong' });
   // Verifier chỉ chạy gate và đối chiếu MVS: tier small.
   assert.deepEqual(plan.verifier, { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' });
+  // Worker chụp evidence sau khi worker tier strong bàn giao code + test: tier small (nhanh ~2,5 lần mỗi lượt).
+  assert.deepEqual(plan.evidence, { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' });
   // Không có tier (triage lỗi) thì như small.
   assert.deepEqual(names(modelPlan({ type: 'TASK', modelTier: null, deadline: false, allowed: ENTERPRISE })), names(plan));
 });

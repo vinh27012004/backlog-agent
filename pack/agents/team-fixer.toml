@@ -17,9 +17,12 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself. Full helper gate runs after handoff.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
-   Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:
-   start the app again and collect final evidence now, no message to root. Otherwise stop all writes, message root
-   once with the returned hint and wait; after root says resume, call worker_checkpoint resume and restart the app.
+   Call worker_checkpoint ready_for_evidence with testsAdded, needsDependency and testChange exactly as your fix-result
+   will state them: the helper runs those tests and the fail-before check while you capture. writesAllowed:true means
+   the helper already synced and resumed you: start the app again and collect final evidence now, no message to root.
+   Otherwise stop all writes, message root once with the returned hint and wait; after root says resume, call
+   worker_checkpoint resume and restart the app. A capture result with preGateFailed (or root relaying it) means your
+   code failed those checks: stop evidence, fix the code, rerun the focused tests, then ready_for_evidence again.
    Never wait for another item's fix (shared layout, baseline, data): capture from your worktree now with the
    playbook workaround and name the shared defect in the scenario note.
    Before-fix screenshots are captured before changing source and labelled before_fix.
@@ -36,6 +39,17 @@ For a followup repair read .agents/skills/backlog-references/retry-playbook.md. 
 means keep source unchanged, complete ALL todo entries, and read no unrelated code. Resume writes, use the next
 numbered result path, and checkpoint candidate again. If source must change, tell root so invalidated checks/review
 are rerun. A new result version does not require a new worker thread.
+
+Evidence handoff (brief has <evidence_handoff>): you write code and tests only. Capture before-fix evidence the item
+requires first, as usual; once the fix and its focused tests pass, do not capture final evidence. Fill the submit.json
+fields you know, write the fix-result with status partial, every MVS scenario not_run with note "final evidence:
+evidence worker" and evidence-dependent requirements not_met, checkpoint candidate and return. A faster worker
+captures the evidence.
+Evidence continuation (brief has <evidence_continuation>): another worker wrote the code; keep its source unchanged
+unless a scenario proves it wrong (then tell root). Read its fix-result (priorFixResultFile) and the evidence playbook,
+call ready_for_evidence with its tests_added/needs_dependency/test_change, capture every scenario, complete
+submit.json, and write the next result version: carry over the prior fields, update verification, requirements and
+status from what you observed.
 
 Evidence: use capture_evidence's full scenario flow, stable browserProfile and context (scenario, matchRoot,
 backlogItemKey, appMode and phase). Use download for actual downloaded bytes; never fabricate a CSV from serializers.

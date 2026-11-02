@@ -12,6 +12,7 @@ import { fail } from '../core/util.mjs';
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const textDigest = file => digest(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'));
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
+const typeOf = key => String(key).split('-')[0].toUpperCase();
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
 // cuối (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
@@ -79,9 +80,18 @@ export class Workflow {
         ji.workerState = 'writing';
         ji.workStartedAt = Date.now();
         ji.prepared = started;
+        // CR/hard chạy tier strong (sol chậm ~2,5 lần mỗi lượt so với terra, NBDB5U0O/PXWV53VC): worker đó làm code và
+        // test, phần evidence giao cho một worker model nhanh. Giữ quyết định cũ khi prepare chạy lại sau restart.
+        const first = started.triage?.models?.fixer?.[0], fast = started.triage?.models?.evidence;
+        if (ji.evidenceHandoff === undefined) {
+          ji.evidenceHandoff = ji.verificationKind === 'mvs' && typeOf(key) !== 'PI' && ['strong', 'top'].includes(first?.tier)
+            && fast?.model && fast.model !== first.model ? { state: 'pending', model: fast.model, reasoning_effort: fast.reasoning_effort, tier: fast.tier } : null;
+        }
         this.metric(key, 'prepare', since);
         const profile = r.detectProfile({ path: worktree.matchRoot });
-        return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started,
+        const handoff = ji.evidenceHandoff?.state === 'pending' ? { model: ji.evidenceHandoff.model, reasoning_effort: ji.evidenceHandoff.reasoning_effort,
+          brief: 'Brief the worker with <evidence_handoff>: code and tests only, then a partial candidate; next_actions spawn_evidence_worker gives the evidence worker.' } : null;
+        return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, evidenceHandoff: handoff,
           worktree, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), resultsDir: join(r.session.paths.teamWork, 'results'),
           knowledgeHints: ji.signals?.kb ?? null,
@@ -110,6 +120,10 @@ export class Workflow {
       ji.workerState = 'writing';
       ji.workStartedAt = Date.now();
       if (threadId) ji.workerThread = threadId;
+      // Lần mở ghi đầu cho candidate cần sửa evidence/answer: root đã chọn ai làm (worker evidence mới hay worker cũ).
+      if (ji.evidenceHandoff?.state === 'pending' && c?.state === 'repair' && c.repair?.keepImplementation) {
+        ji.evidenceHandoff = { ...ji.evidenceHandoff, state: 'done', thread: threadId ?? ji.workerThread ?? null };
+      }
     } else {
       if (ji.workStartedAt) this.metric(key, ji.workerPhase ?? 'code_test', ji.workStartedAt);
       ji.workerState = 'yielded';
@@ -140,8 +154,13 @@ export class Workflow {
     if (synced.setupJobId) return { ...yielded, synced, hint: 'Dependencies changed: stay yielded and message root once; root resumes you after setup.' };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
+      // Test của worker chạy trong lúc nó chụp evidence (pre-gate), cùng khoá cache với gate của candidate sau.
+      const preGateJobId = Array.isArray(args.testsAdded) ? r.startPreGate(key, { testsAdded: args.testsAdded,
+        needsDependency: args.needsDependency, allowTestChange: args.testChange ?? null }) : null;
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
-        hint: 'Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.' };
+        ...(preGateJobId ? { preGateJobId } : {}),
+        hint: `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${preGateJobId
+          ? ' Your tests and the fail-before check run meanwhile; a capture result with preGateFailed means stop, fix the code, then ready_for_evidence again.' : ''}` };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and message root once.` };
     }
@@ -207,11 +226,15 @@ export class Workflow {
     ji.candidate = candidate;
     ji.artifacts[basename(fixResultFile)] = artifact.hash;
     ji.workerState = 'yielded';
+    // Chỉ còn sửa evidence/answer: kiểm code (test, fail-before) chạy trong lúc sửa, gate của bản sau chỉ còn build.
+    const fr = artifact.value;
+    const preGateJobId = blocked && repair.keepImplementation && ji.verificationKind !== 'answer_only'
+      ? r.startPreGate(key, { testsAdded: fr.tests_added, needsDependency: fr.needs_dependency.length > 0, allowTestChange: fr.test_change ?? null }) : null;
     // Worker đã bàn giao và ngừng ghi: reviewer nhận graph của source cuối cùng.
     const codegraph = !blocked && !codeReview ? await r.refreshCodegraph(key, paths.matchRoot) : null;
     this.metric(key, 'handoff', since, { candidateId: id });
     return { candidateId: id, ready: !blocked, verificationKind: ji.verificationKind ?? 'acceptance', repair,
-      nextFixResultFile: this.nextResultFile(key),
+      nextFixResultFile: this.nextResultFile(key), ...(preGateJobId ? { preGateJobId } : {}),
       reviewScope: candidate.reviewScope, priorReviewFile: codeReview?.file ?? null, codegraph,
       warnings: [...answer.warnings, ...req.warnings],
       next: blocked ? 'Repair the whole todo list before full review. Answer/evidence repair uses followup_task on the worker; then a new numbered result and preflight.'
@@ -396,9 +419,21 @@ export class Workflow {
         }
       }
       if (ji.prepared && !ji.workerThread && !c) { add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId }); continue; }
+      // Pre-gate hỏng khi worker còn đang ghi (thường là đang chụp evidence): báo worker sửa code ngay, một lần mỗi jobId.
+      if (ji.preGate?.state === 'failed' && ji.workerState === 'writing') {
+        add(key, 'pre_gate_failed', {}, { preGateJobId: ji.preGate.jobId, failKind: ji.preGate.failKind, detail: ji.preGate.detail, workerThread: ji.workerThread ?? null });
+        continue;
+      }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
-      if (c?.state === 'repair') { add(key, 'repair_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair, nextFixResultFile: this.nextResultFile(key) }); continue; }
+      if (c?.state === 'repair') {
+        // Worker tier strong đã bàn giao code + test: evidence do worker model nhanh làm tiếp (prepare: evidenceHandoff).
+        const handoff = ji.evidenceHandoff?.state === 'pending' && c.repair?.keepImplementation ? ji.evidenceHandoff : null;
+        add(key, handoff ? 'spawn_evidence_worker' : 'repair_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair,
+          nextFixResultFile: this.nextResultFile(key),
+          ...(handoff ? { model: handoff.model, reasoning_effort: handoff.reasoning_effort, priorFixResultFile: c.fixResultFile } : {}) });
+        continue;
+      }
       if (c && (!c.gateJobId || !r.jobs.jobs.has(c.gateJobId))) add(key, 'run_gate', { fixResultFile: c.fixResultFile });
       if (c && ji.verificationKind !== 'answer_only' && !c.review && c.state !== 'repair') add(key, 'review_candidate', {}, { candidateId: c.id, scope: c.reviewScope });
       if (c && ji.verificationKind === 'answer_only' && !c.solver) add(key, 'collect_solver', {}, { candidateId: c.id });

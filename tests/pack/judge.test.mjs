@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { collectMatch } from '../../tools/judge/collect.mjs';
+import { buildReport } from '../../tools/judge/items.mjs';
 import { scoreMatch } from '../../tools/judge/score.mjs';
 import { usageMatch } from '../../tools/judge/usage.mjs';
 import { sh, tempDir } from './support.mjs';
@@ -168,4 +169,35 @@ test('usage sums tokens and time per role and item from the Codex transcripts of
   // Không có dashboard: tìm root theo TeamWorkspace và giờ của trận.
   rmSync(join(tw, 'team-sdlc-pack'), { recursive: true, force: true });
   assert.equal(usageMatch(checkout, { sessionsDir: sessions, out, copy: false }).transcripts, 4);
+});
+
+// Bảng từng item qua các trận (items.mjs): ghép usage, judge và tên đề; trận chưa chấm để trống thay vì ghi 0.
+test('the item table joins usage, judge and titles across matches and flags what to look at', () => {
+  const runs = tempDir('mtm-items-');
+  const usage = (id, from, items, threads = []) => json(join(runs, id, '_usage', 'usage.json'),
+    { matchId: id, window: { from, to: from + 3_600_000 }, credits: 100, quota: { limitAt: null }, items, threads });
+  const item = (outcome, minutes, extra = {}) => ({ outcome, ms: minutes * 60_000, gates: 1, jobs: {}, phases: {}, reviewer: { threads: 1 }, ...extra });
+  usage('OLD1', Date.UTC(2026, 9, 30, 1), { 'BUG-01': item('SUBMITTED', 20) });
+  usage('NEW1', Date.UTC(2026, 10, 1, 1), {
+    'BUG-01': item('SUBMITTED', 12, { phases: { code_test: { n: 1, ms: 60_000 }, evidence: { n: 2, ms: 7 * 60_000 } } }),
+    'CR-01': item('CLOSED', 25) },
+  [{ id: 't1', role: 'team_fixer', item: 'BUG-01', model: 'gpt-6.1-terra', effort: 'medium', calls: 50, busyMs: 400_000, credits: 9.5 }]);
+  json(join(runs, 'NEW1', 'index.json'), { matchId: 'NEW1', collectedAt: 'x', items: [{ key: 'BUG-01', type: 'BUG', points: 100 }, { key: 'CR-01', type: 'CR', points: 140 }] });
+  for (const [key, title] of [['BUG-01', 'Sidebar covers content'], ['CR-01', 'Export CSV']]) {
+    mkdirSync(join(runs, 'NEW1', key), { recursive: true });
+    writeFileSync(join(runs, 'NEW1', key, 'item.md'), `# ${key} (${key.split('-')[0]}, 100 points): ${title}\n\nbody\n`);
+  }
+  json(join(runs, 'NEW1', 'BUG-01', 'judge.json'), { item: 'BUG-01', criteria: [{ id: 'J1', severity: 'H', verdict: 'fail', evidence: 'wrong total' }], verdict: 'fail' });
+  json(join(runs, 'NEW1', '_verdicts', 'BUG-01.json'), { gate: { passed: true }, reviewer: { verdict: 'approve' }, submitted: true });
+  const { md, csv, rows } = buildReport(runs);
+  const line = id => md.split('\n').find(l => l.startsWith(`| ${id} |`)).split(' | ');
+  assert.deepEqual(line('OLD1').slice(4, 7), ['—', '—', '—'], 'a match nobody judged shows no judge numbers');
+  assert.deepEqual(line('NEW1').slice(4, 7), ['0/1', '1', '1']);
+  const bug = rows.find(r => r.match === 'NEW1' && r.key === 'BUG-01');
+  assert.deepEqual(bug.flags, ['judge J1', 'gate false green', 'reviewer false green', 'evidence 7× code']);
+  assert.equal(bug.secPerCall, 8);
+  assert.deepEqual(rows.find(r => r.match === 'NEW1' && r.key === 'CR-01').flags, ['chưa nộp']);
+  assert.match(md, /\| BUG-01 · Sidebar covers content \| NEW1: 12m00s ✗ \|/);
+  assert.ok(csv.startsWith('match,key,type,points,title,outcome,judge'));
+  assert.equal(csv.split('\n').length, 4, 'header and one row per item');
 });

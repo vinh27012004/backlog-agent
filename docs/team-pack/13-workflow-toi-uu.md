@@ -7,11 +7,11 @@ Triển khai 31/10/2026; chưa benchmark tốc độ trên một trận LLM mớ
 | Tool | Hành vi |
 |---|---|
 | prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief |
-| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); resume mở lại; root đăng ký threadId |
-| candidate_preflight | Validate contract/claims/answer/evidence/fingerprint; candidateId, reviewScope và repair.todo hợp nhất |
+| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root), có testsAdded thì chạy pre-gate; resume mở lại; root đăng ký threadId |
+| candidate_preflight | Validate contract/claims/answer/evidence/fingerprint; candidateId, reviewScope và repair.todo hợp nhất; chỉ còn sửa evidence/answer thì chạy pre-gate |
 | run_gate / job_status | Helper chạy/chờ gate, không cần verifier LLM quản lý job |
 | result_handoff | Validate và bind review/solver/hypothesis/arbitration vào candidate, lỗi chỉ field |
-| next_actions | Hàng đợi có tham số và waitMs theo release/deadline |
+| next_actions | Hàng đợi có tham số và waitMs theo release/deadline; pre_gate_failed, spawn_evidence_worker |
 | publish_item | Job single-owner: verification, integrate, main gate khi cần, push, submit idempotent |
 
 Code item mặc định worker + reviewer; answer_only worker + solver độc lập. Reviewer sở hữu ý nghĩa MVS và nội dung
@@ -37,8 +37,10 @@ checkout chính và worktree cùng source có cùng fingerprint (NBDB5U0O: PI-01
 chạy ba gate đầy đủ 52–69 s). Guard/answer/schema/evidence/requirements vẫn kiểm lại. Reproduction chưa đạt không trở
 thành cache pass. Proof chung cho answer_only chỉ khi snapshot khớp và diff chỉ thuộc answers item đó. Bản build
 production thành công của đúng snapshot (app evidence hay gate trước) cho gate bỏ bước build khi test không đọc thứ build
-sinh ra (05 §5.10). Dịch vụ/DB ngoài có thể đổi mà fingerprint không thấy; khi nghi ngờ phải chạy lại gate.
-Invalidation bảo thủ theo toàn source, chưa dùng dependency graph.
+sinh ra (05 §5.10). Pre-gate (test, fail-before, tái hiện; không build, không typecheck, không answer) chạy trong lúc
+worker chụp evidence và lưu testProof theo snapshot + policy; gate của candidate cùng snapshot/policy chỉ còn
+typecheck và build. Policy chuẩn hoá thứ tự test và khoá test_change. Dịch vụ/DB ngoài có thể đổi mà fingerprint không
+thấy; khi nghi ngờ phải chạy lại gate. Invalidation bảo thủ theo toàn source, chưa dùng dependency graph.
 
 Verification tách mvs (testResults thật + gate), acceptance (check/requirement có tên + gate), answer_only
 (schema/source, independent derivation/đủ field và code proof/gate). BACKLOG_TESTS đếm kiểm tra được nêu rõ,

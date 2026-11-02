@@ -180,6 +180,40 @@ test('capture_evidence rejects Playwright selectors and reports the page on a fa
   }
 });
 
+// NBDB5U0O BUG-02: click [role=option] khi danh sách chưa mở và click "New invoice" trên about:blank; candidates của
+// lỗi chỉ là link sidebar đầu DOM.
+const SIDEBAR_PAGE = page(`<nav>${Array.from({ length: 45 }, (_, i) => `<a href="/p${i}">Link ${i}</a>`).join('')}</nav>
+<main><div role="tablist"><button role="tab" id="t-rep">Reports</button><button role="tab" id="t-inv">Invoices</button></div>
+<button role="combobox" aria-label="Company">Pick a company</button></main>`);
+
+test('a failed step lists the elements near it first and hints at the fix; a step before goto fails at once', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: 'button', text: 'New invoice' }] }),
+    e => e.code === 'INVALID_ARGUMENT' && /step 1 \(click\) comes before any goto or login/.test(e.message));
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(SIDEBAR_PAGE); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'click', selector: '[role=option]', text: 'Mekong Logistics', timeoutMs: 300 }] }), e => {
+      assert.equal(e.code, 'ELEMENT_NOT_FOUND');
+      assert.equal(e.details.hint, 'No option list is open: a custom select renders its options only after a click on its trigger '
+        + '(button[role=combobox][aria-label="Company"] "Pick a company"); click it first.');
+      assert.deepEqual(e.details.candidates.slice(0, 3), ['button#t-rep[role=tab] "Reports"', 'button#t-inv[role=tab] "Invoices"',
+        'button[role=combobox][aria-label="Company"] "Pick a company"'], 'elements of main come before the 45 sidebar links');
+      return true;
+    });
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'click', selector: 'a', text: 'Invoices', timeoutMs: 300 }] }), e => {
+      assert.equal(e.details.candidates[0], 'button#t-inv[role=tab] "Invoices"');
+      assert.equal(e.details.hint, '"Invoices" is on the page as button#t-inv[role=tab] "Invoices": use that selector.');
+      return true;
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('capture_evidence browserProfile keeps the login cookie across calls', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
   const server = createServer((req, res) => {

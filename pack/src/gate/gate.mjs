@@ -495,8 +495,13 @@ const fallbackSignature = (kind, text, root) => {
 // root còn publish được theo luật cơ hội cuối.
 // prebuilt {by, at}: thư mục app đã có bản build thành công của đúng source và môi trường này (app evidence hay gate trước,
 // tools.mjs xét), nên check build lấy kết quả đó thay vì build lại.
+// codeOnly: kiểm code trong lúc worker chụp evidence (pre-gate): typecheck, test, fail-before, tái hiện; không build (app
+// evidence đang build cùng thư mục) và không kiểm answer. cachedTests: kết quả đó của đúng snapshot và policy, gate của
+// candidate chỉ còn build (hay prebuilt).
+export const TEST_CHECKS = ['typecheck', 'tests-added', 'regression', 'tests-kept', 'fail-before', 'reproduction'];
 export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profile, base, baseline, template, schema = null, mvs = null,
-  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits, cachedCode = null, prebuilt = null }) {
+  requiredEvidence = [], requirements = [], ledger = undefined, needsDependency = false, testsAdded = [], allowTestChange = null, acceptedRemovals = [], probe = null, requireReproduction = false, logDir, limits, cachedCode = null, prebuilt = null,
+  codeOnly = false, cachedTests = null }) {
   const checks = [];
   const result = { passed: false, failKind: null, signature: null, checks, regression: null, testsAdded: null };
   // Mọi cảnh báo (check "warn") gom vào `findings` để root đưa cho reviewer trong <gate_findings>.
@@ -582,7 +587,12 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     return { res, check: { name, status: res.code === 0 ? 'ok' : 'fail', seconds: Math.round(res.ms / 1000),
       ...(res.code ? { tail: excerpt(res.tail) } : {}) } };
   };
-  if (c.typecheck) {
+  // Pre-gate bỏ typecheck: `next build` của app evidence đang ghi .next/types mà tsconfig của Next đọc, typecheck cùng
+  // lúc có thể báo lỗi giả. Gate của candidate chạy typecheck khi kết quả pre-gate không có.
+  const cached = name => cachedTests?.checks.filter(x => x.name === name) ?? [];
+  if (cachedTests) result.reusedTests = true;
+  if (cached('typecheck').length) checks.push(...cached('typecheck'));
+  else if (c.typecheck && !codeOnly) {
     const tc = await compileStep('typecheck');
     checks.push(tc.check);
     if (tc.res.code !== 0) return done('compile', 'typecheck failed', logSignature('compile', tc.res, 'typecheck'));
@@ -668,19 +678,24 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   // không đọc gì build sinh ra). Stack khác (mvn package / mvn test cùng ghi target/) vẫn tuần tự: build trước, fail thì
   // không chạy test.
   // Bản build của đúng snapshot đã pass thì chỉ chạy test (NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app
-  // evidence vừa build xong).
+  // evidence vừa build xong). Test đã chạy ở pre-gate thì lấy kết quả đó; pre-gate thì không build.
+  const runTestPhase = async () => (cachedTests ? { checks: [...cached('tests-added'), ...cached('regression'), ...cached('tests-kept')],
+    result: { testsAdded: cachedTests.testsAdded, regression: cachedTests.regression, baselineFailures: cachedTests.baselineFailures,
+      fixesBaseline: cachedTests.fixesBaseline, ...(cachedTests.removedTests ? { removedTests: cachedTests.removedTests } : {}) },
+    stop: null, addedRun: null } : testPhase());
+  const buildCommand = codeOnly ? null : c.build;
   let build = null;
   let tests = null;
-  if (c.build && prebuilt) {
+  if (buildCommand && prebuilt) {
     build = { res: { code: 0 }, check: { name: 'build', status: 'ok', seconds: 0, reused: prebuilt.by } };
-    tests = await testPhase();
-  } else if (c.build && profile.parallelBuild) {
-    const settled = await Promise.allSettled([compileStep('build'), testPhase()]);
+    tests = await runTestPhase();
+  } else if (buildCommand && profile.parallelBuild) {
+    const settled = await Promise.allSettled([compileStep('build'), runTestPhase()]);
     for (const s of settled) if (s.status === 'rejected') throw s.reason;
     [build, tests] = settled.map(s => s.value);
   } else {
-    if (c.build) build = await compileStep('build');
-    if (!build || build.res.code === 0) tests = await testPhase();
+    if (buildCommand) build = await compileStep('build');
+    if (!build || build.res.code === 0) tests = await runTestPhase();
   }
   if (build) checks.push(build.check);
   if (build && build.res.code !== 0) return done('compile', 'build failed', logSignature('compile', build.res, 'build'));
@@ -695,7 +710,8 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
   result.codePassed = true;
   result.tree = await contentTree(checkoutRoot, folder, [`${folder}/answers/${key}`]);
 
-  if (probe && addedRun) {
+  if (cachedTests) checks.push(...cached('fail-before'));
+  else if (probe && addedRun) {
     job.progress.push('fail-before');
     checks.push(await failBefore(probe, { base, files, folder, checkoutRoot, matchRoot, profile, addedRun, baseline, targets,
       logFile: log('fail-before'), timeoutMs: limits.testMs }));
@@ -717,6 +733,12 @@ export async function runGate(job, { key, checkoutRoot, matchRoot, folder, profi
     else if (fb?.reproduced !== true) problem = ['unverified', 'no successful fail-before proof: reproduction not checked'];
     checks.push({ name: 'reproduction', status: problem ? 'fail' : 'ok', ...(problem ? { problems: [problem[1]] } : {}) });
     if (problem) return done('not_reproduced', problem[1], `not_reproduced:${problem[0]}`);
+  }
+  // Pre-gate: code đã qua typecheck, test và tái hiện; answer/evidence còn đang làm nên không kiểm ở đây.
+  if (codeOnly) {
+    result.passed = true;
+    result.codeOnly = true;
+    return finish();
   }
 
   }

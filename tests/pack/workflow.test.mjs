@@ -12,6 +12,7 @@ import { digest, resultArtifact, sourceSnapshot } from '../../pack/src/core/cand
 import { recordEvidence, evidenceProblems } from '../../pack/src/env/evidence.mjs';
 import { detectProfile, worktreeEnvText } from '../../pack/src/env/environment.mjs';
 import { rememberBuild, reusableBuild } from '../../pack/src/env/app.mjs';
+import { preGateNotice } from '../../pack/src/env/browser.mjs';
 import { sh, tempDir, validFixResult } from './support.mjs';
 
 const fix = overrides => validFixResult({ summary: 'Fixed value', criteria: ['correct'], verification: [{ check: 'TC-1', command: null, result: 'pass', note: 'observed' }],
@@ -204,6 +205,8 @@ test('a slot is held only while an item still needs its worker, so a new item st
     { key: 'CR-03', type: 'CR', status: 'OPEN', local: 'todo', minutesLeft: 20 }];
   f.rt.gm.view.items = f.rt.itemRows().map(r => ({ key: r.key, title: r.key, raw: { descriptionMd: '## Acceptance criteria\n1. Works.' } }));
   const prepares = () => f.rt.workflow.actions().nextActions.filter(a => a.action === 'prepare_item').map(a => a.key);
+  mkdirSync(join(f.root, 'team-sdlc-pack', 'local'), { recursive: true });
+  writeFileSync(join(f.root, 'team-sdlc-pack', 'local', 'runtime.json'), JSON.stringify({ maxItemsInFlight: 4 }));
   // NBDB5U0O 17:02: bốn item đang làm (chưa bàn giao) giữ đủ 4 slot.
   for (const key of keys) Object.assign(f.rt.journal.item(key), { startedAt: new Date().toISOString(), workerState: 'writing' });
   assert.equal(f.rt.freeSlots(), 0); assert.deepEqual(prepares(), []);
@@ -300,6 +303,73 @@ test('the gate reuses a recorded build of the same source and records its own bu
   assert.equal(built.result.checks.find(c => c.name === 'build').status, 'ok', JSON.stringify(built.result.checks));
   assert.equal(builds(), 1);
   assert.equal(reusableBuild(f.rt.teamWorkspace, app, await f.rt.workflow.snapshot(f.key))?.by, 'gate');
+});
+
+// Pre-gate: test của item chạy trong lúc worker chụp evidence; gate của candidate dùng lại kết quả, hỏng thì báo sớm.
+const testApp = failing => ({ 'src/package.json': JSON.stringify({ name: 'app', private: true, scripts: { test: 'node test.cjs' } }),
+  'src/test.cjs': ["const fs = require('fs'); fs.mkdirSync('out', { recursive: true }); fs.appendFileSync('out/runs.txt', 'x');",
+    `const ok = ${failing ? "!fs.readFileSync('lib.js', 'utf8').includes('value=2')" : 'true'};`,
+    "console.log(ok ? ' Tests  1 passed (1)' : ' Tests  1 failed (1)'); process.exit(ok ? 0 : 1);", ''].join('\n'),
+  'src/.gitignore': 'out/\n' });
+
+test('ready_for_evidence runs the item tests meanwhile and the candidate gate reuses them', { timeout: 120_000 }, async () => {
+  const f = fixture('CR-01', false, testApp(false)), runs = () => readFileSync(join(f.wt.matchRoot, 'src', 'out', 'runs.txt'), 'utf8').length;
+  const checkpoint = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
+  f.ji.workerThread = '/root/cr01'; f.ji.workerState = 'writing';
+  const res = await checkpoint({ backlogItemKey: f.key, phase: 'ready_for_evidence', testsAdded: [] });
+  assert.ok(res.preGateJobId, JSON.stringify(res)); assert.match(res.hint, /preGateFailed/);
+  await f.rt.jobs.jobs.get(res.preGateJobId).promise;
+  assert.equal(f.ji.preGate.state, 'passed', JSON.stringify(f.ji.preGate)); assert.equal(runs(), 1);
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  const one = f.result(1); await f.preflight(one);
+  const g = await f.gate(one);
+  assert.equal(g.result.passed, true, JSON.stringify(g.result.checks)); assert.equal(g.result.reusedTests, true);
+  assert.equal(runs(), 1, 'the candidate gate does not run the tests again');
+});
+
+test('a failing pre-gate is reported to root and in capture results while the worker is still writing', { timeout: 120_000 }, async () => {
+  const f = fixture('CR-02', false, testApp(true));
+  f.ji.workerThread = '/root/cr02'; f.ji.workerState = 'writing';
+  const res = await f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler({ backlogItemKey: f.key, phase: 'ready_for_evidence', testsAdded: [] });
+  await f.rt.jobs.jobs.get(res.preGateJobId).promise;
+  assert.deepEqual([f.ji.preGate.state, f.ji.preGate.failKind], ['failed', 'regression'], JSON.stringify(f.ji.preGate));
+  assert.equal(f.ji.testProof, undefined);
+  const action = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
+  assert.deepEqual([action.action, action.preGateJobId, action.failKind, action.workerThread], ['pre_gate_failed', res.preGateJobId, 'regression', '/root/cr02']);
+  assert.equal(preGateNotice(f.rt.session.paths.teamWork, f.key).failKind, 'regression');
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.action === 'pre_gate_failed'), 'only while the worker writes');
+});
+
+// CR/hard chạy tier strong (sol chậm ~2,5 lần mỗi lượt): worker strong làm code + test, evidence giao worker model nhanh.
+test('a strong-tier item hands its evidence to a fast worker after a code-and-tests candidate', async () => {
+  const plan = tier => ({ fixer: [{ model: tier === 'strong' ? 'gpt-6.1-sol' : 'gpt-6.1-terra', reasoning_effort: 'medium', tier }],
+    evidence: { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' } });
+  const prepared = async (f, tier) => {
+    f.rt.startWork = async () => ({ triage: { models: plan(tier) }, materialsDir: 'materials', timeBox: {} });
+    f.rt.worktree = async () => ({ ...f.wt, setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });
+    f.rt.itemMvs = () => '## TC-1\nThe value is correct.';
+    const j = await f.rt.workflow.prepare({ backlogItemKey: f.key }); await f.rt.jobs.jobs.get(j.jobId).promise;
+    return f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId)).result;
+  };
+  const f = fixture('CR-01');
+  assert.deepEqual((await prepared(f, 'strong')).evidenceHandoff?.model, 'gpt-6.1-terra');
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01' });
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }] }));
+  const notRun = [{ check: 'TC-1', command: null, result: 'not_run', note: 'final evidence: evidence worker' }];
+  const coder = f.result(1, fix({ status: 'partial', verification: notRun, requirements: [{ id: 'AC-1', status: 'not_met', evidence: 'needs final evidence' }] }));
+  const p = await f.preflight(coder);
+  assert.equal(p.ready, false); assert.equal(p.repair.keepImplementation, true);
+  const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
+  assert.deepEqual([next.action, next.model, next.priorFixResultFile], ['spawn_evidence_worker', 'gpt-6.1-terra', coder]);
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01_evidence' });
+  assert.deepEqual([f.ji.evidenceHandoff.state, f.ji.evidenceHandoff.thread], ['done', '/root/cr01_evidence']);
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  await f.preflight(f.result(2, fix({ status: 'partial', verification: notRun })));
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === f.key).action, 'repair_worker', 'later repairs follow up the evidence worker');
+  const g = fixture('CR-02');
+  assert.equal((await prepared(g, 'small')).evidenceHandoff, null, 'a small-tier worker captures its own evidence');
 });
 
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {

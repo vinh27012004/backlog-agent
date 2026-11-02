@@ -5,5 +5,5 @@
     { "tier": "strong", "model": "gpt-6.1-sol", "effort": "high" },
     { "tier": "top", "model": "gpt-6-astra", "effort": "medium" }
   ],
-  "roles": { "reviewer": "small", "piHypothesis": "strong", "verifier": "small" }
+  "roles": { "reviewer": "small", "piHypothesis": "strong", "verifier": "small", "evidence": "small" }
 }

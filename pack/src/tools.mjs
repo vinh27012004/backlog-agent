@@ -1,6 +1,7 @@
 // Danh mục tool của helper team_runtime (05 §5), bản v0.1: một lane, làm trên checkout chính.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { app, forgetBuild, readState as appState, rememberBuild, reusableBuild, stopApp } from './env/app.mjs';
 import { captureEvidence } from './env/browser.mjs';
 import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
@@ -13,7 +14,7 @@ import { modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
 import { EventQueue } from './core/events.mjs';
 import { GameMaster } from './match/game.mjs';
-import { answerAgreement, answerCheck, answerFields, changedFiles, itemEvidence, itemRequirements, runGate, scenarioCounts } from './gate/gate.mjs';
+import { TEST_CHECKS, answerAgreement, answerCheck, answerFields, changedFiles, itemEvidence, itemRequirements, runGate, scenarioCounts } from './gate/gate.mjs';
 import { contentTree, git, normalizeRepoUrl, revParse, treeChanges } from './core/git.mjs';
 import { HttpClient } from './core/http.mjs';
 import { Jobs } from './core/jobs.mjs';
@@ -38,8 +39,16 @@ const PUBLISH_RESERVE_MIN = 5;
 // partial kèm danh sách giả thuyết để root cho kiểm song song (SRE: định kỳ xét lại hướng đi). Chỉnh sau diễn tập.
 const PI_ATTEMPT_MIN = 12;
 const PI_CHECKPOINT_MIN = 6;
-// Số item thường (không tính PI) root làm cùng lúc; khớp "Up to 4 items in flight" trong skill team-orchestrator.
-const MAX_ITEMS_IN_FLIGHT = 4;
+// Số item thường (không tính PI, answer_only) giữ slot cùng lúc: config/runtime.json, ghi đè bằng
+// team-sdlc-pack/local/runtime.json như jev.json; đọc lại mỗi lần nên đổi file là có tác dụng ngay. 02/11: 4 → 5 vì app
+// và gate thôi build lại cùng một source (bớt tranh CPU); tranh CPU hay hết quota thì hạ lại ở file local.
+const PACK_CONFIG = join(dirname(fileURLToPath(import.meta.url)), '..', 'config');
+export function loadRuntimeConfig(localDir = null) {
+  const read = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
+  const cfg = { ...read(join(PACK_CONFIG, 'runtime.json')), ...(localDir ? read(join(localDir, 'runtime.json')) : {}) };
+  const max = Number(cfg.maxItemsInFlight);
+  return { ...cfg, maxItemsInFlight: Number.isInteger(max) && max >= 1 && max <= 8 ? max : 4 };
+}
 // Không bắt đầu item mới khi còn ít hơn số phút này (skill: "Under 4 minutes left: no new items").
 const NEW_ITEM_MIN = 4;
 const TERMINAL = new Set(['FINISHED', 'CANCELLED']);
@@ -182,9 +191,13 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key.'), fixResultFile: str('Absolute <ID>-fixer-<version>.json; each handoff uses a new version.'), reviewFile: str('Optional previous review to merge all high findings.') }, ['backlogItemKey', 'fixResultFile']), readOnly: true, handler: a => this.workflow.preflight(a) },
       { name: 'result_handoff', description: 'GAME: validate a reviewer or independent solver result against its strict contract and bind it to candidateId. Errors name the bad field. Never overwrite a handed-off file.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), kind: { type: 'string', enum: ['review', 'hypothesis'] }, purpose: { type: 'string', enum: ['solver', 'hypothesis', 'arbitration'] }, resultFile: str('Absolute results JSON path.'), candidateId: str('Current candidateId from preflight.') }, ['backlogItemKey', 'kind', 'resultFile', 'candidateId']), readOnly: true, handler: a => this.workflow.handoff(a) },
-      { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded, message root once and wait for resume. resume grants writes again; REVIEW_PENDING while the current candidate is under review: hand off the review first. Root never syncs a writing worker.',
+      { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded, message root once and wait for resume. With testsAdded (and needsDependency/testChange) exactly as your fix-result will state them, the helper runs your tests and the fail-before check while you capture (preGateJobId); a capture result with preGateFailed means stop, fix the code, ready_for_evidence again. resume grants writes again; REVIEW_PENDING while the current candidate is under review: hand off the review first. Root never syncs a writing worker.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.'),
-          abandonReview: bool('resume only: drop the unfinished review of the current candidate (reviewer gone); it must be reviewed again.') }, ['backlogItemKey', 'phase']), readOnly: true, handler: a => this.workerCheckpoint(a) },
+          abandonReview: bool('resume only: drop the unfinished review of the current candidate (reviewer gone); it must be reviewed again.'),
+          testsAdded: { type: 'array', items: { type: 'string' }, description: 'ready_for_evidence: tests_added of your coming fix-result, each exactly a test_one target.' },
+          needsDependency: bool('ready_for_evidence: true when your fix-result will list needs_dependency.'),
+          testChange: obj({ reason: str('As test_change.reason.'), source: str('As test_change.source.') }, ['reason', 'source']) }, ['backlogItemKey', 'phase']),
+        readOnly: true, handler: a => this.workerCheckpoint(a) },
       { name: 'next_actions', description: 'GAME: ordered actions for new items, preflight, repair, gate, review, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
         inputSchema: obj({}), readOnly: true, handler: () => { this.session.require('GAME'); return this.workflow.actions(); } },
       { name: 'publish_item', description: 'GAME: serialized recoverable job: verification, integrate, main gate if content changed, push and idempotent submit. Requires candidateId, independent review/solver and gate. Stops at errors; job_status gives checkpoint. A remote rebase always stops for a fresh gate.',
@@ -603,7 +616,8 @@ export class Runtime {
   }
 
   freeSlots(rows = this.itemRows()) {
-    return Math.max(0, MAX_ITEMS_IN_FLIGHT - rows.filter(r => this.holdsSlot(r)).length);
+    const local = this.teamWorkspace ? join(this.teamWorkspace, 'team-sdlc-pack', 'local') : null;
+    return Math.max(0, loadRuntimeConfig(local).maxItemsInFlight - rows.filter(r => this.holdsSlot(r)).length);
   }
 
   answerOnlyItem(key) {
@@ -927,11 +941,13 @@ export class Runtime {
         const value = JSON.parse(readFileSync(template, 'utf8'));
         if (value && typeof value === 'object') writeFileSync(join(wtAnswer, 'submit.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
       }
-      // Index trước khi trả về: fixer gọi codegraph lên worktree chưa index thì bị bảo thôi dùng cả phiên.
-      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
-        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
+      // Cài dependency (job) chạy cùng lúc với index codegraph, như setup_environment của checkout chính (index chỉ đọc
+      // source, vài giây). Index vẫn xong trước khi trả về: fixer gọi codegraph lên worktree chưa index thì bị bảo thôi
+      // dùng cả phiên.
       const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
         mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
+      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
+        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
       this.probe().prepare();
       ji.worktreeSetupJob = job.id;
       j.save();
@@ -1157,6 +1173,59 @@ export class Runtime {
     return Boolean(given) || (!inWorktree && Boolean(this.journal.item(key).needsDependency));
   }
 
+  // Khoá cache kết quả code (gate và pre-gate): test khai, cờ dependency, lý do đổi test, base, baseline, test đã chấp
+  // nhận bỏ và luật tái hiện. Khác một trong số đó thì chạy lại.
+  // Thứ tự test và thứ tự khoá của test_change không đổi kết quả: chuẩn hoá để pre-gate (tham số của worker_checkpoint)
+  // và gate (fix-result) cùng một khoá.
+  gatePolicy(key, { testsAdded, needsDependency, testChange, base, inWorktree }) {
+    const prep = this.journal.data.preparation;
+    return digest({ testsAdded: [...new Set(testsAdded)].sort(), needsDependency: Boolean(needsDependency),
+      testChange: testChange ? { reason: String(testChange.reason ?? ''), source: String(testChange.source ?? '') } : null, base,
+      baseline: prep?.baseline, acceptedRemovals: prep?.acceptedRemovals ?? [], reproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)), reproductionPolicy: 2 });
+  }
+
+  // Pre-gate (05 §5.10): test, fail-before và tái hiện trên worktree trong lúc worker chụp evidence; không build (app
+  // evidence đang build cùng thư mục), không typecheck, không kiểm answer. Pass: testProof theo snapshot + policy, gate
+  // của candidate chỉ còn typecheck và build. Hỏng: preGate failed, next_actions và kết quả capture_evidence báo để worker
+  // sửa code ngay thay vì chụp xong mới biết. Không đụng lastGate/codeGate/gateHistory: đây chưa phải gate.
+  startPreGate(key, { testsAdded = [], needsDependency = false, allowTestChange = null } = {}) {
+    if (!this.session.paths?.teamWork || !this.liveWorktree(key)) return null;
+    const j = this.journal, ji = j.item(key);
+    if (ji.verificationKind === 'answer_only') return null;
+    const running = [...this.jobs.jobs.values()].find(x => x.kind === 'pre_gate' && x.key === key && x.state === 'running');
+    if (running) return running.id;
+    const tests = (Array.isArray(testsAdded) ? testsAdded : []).filter(t => typeof t === 'string');
+    const wt = this.wtPaths(key), folder = this.session.descriptor.matchId;
+    const testChange = this.gateTestChange(key, true, allowTestChange);
+    const dependency = this.gateNeedsDependency(key, true, Boolean(needsDependency));
+    const job = this.jobs.start('pre_gate', async job => {
+      const profile = detectProfile(wt.matchRoot);
+      const snapshot = await sourceSnapshot(wt.worktreeRoot, folder, profile, ji.environmentEpoch ?? 0);
+      const policy = this.gatePolicy(key, { testsAdded: tests, needsDependency: dependency, testChange, base: ji.worktreeBase, inWorktree: true });
+      if (ji.testProof?.policy === policy && JSON.stringify(ji.testProof.snapshot) === JSON.stringify(snapshot)) return { passed: true, reused: true };
+      ji.preGate = { state: 'running', jobId: job.id, at: new Date().toISOString() };
+      j.save();
+      const result = await runGate(job, { key, checkoutRoot: wt.worktreeRoot, matchRoot: wt.matchRoot, folder, profile, base: ji.worktreeBase,
+        baseline: j.data.preparation?.baseline, template: null, testsAdded: tests, needsDependency: dependency, allowTestChange: testChange,
+        acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [], probe: this.probe(), requireReproduction: ['BUG', 'PI'].includes(typeOf(key)),
+        logDir: join(this.session.paths.teamWork, 'logs'), limits: GATE_LIMITS, codeOnly: true });
+      const after = await sourceSnapshot(wt.worktreeRoot, folder, profile, ji.environmentEpoch ?? 0);
+      const at = new Date().toISOString();
+      // Worker sửa source trong lúc chạy: kết quả không thuộc snapshot nào, bỏ (gate của candidate tự chạy đủ).
+      if (JSON.stringify(after) !== JSON.stringify(snapshot)) ji.preGate = { state: 'stale', jobId: job.id, at };
+      else if (result.passed) {
+        ji.testProof = { snapshot, policy, result: { checks: result.checks.filter(c => TEST_CHECKS.includes(c.name) && c.name !== 'reproduction'),
+          regression: result.regression, testsAdded: result.testsAdded, baselineFailures: result.baselineFailures ?? [],
+          fixesBaseline: result.fixesBaseline ?? [], ...(result.removedTests ? { removedTests: result.removedTests } : {}) } };
+        ji.preGate = { state: 'passed', jobId: job.id, at };
+      } else ji.preGate = { state: 'failed', jobId: job.id, at, failKind: result.failKind, detail: oneLine(result.detail ?? result.failKind ?? 'failed', 300) };
+      j.save();
+      this.events.push('PRE_GATE', { key, state: ji.preGate.state, ...(ji.preGate.failKind ? { failKind: ji.preGate.failKind } : {}) });
+      return { passed: Boolean(result.passed), failKind: result.failKind, detail: result.detail ?? null, checks: result.checks };
+    }, { key });
+    return job.id;
+  }
+
   async runGate({ backlogItemKey: key, where, needsDependency = false, testsAdded = [], allowTestChange = null, waitSeconds = 40 }, { pi = true, ledger } = {}) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -1182,17 +1251,20 @@ export class Runtime {
     const job = this.jobs.start('run_gate', async job => {
       const profile = detectProfile(matchRoot);
       const snapshot = await sourceSnapshot(checkoutRoot, this.session.descriptor.matchId, profile, ji.environmentEpoch ?? 0);
-      const policy = digest({ testsAdded, needsDependency, testChange, base, baseline: j.data.preparation?.baseline,
-        acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [], reproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)), reproductionPolicy: 2 });
+      const policy = this.gatePolicy(key, { testsAdded, needsDependency, testChange, base, inWorktree });
+      const cacheable = !testsAdded.some(t => /(^|[\\/])answers[\\/]/.test(t));
       const proof = ji.codeGate;
-      let cachedCode = proof && proof.policy === policy && JSON.stringify(proof.snapshot) === JSON.stringify(snapshot)
-        && !testsAdded.some(t => /(^|[\\/])answers[\\/]/.test(t)) ? proof.result : null;
+      let cachedCode = proof && proof.policy === policy && JSON.stringify(proof.snapshot) === JSON.stringify(snapshot) && cacheable ? proof.result : null;
       if (!cachedCode && ji.verificationKind === 'answer_only') {
         const onlyAnswers = (await changedFiles(checkoutRoot, base)).every(f => f.path.startsWith(`${this.session.descriptor.matchId}/answers/${key}/`));
         const shared = onlyAnswers && (j.data.preparation?.codeProofs ?? []).find(p => JSON.stringify(p.snapshot) === JSON.stringify(snapshot));
         if (shared) cachedCode = { ...shared.result, testsAdded: null,
           checks: shared.result.checks.filter(c => ['typecheck', 'build', 'regression', 'tests-kept'].includes(c.name)) };
       }
+      // Pre-gate đã chạy typecheck/test/fail-before trên đúng snapshot và policy này trong lúc worker chụp evidence.
+      const tested = ji.testProof;
+      const cachedTests = !cachedCode && inWorktree && cacheable && tested?.policy === policy
+        && JSON.stringify(tested.snapshot) === JSON.stringify(snapshot) ? tested.result : null;
       // Thư mục app đã có bản build thành công của đúng snapshot (app evidence vừa build, hay gate trước): không build lại,
       // chỉ khi test không đọc gì build sinh ra (parallelBuild; `dotnet test --no-build`, script test tự build thì có).
       // Gate sắp tự build thì bản ghi cũ hết đúng; build xong mà source không đổi thì ghi bản của gate cho app start sau.
@@ -1200,7 +1272,7 @@ export class Runtime {
       const prebuilt = buildRoot && profile.parallelBuild ? reusableBuild(this.teamWorkspace, buildRoot, snapshot, { output: false }) : null;
       if (buildRoot && !prebuilt) forgetBuild(this.teamWorkspace, buildRoot);
       const result = await runGate(job, { key, checkoutRoot, matchRoot, folder: this.session.descriptor.matchId,
-        profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode, prebuilt,
+        profile, base, baseline: j.data.preparation?.baseline, template, schema, mvs, requiredEvidence, cachedCode, prebuilt, cachedTests,
         requirements: ledger === undefined ? [] : this.itemRequirements(key), ledger, needsDependency,
         testsAdded, allowTestChange: testChange, acceptedRemovals: j.data.preparation?.acceptedRemovals ?? [],
         probe: inWorktree ? this.probe() : null, requireReproduction: inWorktree && ['BUG', 'PI'].includes(typeOf(key)),

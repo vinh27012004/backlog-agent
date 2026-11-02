@@ -18,7 +18,7 @@ Never call Admin/Grader, inspect unreleased items, force push or change the assi
   and evidence content; helper owns deterministic verification. No default team_verifier LLM.
 - answer_only: one team_fixer + one independent team_pi_hypothesis solver, no default reviewer/verifier.
 - Extra hypothesis/arbitration agents only for a concrete unresolved question. Keep independent items parallel
-  (up to four ordinary code items; PI and answer_only can start immediately).
+  (as many ordinary code items as notice.freeSlots/next_actions allow; PI and answer_only can start immediately).
 
 Spawn with fork_turns "none" and triage.models model/reasoning_effort, always within allowedModels.
 A missing/unavailable model inherits root. For a new implementation attempt use the next fixer model;
@@ -39,6 +39,8 @@ UTC return_by/checkpoint_by and a new absolute results path .team-work/results/<
 Register the native thread through worker_checkpoint resume with threadId.
 For answer_only spawn the independent solver in the same step, with only item/source/materials and answer field
 names; never give it the worker answer or result. Its path is <ID>-solver-<version>.json.
+When prepare_item returns evidenceHandoff (strong-tier code item), add <evidence_handoff> to the worker brief: code and
+tests only, then a partial candidate. Its evidence repair appears as spawn_evidence_worker (below).
 
 ## Worker checkpoints and evidence
 The worker calls worker_checkpoint ready_for_evidence; the helper syncs its worktree and resumes it in the same call,
@@ -48,6 +50,13 @@ existing worker. It calls worker_checkpoint resume and restarts the app before f
 Publish an item that fixes a shared layout/login/baseline problem as soon as its gate and review pass; dependent items
 never wait for it. Never sync under a writing worker. A sync conflict leaves the worktree intact; return it to the
 worker with the error.
+While a worker captures evidence the helper runs its tests (pre-gate). next_actions pre_gate_failed: send that worker
+one message per preGateJobId with failKind and detail: stop evidence, fix the code, ready_for_evidence again.
+spawn_evidence_worker: spawn a new team_fixer with the given model/reasoning_effort (fork_turns "none") and an
+<evidence_continuation> brief: item ID/type, skills paths, untrusted item content, materials, MVS, requirements and
+requiredEvidence, company facts, worktree/profile, priorFixResultFile, the full repair todo, nextFixResultFile and UTC
+return_by. Register it with worker_checkpoint resume and its threadId. Do not follow up the coder; later evidence or
+answer repairs of the item go to this worker.
 
 The worker's final handoff is worker_checkpoint candidate plus an immutable numbered fix-result.
 Call candidate_preflight. RESULT_INVALID names fields to repair; RESULT_MUTATED requires a new filename.

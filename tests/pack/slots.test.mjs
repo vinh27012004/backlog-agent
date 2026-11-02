@@ -4,13 +4,17 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Runtime, callTool } from '../../pack/src/tools.mjs';
+import { Runtime, callTool, loadRuntimeConfig } from '../../pack/src/tools.mjs';
 import { tempDir } from './support.mjs';
 
 const row = (key, local, extra = {}) => ({ key, type: key.split('-')[0], status: 'OPEN', local, minutesLeft: 20, ...extra });
 
-function runtime(rows) {
-  const rt = new Runtime({ teamWorkspace: tempDir('mtm-slots-') });
+// Các test dưới giữ 4 slot qua file local (cùng cơ chế operator dùng để đổi số slot giữa trận).
+function runtime(rows, maxItemsInFlight = 4) {
+  const tw = tempDir('mtm-slots-');
+  mkdirSync(join(tw, 'team-sdlc-pack', 'local'), { recursive: true });
+  writeFileSync(join(tw, 'team-sdlc-pack', 'local', 'runtime.json'), JSON.stringify({ maxItemsInFlight }));
+  const rt = new Runtime({ teamWorkspace: tw });
   rt.session.phase = 'GAME';
   rt.gm = { view: { items: [] } };
   rt.itemRows = () => rows;
@@ -31,6 +35,19 @@ test('notice lists items not started while fewer than 4 items run; PI, closed an
   const prepare = runtime(rows);
   prepare.session.phase = 'PREPARE';
   assert.equal(prepare.itemNotice(), null);
+});
+
+test('the slot count comes from config/runtime.json, a local runtime.json overrides it, bad values fall back to 4', () => {
+  assert.equal(loadRuntimeConfig().maxItemsInFlight, 5);
+  const local = tempDir('mtm-runtime-cfg-');
+  for (const [value, expected] of [[3, 3], [8, 8], ['6', 6], [0, 4], [9, 4], ['many', 4], [2.5, 4]]) {
+    writeFileSync(join(local, 'runtime.json'), JSON.stringify({ maxItemsInFlight: value }));
+    assert.equal(loadRuntimeConfig(local).maxItemsInFlight, expected, String(value));
+  }
+  writeFileSync(join(local, 'runtime.json'), 'not json');
+  assert.equal(loadRuntimeConfig(local).maxItemsInFlight, 5, 'unreadable local file: pack default');
+  const full = [row('BUG-01', 'started'), row('BUG-02', 'started'), row('CR-01', 'started'), row('TASK-02', 'started'), row('TASK-01', 'todo')];
+  assert.deepEqual(runtime(full, 5).itemNotice().newItems, ['TASK-01'], 'a fifth slot starts the waiting item');
 });
 
 test('root tool results carry the notice; match_state, proxied calls and errors do not', async () => {

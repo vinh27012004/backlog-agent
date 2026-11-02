@@ -5,7 +5,8 @@ Cập nhật 31/10/2026; hợp đồng chi tiết ở [13](13-workflow-toi-uu.md
 ## 1. Tổng quan thời gian
 Giữ mục tiêu PREPARE khoảng 7 phút, hard budget helper 8 phút và hợp đồng Player.
 GAME ưu tiên PI, deadline ít slack, shared baseline/layout, điểm rồi BUG > CR > TASK.
-Tối đa bốn item code thường còn cần worker; item đã bàn giao candidate, chỉ chờ gate/review/publish, nhả slot.
+Tối đa năm item code thường còn cần worker (config/runtime.json, đổi ngay bằng team-sdlc-pack/local/runtime.json);
+item đã bàn giao candidate, chỉ chờ gate/review/publish, nhả slot.
 PI và answer_only có thể bắt đầu ngay. Sau restart vẫn làm hết `next_actions`, kể cả `prepare_item`.
 Dưới bốn phút không mở item thường mới; sáu phút cuối của item thì `next_actions` đưa lên đầu: dừng worker, gate,
 rồi publish theo luật cơ hội cuối (bỏ review/sửa thêm).
@@ -23,6 +24,9 @@ Answer-only có solver độc lập từ đầu. Root chỉ dùng cơ chế agen
 
 ## 4. Handoff và kiểm tra
 Trước final evidence worker yield; root sync ở checkpoint, đợi setup nếu cần rồi cho resume.
+Worker khai testsAdded ở ready_for_evidence thì helper chạy test và fail-before trong lúc chụp (pre-gate); hỏng thì
+next_actions pre_gate_failed và kết quả chụp báo worker sửa code ngay. Item MVS mà fixer tier strong: fixer chỉ làm code
+và test, bàn giao candidate partial; root spawn worker evidence model nhanh (spawn_evidence_worker).
 Worker ghi fix-result mới, candidate_preflight gom tất cả việc thiếu.
 Đủ điều kiện thì helper gate và reviewer chạy song song; answer_only dùng solver, không reviewer/verifier mặc định.
 result_handoff validate/bind review/solver. Sửa answer/evidence thì tiếp tục worker cũ; code thất bại thì cân nhắc worker mới.
