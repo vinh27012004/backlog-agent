@@ -1,25 +1,9 @@
 {
-  "tiers": {
-    "small": [
-      { "model": "gpt-6.1-terra", "effort": "medium" },
-      { "model": "gpt-6.1-sol", "effort": "medium" },
-      { "model": "gpt-6-astra", "effort": "medium" }
-    ],
-    "strong": [
-      { "model": "gpt-6.1-sol", "effort": "high" },
-      { "model": "gpt-6-astra", "effort": "high" },
-      { "model": "gpt-6.1-terra", "effort": "high" }
-    ],
-    "top": [
-      { "model": "gpt-6-astra", "effort": "high" },
-      { "model": "gpt-6.1-sol", "effort": "high" },
-      { "model": "gpt-6.1-terra", "effort": "high" }
-    ],
-    "review": [
-      { "model": "gpt-6.1-sol", "effort": "high" },
-      { "model": "gpt-6-astra", "effort": "high" },
-      { "model": "gpt-6.1-terra", "effort": "high" }
-    ]
-  },
-  "roles": { "reviewer": "review", "piHypothesis": "strong", "verifier": "small" }
+  "ladder": [
+    { "tier": "cheap", "model": "gpt-6-luna", "effort": "medium" },
+    { "tier": "small", "model": "gpt-6.1-terra", "effort": "medium" },
+    { "tier": "strong", "model": "gpt-6.1-sol", "effort": "high" },
+    { "tier": "top", "model": "gpt-6-astra", "effort": "medium" }
+  ],
+  "roles": { "reviewer": "small", "piHypothesis": "strong", "verifier": "small" }
 }

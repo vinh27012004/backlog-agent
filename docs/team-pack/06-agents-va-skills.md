@@ -41,6 +41,10 @@ hay truy cập item chưa phát. Ràng buộc chung ở backlog-references; help
 ## 9. Chọn model
 Root spawn fork_turns=none, model/reasoning_effort từ triage.models và trong allowedModels.
 Code/config models giữ priority list theo tier; entry thiếu hoặc MODEL_UNAVAILABLE thì kế thừa root.
+Config là một thang xếp từ rẻ đến đắt: cheap 6-luna medium, small 6.1-terra medium, strong 6.1-sol high, top 6-astra
+medium. Jev (hoặc luật khi Jev tắt/dưới ngưỡng) chọn bậc lần 1: cheap chỉ cho item easy, strong bắt buộc cho PI, CR,
+item hard và câu trả lời có bẫy, còn lại small. Lần 2 trở đi strong; lần cuối của item có deadline hoặc PI top.
+Reviewer và verifier small, checker giả thuyết strong. Bậc không có trong allowedModels thì lên bậc gần nhất, hết thì xuống.
 Thang fixer tăng theo implementation attempt; sửa ảnh/answer không tự tăng tier.
 Giới hạn native thread: chờ capacity rồi thử lại, không bỏ kiểm chứng để lách giới hạn.
 

@@ -1,8 +1,9 @@
-// Model cụ thể cho từng lần spawn (config/models.json): mỗi tier là danh sách ưu tiên, lấy model đầu tiên có trong
-// allowedModels của MTM_MODEL_POLICY_V1. Không model nào khớp thì trả null: root bỏ trống model, subagent dùng model root.
-// Thang fixer: lần 1 theo tier của Jev/luật (small: model rẻ, kể cả item có deadline; strong: model mạnh ngay, vì
-// ZVUYZ41V cho thấy 6-luna lần 1 trên item khó tốn 7–15 phút rồi vẫn phải lên 6.1-sol); từ lần 2 strong; lần cuối của
-// item có deadline hoặc PI thì top. Tính lại mỗi lần gọi vì operator có thể đổi allowedModels khi Stop/Resume.
+// Model cụ thể cho từng lần spawn (config/models.json): một thang model xếp từ rẻ đến đắt, mỗi bậc là một tier. Bậc
+// không có trong allowedModels của MTM_MODEL_POLICY_V1 thì lên bậc gần nhất phía trên, hết thì xuống bậc gần nhất phía
+// dưới. Không bậc nào khớp thì trả null: root bỏ trống model, subagent dùng model root.
+// Thang fixer: lần 1 theo tier Jev/luật chọn (cheap cho item easy, small, strong cho PI/CR/hard; kể cả item có
+// deadline); từ lần 2 strong (ZVUYZ41V: 6-luna lần 1 trên item khó tốn 7–15 phút rồi vẫn phải lên 6.1-sol); lần cuối
+// của item có deadline hoặc PI thì top. Tính lại mỗi lần gọi vì operator có thể đổi allowedModels khi Stop/Resume.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +15,10 @@ export function loadModelsConfig() {
 }
 
 export function pickModel(tier, allowed, cfg = loadModelsConfig()) {
-  const hit = (cfg.tiers[tier] ?? []).find(c => allowed.includes(c.model));
+  const at = cfg.ladder.findIndex(r => r.tier === tier);
+  if (at < 0) return null;
+  const order = [...cfg.ladder.slice(at), ...cfg.ladder.slice(0, at).reverse()];
+  const hit = order.find(r => allowed.includes(r.model));
   return hit ? { model: hit.model, reasoning_effort: hit.effort, tier } : null;
 }
 
@@ -22,7 +26,8 @@ export function pickModel(tier, allowed, cfg = loadModelsConfig()) {
 export function modelPlan({ type, modelTier, deadline, allowed, cfg = loadModelsConfig() }) {
   if (!allowed?.length) return null;
   const attempts = type === 'PI' ? 4 : 3;
-  const tiers = Array.from({ length: attempts }, (_, i) => (i > 0 || modelTier === 'strong' ? 'strong' : 'small'));
+  const first = ['cheap', 'small', 'strong'].includes(modelTier) ? modelTier : 'small';
+  const tiers = Array.from({ length: attempts }, (_, i) => (i > 0 ? 'strong' : first));
   if (deadline || type === 'PI') tiers[attempts - 1] = 'top';
   return {
     fixer: tiers.map(t => pickModel(t, allowed, cfg)),

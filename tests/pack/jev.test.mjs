@@ -67,25 +67,29 @@ test('PI severity never drops below critical', async () => {
 });
 
 test('PI, CR and hard items always get the strong tier; Jev skips review only for easy items', async () => {
-  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "small" ở 0.9, reviewer p_yes 0.1
+  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "cheap" ở 0.9, reviewer p_yes 0.1
   const cr = await d.route('CR-01', ITEM, { difficulty: 'medium' });
   assert.equal(cr.model.value, 'strong');
   assert.equal(cr.model.source, 'rule');
-  assert.equal(cr.model.jev, 'small');
+  assert.equal(cr.model.jev, 'cheap');
   assert.equal(cr.reviewer.value, true);
   assert.match(cr.reviewer.reason, /only for easy items/);
   const hard = await d.route('BUG-02', ITEM, { difficulty: 'hard' });
   assert.equal(hard.model.value, 'strong');
   assert.equal(hard.reviewer.value, true);
   const easy = await d.route('TASK-01', ITEM, { difficulty: 'easy' });
-  assert.equal(easy.model.value, 'small');
+  assert.equal(easy.model.value, 'cheap');
   assert.equal(easy.model.source, 'jev');
+  // Jev chọn cheap cho item medium: luật nâng lên small.
+  const medium = await d.route('BUG-03', ITEM, { difficulty: 'medium' });
+  assert.deepEqual([medium.model.value, medium.model.source, medium.model.jev], ['small', 'rule', 'cheap']);
+  assert.match(medium.model.reason, /cheap tier is only for easy items/);
   assert.equal(easy.reviewer.value, false);
   assert.equal(easy.reviewer.source, 'jev');
 });
 
 test('a tricky answer-only item gets the strong tier from the first attempt; a plain one stays small', async () => {
-  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "small" ở 0.9
+  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "cheap" ở 0.9
   const tricky = await d.route('TASK-01', ITEM, { difficulty: 'medium' }, { signals: { flags: ['data', 'tricky', 'answerOnly'] } });
   assert.equal(tricky.model.value, 'strong');
   assert.equal(tricky.model.source, 'rule');
@@ -126,7 +130,7 @@ test('intake asks triage and route in one request and logs the rule answer next 
     const difficulty = lines.find(l => l.name === 'difficulty');
     assert.deepEqual([difficulty.source, difficulty.value, difficulty.rule, difficulty.jev], ['jev', 'easy', 'medium', 'easy']);
     const model = lines.find(l => l.name === 'model');
-    assert.deepEqual([model.source, model.value, model.rule, model.jev], ['rule', 'strong', 'strong', 'small']);
+    assert.deepEqual([model.source, model.value, model.rule, model.jev], ['rule', 'strong', 'strong', 'cheap']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

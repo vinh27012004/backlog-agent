@@ -91,6 +91,7 @@ const TRIAGE_QUESTIONS = {
 
 const ROUTE_QUESTIONS = {
   model: choice('Which model tier should implement this change?', {
+    cheap: 'small, fully specified change in one place or a direct answer, no investigation needed, that a fast low-cost model finishes in one attempt',
     small: 'routine local change with clear instructions and a low impact radius (code_topology)',
     strong: 'needs investigation or design, high impact radius or cross-module changes, or a high-risk domain (kb_insights.risk_factors)' }),
   reviewer: noul('Is an independent code review needed for this change (risk of subtle regressions, unclear root cause, security impact)?')
@@ -175,10 +176,14 @@ export class Decider {
     const flags = new Set(signals?.flags ?? []);
     const trickyAnswer = flags.has('answerOnly') && flags.has('tricky');
     const needsStrong = type === 'PI' || type === 'CR' || difficulty === 'hard' || trickyAnswer;
-    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : 'small'), new Set(['small', 'strong']));
+    // Thang model rẻ → đắt (config/models.json): luật chọn cheap cho item easy; Jev được hạ xuống cheap chỉ khi item easy.
+    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : difficulty === 'easy' ? 'cheap' : 'small'),
+      new Set(['cheap', 'small', 'strong']));
     if (needsStrong && model.value !== 'strong') {
       const who = type === 'PI' || type === 'CR' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
       model = { ...model, value: 'strong', source: 'rule', reason: `${who} always gets the strong tier` };
+    } else if (model.value === 'cheap' && difficulty !== 'easy') {
+      model = { ...model, value: 'small', source: 'rule', reason: `the cheap tier is only for easy items (difficulty ${difficulty})` };
     }
     let reviewer;
     // PI sai = 0 điểm và không nộp lại được; reviewer chạy cùng lúc với gate (~1 phút) nên gần như không tốn thêm giờ.
