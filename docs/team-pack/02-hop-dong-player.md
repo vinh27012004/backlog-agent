@@ -1,6 +1,6 @@
 # 02 · Hợp đồng với MTM Player
 
-Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35, 0.9.39 và 0.9.41, xem §12) (`vendor/mtm-player-0.9.41/app/`),
+Mọi thứ trong file này đã đọc ra từ **source Player 0.9.33** (kiểm lại trên 0.9.35, 0.9.39, 0.9.41 và 0.9.44, xem §12) (`vendor/mtm-player-0.9.44/app/`),
 trừ chỗ ghi *chưa xác minh*. Đường dẫn `src/...` bên dưới tính từ thư mục `app/`.
 
 ## 1. Player làm gì, không làm gì
@@ -260,6 +260,34 @@ thước), `src/cli-supervisor.mjs` (`protocolPrompt`), `src/codex-app-server.mj
 `src/local-app-lifecycle.mjs`, `src/submission-policy.mjs`, `src/model-policy.mjs`,
 `src/workspace-paths.mjs`, `src/workspace-instructions.mjs`, `src/preparation.mjs`, và
 `contracts/progress-event.schema.json` trong sample pack mới.
+
+### 0.9.44 (01/11/2026)
+
+Bản `mtm-player-0.9.44-windows` (bản phát hành không kèm `node.exe`, phải chép `node.exe` của Node 24 LTS vào cạnh
+`mtm-player.exe`), để ở `vendor/mtm-player-0.9.44/`; cài ở `D:\mtm\MTM-PLAYER\0.9.44` với `node.exe` v24.11.1 chép từ
+bản 0.9.41. Trong danh sách trên chỉ `cli-supervisor.mjs` và
+`codex-app-server.mjs` đổi, đều ở phần activity và transport; `protocolPrompt`, cách duyệt quyền, `team-runtime`,
+`team-install`, `match/progress.mjs` và các policy giữ nguyên, nên pack không phải sửa gì; contract test chạy lại trên
+source 0.9.44 (141/141). Thay đổi:
+
+- `src/bootstrap.mjs`, `src/init-web.mjs`: Init/Restart gửi header `x-mtm-player-version`; Game Master có thể trả 409
+  `PLAYER_VERSION_TOO_OLD` kèm `minimumVersion` và `downloadUrl`, trang Init báo phải cài bản mới (không phải lỗi Team
+  API Key). Key đã lưu chỉ được dùng lại cho đúng origin Game Master đã lưu nó.
+- `src/cli-activity.mjs`, `src/cli-supervisor.mjs`, `src/codex-app-server.mjs`: activity giữ tối đa 1.500 dòng (trước
+  là 500) và 2 MiB, mỗi item một dòng (dòng xong thay dòng bắt đầu, giữ `startedAt`); lệnh shell chỉ còn ở mục tool,
+  không thêm dòng `process`. App-server đọc stdout theo dòng tới 32 MiB (`APP_SERVER_LINE_TOO_LARGE` thay vì kill
+  Codex khi vượt 4 MiB), gộp các lần lưu telemetry (1 s), cache transcript subagent và đọc lần lượt.
+- `src/dashboard-streaming.mjs`, `src/local-app.mjs`: snapshot bỏ entry trùng (started đã có completed, reasoning),
+  mỗi transcript tối đa 200 entry / 256 KiB; chỉ đẩy khi nội dung đổi hoặc heartbeat 60 s; lỗi thì backoff tới 5 phút;
+  409 `MATCH_NOT_ACCEPTING_DASHBOARD` thì chờ, trận kết thúc thì dừng. Xoá credential khi trận kết thúc không còn chờ
+  đồng bộ trạng thái backlog.
+- `src/resource-monitor.mjs` (mới): ghi `RESOURCE_SAMPLE` vào `diagnostics.ndjson`; Player vượt 4 GB thì tạm dừng
+  streaming (`STREAMING_PAUSED_MEMORY`), round vẫn chạy. Stderr của worker nền ghi vào `player-stderr.log`.
+- `src/progress.mjs` (dashboard): refresh 2 s (trước 0,5 s), file tĩnh ghi 5 s một lần, snapshot không gửi
+  `activityRecords` hai lần.
+- Hỗ trợ Linux (Ubuntu, `install-team-pack.sh` gọi thẳng `scripts/install.mjs`, picker `zenity`). Pack chưa thử trên
+  Linux: `install.mjs` không cần PowerShell nhưng so đường dẫn trust của Codex theo kiểu Windows (`\`, không phân biệt
+  hoa thường). Đội chạy trên Windows nên chưa phải sửa.
 
 ### 0.9.41 (30/10/2026)
 

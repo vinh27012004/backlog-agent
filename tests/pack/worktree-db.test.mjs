@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { appDataLock } from '../../pack/src/env/datalock.mjs';
 import { dbNameOf, dedicatedAppDatabase, dropWorktreeDatabases, worktreeEnvText } from '../../pack/src/env/environment.mjs';
+import { Runtime } from '../../pack/src/tools.mjs';
+import { pnpmModulesText } from '../../pack/src/core/candidates.mjs';
 import { tempDir } from './support.mjs';
 
 const MAIN = [
@@ -77,4 +79,34 @@ test('app_data lock returns at once for an item with its own database and leaves
   assert.equal((await call({ action: 'unlock', backlogItemKey: 'CR-01', database: 'freelanceos_m1_cr01' })).unlocked, true);
   assert.equal((await call({ action: 'status' })).heldBy, 'BUG-02', 'shared lock untouched');
   assert.equal((await call({ action: 'lock', backlogItemKey: 'CR-01' })).locked, false, 'shared database still queues');
+});
+
+test('subagent helper without a session still sees the worktree database from matchRoot or the running app', async () => {
+  const tw = tempDir('mtm-subdb-');
+  const main = join(tw, 'matches', 'M1', 'M1'), wt = join(tw, 'matches', 'M1', '.team-work', 'wt', 'CR-02', 'M1');
+  for (const root of [main, wt]) {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'package.json'), '{}');
+  }
+  writeFileSync(join(main, 'src', '.env'), MAIN);
+  writeFileSync(join(wt, 'src', '.env'), worktreeEnvText(MAIN, { matchName: 'M1', key: 'CR-02', appDatabase: true }));
+  const rt = new Runtime({ teamWorkspace: tw });
+  assert.equal(rt.itemDatabase('CR-02'), null, 'nothing to go on');
+  assert.equal(rt.itemDatabase('CR-02', wt), 'freelanceos_m1_cr02');
+  assert.equal(rt.itemDatabase('CR-01', wt), null, 'matchRoot of another item');
+  // 4D895OVI: CR-02 gọi lock không có matchRoot; app của nó đang chạy trong worktree.
+  mkdirSync(join(tw, 'team-sdlc-pack', 'local', 'apps'), { recursive: true });
+  writeFileSync(join(tw, 'team-sdlc-pack', 'local', 'apps', 'CR-02.json'), JSON.stringify({ matchRoot: wt, mode: 'production' }));
+  assert.equal(rt.itemDatabase('CR-02'), 'freelanceos_m1_cr02');
+  const lock = await rt.definitions().find(t => t.name === 'app_data').handler({ action: 'lock', backlogItemKey: 'CR-02' });
+  assert.deepEqual([lock.locked, lock.dedicated], [true, true]);
+});
+
+test('pnpm rewriting its modules file does not change the environment fingerprint', () => {
+  const json = { layoutVersion: 5, nodeLinker: 'isolated', prunedAt: 'Mon, 02 Nov 2026 03:19:05 GMT', ignoredBuilds: [], pendingBuilds: [], skipped: ['a'] };
+  const rewritten = { ...json, prunedAt: 'Mon, 02 Nov 2026 03:30:51 GMT' }; delete rewritten.ignoredBuilds;
+  assert.equal(pnpmModulesText(JSON.stringify(json)), pnpmModulesText(JSON.stringify(rewritten)));
+  assert.notEqual(pnpmModulesText(JSON.stringify(json)), pnpmModulesText(JSON.stringify({ ...json, skipped: ['b'] })), 'real dependency change');
+  const yaml = 'layoutVersion: 5\nprunedAt: Mon, 02 Nov 2026 03:19:05 GMT\nignoredBuilds:\n  - esbuild\nskipped: []\n';
+  assert.equal(pnpmModulesText(yaml), pnpmModulesText('layoutVersion: 5\nprunedAt: Tue, 03 Nov 2026 01:00:00 GMT\nskipped: []\n'));
 });

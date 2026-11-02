@@ -7,7 +7,7 @@ Triển khai 31/10/2026; chưa benchmark tốc độ trên một trận LLM mớ
 | Tool | Hành vi |
 |---|---|
 | prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief |
-| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; resume mở lại; root đăng ký threadId |
+| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); resume mở lại; root đăng ký threadId |
 | candidate_preflight | Validate contract/claims/answer/evidence/fingerprint; candidateId, reviewScope và repair.todo hợp nhất |
 | run_gate / job_status | Helper chạy/chờ gate, không cần verifier LLM quản lý job |
 | result_handoff | Validate và bind review/solver/hypothesis/arbitration vào candidate, lỗi chỉ field |

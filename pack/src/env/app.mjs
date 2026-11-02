@@ -25,7 +25,7 @@ const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{
 export const appsDir = teamWorkspace => join(teamWorkspace, 'team-sdlc-pack', 'local', 'apps');
 const stateFile = (teamWorkspace, key) => join(appsDir(teamWorkspace), `${key}.json`);
 
-function readState(teamWorkspace, key) {
+export function readState(teamWorkspace, key) {
   try { return JSON.parse(readFileSync(stateFile(teamWorkspace, key), 'utf8')); } catch { return null; }
 }
 

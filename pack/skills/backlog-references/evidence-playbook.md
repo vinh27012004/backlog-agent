@@ -1,14 +1,16 @@
 # Evidence playbook (screenshots, running app, scenario data)
 
 Read before screenshot, download or data scenarios. Use one call per scenario, at most two repaired retries and
-about a third of the time box; report unfinished checks NOT_RUN. Before final evidence, yield with
-worker_checkpoint ready_for_evidence, stop writes and message root once. After sync/root says resume, call
-worker_checkpoint resume and restart the app.
+about a third of the time box; report unfinished checks NOT_RUN. Before final evidence call
+worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
+the app again and capture at once. Only when it returns writesAllowed:false: stop writes, message root once with its
+hint and wait for resume.
 
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
-outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale after source/env changes;
-reviewer still inspects their content. A manifest proves provenance, not correct UI.
+outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale when your own files or the
+environment change after capture; a sync that only brings other items' files keeps them valid. Reviewer still inspects
+their content. A manifest proves provenance, not correct UI.
 
 ## 0. Evidence the item text asks for
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
@@ -34,7 +36,9 @@ in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
 - Never run `pnpm dev`, `next start` or `taskkill` yourself (Practice TOKXKPBV: BUG-01's fixer started the dev
   server 4 times, killed processes by port and lost 6 minutes to a dev server that served stale CSS).
 - Changed code since the last start: `app start` again; it stops the old app and rebuilds. Pass `build: false` only
-  right after a build you ran yourself.
+  right after a build you ran yourself. Make every source change first (a seed script copied into `src/` counts),
+  then start the app once: a later change makes capture fail `EVIDENCE_STALE_APP` naming the changed files (Practice
+  4D895OVI: CR-01 and CR-02 rebuilt the app twice each).
 - `app {action: "stop", backlogItemKey}` once your evidence is written (also on a time box stop).
 - `UNSUPPORTED_APP` (not a node app): build, then start it yourself on a free port from 3100, output to the log path
   above (never into the worktree: Windows locks a running app's log and the worktree can no longer be synced or
@@ -54,8 +58,11 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 → goto <the screen> → <the MVS steps> → assertText <the expected value>
 → screenshot answers/<ID>/evidence/<exact file name the MVS asks for>.png
 ```
+- Each call opens a new blank page: only cookies carry over, never the page, its filters or a dialog. Start every
+  call with `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls
+  to `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
 - Give every call the same `browserProfile` (e.g. `"<id>-admin"`): the login cookie is kept, so later calls may start
-  at the screen. A failed step whose `error.details.url` is `/login` means the session is gone: put the `login` step
+  at the screen. `BROWSER_START_FAILED` twice in a row: use a new `browserProfile` name and log in again. A failed step whose `error.details.url` is `/login` means the session is gone: put the `login` step
   back in (it returns `alreadySignedIn` when the cookie still holds).
 - `LOGIN_FAILED`: the app refused the seeded account; `error.details.visibleText` has its message. Seeding again
   (`app_data` lock, §6) may restore it; otherwise the scenario is `NOT_RUN` with that message. A login bug the item
@@ -65,11 +72,16 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
   (nobody answers during the match).
 - File names: exactly what the MVS lists under "Required evidence"; the gate fails a `PASS` that misses one.
 - `assertText` before `screenshot`: a picture of the wrong state is worse than none.
+  `assertText` waits up to 5 s; `screenshot` waits until requests and loading indicators are gone. A step with
+  `unsettled` was captured while still loading: `waitFor` the loaded content and capture again. Paths may be
+  relative to `context.matchRoot` (`answers/<ID>/evidence/<name>.png`).
 
 ## 3. Selectors
 - `selector` is plain CSS. Playwright syntax (`:has-text()`, `>>`, `text=`) fails with `INVALID_SELECTOR`.
 - Pick by visible text with `selector` + `text` together: `{selector: "[role=tab]", text: "Invoices"}`,
   `{selector: "button", text: "New invoice"}`; `index` picks the n-th match.
+- Mobile viewport: the desktop sidebar is hidden and navigation moves to a menu or bottom bar with its own labels.
+  Use `goto` unless the scenario is about that navigation; otherwise take the label from `error.details.candidates`.
 - A custom select (Radix, shadcn): click its trigger, then `{action: "click", selector: "[role=option]", text: "<name>"}`.
   A native `<select>` uses `{action: "select", selector, value}`.
 - A failed step returns `error.details`: `failedStep`, `url`, `visibleText` and the clickable `candidates` on the page.
@@ -79,8 +91,11 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 - On a UI-layout bug, the cover is the bug: that failure is your "before" evidence.
 - Otherwise retry that click with `force: true` (Practice #5: BUG-01's sidebar covered the Accounting tabs in every
   other item's worktree). Say in the scenario note that a shared layout bug was clicked through.
-- Never copy another item's files. Root syncs at a yielded checkpoint; keep unrelated code work moving,
-  then resume evidence within the time box after that checkpoint is resolved.
+- The cover also hides what your screenshot must show: when the scenario names no viewport, capture at a width below
+  the app's desktop breakpoint (e.g. 1023 or 767 px, where the sidebar collapses) so the content is visible, and say so.
+- Never copy another item's files and never wait or yield for another item's fix (Practice 4D895OVI: CR-01 and CR-02
+  yielded for BUG-01's layout fix, which never reached main, and neither was submitted). Capture now; if the fix
+  lands later, publish still integrates your item and its evidence stays valid.
 
 ## 5. A failing server (500, timeout, offline, slow)
 Add a `route` step before the action that sends the request, e.g. `{action: "route", url: "/api/invoices/export",
@@ -93,7 +108,8 @@ Organizer seeds wipe and recreate data (Practice #2: CR-01's seed deletes every 
 invoice and the later scenarios ran on damaged data). An item worktree's app normally has its own database, migrated
 and seeded when the worktree was set up, so other items never see or change your data; `app_data lock` then returns
 `dedicated: true` at once. Only a shared database (main checkout, `dedicated` absent) makes items queue.
-1. `app_data {action: "lock", backlogItemKey, waitSeconds: 50}`; repeat while it returns `locked: false`.
+1. `app_data {action: "lock", backlogItemKey, matchRoot: "<worktree matchRoot>", waitSeconds: 50}`; repeat while it
+   returns `locked: false`. Always pass `matchRoot`: it is how the helper sees your own database.
 2. Run the seed the MVS names, then every data scenario in MVS order in one pass (later ones often use records an
    earlier one created).
 3. A step went wrong (wrong click, wrong value, a record in an unexpected state such as VOID): stop, re-seed only if the

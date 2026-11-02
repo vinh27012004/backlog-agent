@@ -48,7 +48,9 @@ không tự `git push`.
   guardian (Practice #2: 88 lượt cho root, khoảng 17% token cả trận). Chỉ đọc: `match_state`, `read_item`,
   `wait_for_update`, `job_status`, `detect_profile`, `decide` (chỉ ghi sổ nội bộ), `company_tools`, và các tool chỉ
   ghi journal: `worker_checkpoint`, `candidate_preflight`, `result_handoff`, `app_data` (NBDB5U0O: guardian duyệt ba
-  tool đầu 101 lượt, 8,2M/24,2M token guardian; hạn mức gói hết sau 30 phút).
+  tool đầu 101 lượt, 8,2M/24,2M token guardian; hạn mức gói hết sau 30 phút). `worker_checkpoint ready_for_evidence`
+  còn tự sync worktree của chính item (4D895OVI) mà vẫn giữ `readOnlyHint`: chỉ đụng worktree đó, xung đột thì giữ
+  nguyên, không đụng main, remote hay Game Master.
 - `tools/call` → `{content: [{type: "text", text: "<JSON gọn>"}], structuredContent: {...kết quả..., networkActivity?: [...]}, isError}`.
 - Method lạ → lỗi `-32601`; JSON hỏng → `-32700`; tham số sai → `-32602`.
 - Giới hạn: request ≤ 1 MB; text kết quả ≤ 64 KB (cắt và trỏ tới file nếu dài); **mỗi lời gọi ≤ 55 s**,
@@ -625,7 +627,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   app trên một database thì làm hỏng evidence của nhau. Worktree item có database dev riêng (§5.9) thì `lock`/`unlock`
   trả ngay `{locked|unlocked: true, dedicated: true, database}` và không đụng file khoá; khoá chỉ còn cho database dùng
   chung (checkout chính, worktree tạo trước bản này, stack không có `migrate`).
-- `{action: "lock"|"unlock"|"status", backlogItemKey, minutes? (1–30, mặc định 15), waitSeconds? (≤ 50)}`. Khoá là file
+- `{action: "lock"|"unlock"|"status", backlogItemKey, matchRoot?, minutes? (1–30, mặc định 15), waitSeconds? (≤ 50)}`.
+  Helper của subagent không có session nên nhận ra database riêng từ `matchRoot` (worktree) hoặc từ app đang chạy của
+  item (4D895OVI: thiếu cái này, CR-02 chờ khoá chung 4 phút dù có database riêng). Khoá là file
   `team-sdlc-pack/local/app-data.lock.json` tạo độc quyền (subagent có thể gọi helper ở tiến trình khác), tự hết
   hạn, chủ khoá gọi lại để gia hạn. Đang có item khác giữ thì trả `{locked: false, heldBy, until, hint}`.
 - `readOnlyHint` (như `decide`): chỉ ghi file khoá nội bộ; agent gọi lặp khi chờ, qua `auto_review` mỗi lần thì tốn token.

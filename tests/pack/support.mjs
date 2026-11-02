@@ -12,7 +12,7 @@ export const validFixResult = (overrides = {}) => ({ status: 'fixed', summary: '
   hypotheses: [], changed_files: [], tests_added: [], verification: [], needs_dependency: [], test_change: null, risks: [], confidence: 0.8, requirements: [], ...overrides });
 export const REPO = resolve(here, '..', '..');
 export const PACK = join(REPO, 'pack');
-export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.41', 'app', 'src');
+export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.44', 'app', 'src');
 export const hasPlayer = existsSync(join(PLAYER_SRC, 'progress.mjs'));
 
 export const player = async name => import(pathToFileURL(join(PLAYER_SRC, name)).href);

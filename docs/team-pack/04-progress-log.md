@@ -5,7 +5,7 @@
 progress của Player; xem [13](13-workflow-toi-uu.md).
 
 Nguồn chuẩn: `validateProgressEvent()` và `reduceProgressEvents()` trong
-`vendor/mtm-player-0.9.41/app/src/match/progress.mjs` (dòng 215–555), và
+`vendor/mtm-player-0.9.44/app/src/match/progress.mjs` (dòng 215–555), và
 `vendor/team-orchestrator-pack-0.5.1/contracts/progress-event.schema.json`. Schema JSON **không** diễn đạt hết các
 luật liên field; Player kiểm thêm bằng code. Helper phải kiểm **cả hai**.
 

@@ -424,3 +424,35 @@ judge. Nguồn: `runs/judge/FMC0ZXFC/_usage/usage.md`, `.team-work/journal.json`
 Lặp lại: L64 (`bug01_fix1` tier small, `medium` chạy 14m54s, quá 12 phút), L69 (`wait_agent` 60 s 13 lần và 10 s
 6 lần; root 15,4M input, 33,2% tổng). Rủi ro đã biết vẫn y nguyên: BUG-02 viết lại test cascade baseline
 (`acceptedRemovals`), BUG-01 sửa thêm `reports-tab.tsx` theo lệnh root (ngoài phạm vi item).
+
+## #15 · 01/11/2026 · tự luyện `PXWV53VC` (Player 0.9.41, pack sau commit `55bdcf6`)
+
+Nộp cả 5 item: BUG-02 (bắt đầu 18:15:31Z, nộp 18:25:14Z), BUG-01 (18:15:34Z → 18:31:19Z), CR-01 (18:29:30Z → 18:43:08Z),
+TASK-02 (18:29:32Z → 18:49:13Z), TASK-01 (18:44:24Z → 18:52:58Z). Chưa chạy judge, chưa tính usage; mục này chỉ ghi các lỗi
+đã sửa. Nguồn: `.team-work/journal.json`, transcript root `~/.codex/sessions/2026/11/01/rollout-2026-11-01T01-12-52-…-9f15-83182e12b9c4.jsonl`
+và của các fixer/reviewer cùng ngày.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L82 | `publish_item` so hash bytes thô của `submit.json` ở main với worktree. Máy bật `core.autocrlf=true` (gitconfig hệ thống): cherry-pick viết `submit.json` ra main bằng CRLF dù blob vẫn là LF, nên mọi answer nhiều dòng báo `CANDIDATE_STALE: integrated answer differs from reviewed candidate` (job-22, job-23 của TASK-02, job-28 của TASK-01). Root phải đổi `submit.json` trong worktree sang CRLF rồi preflight lại | Khoảng 2m19s ở TASK-02 và 1m09s ở TASK-01, gồm phối hợp và kiểm tra lại | **Đã** sửa: so nội dung sau khi bỏ CRLF (`textDigest` trong `workflow.mjs`). Test trong `workflow.test.mjs` bật `core.autocrlf` |
+| L83 | Evidence: cả ba worker gửi `screenshot.path` tương đối (`answers/BUG-01/evidence/…png`) và bị từ chối (`screenshot path must be absolute`). BUG-01 thêm: ở viewport 390 px, `assertText "Accounting"` ngay sau click "Money" báo `ASSERT_FAILED` vì trang chưa chuyển; ảnh dashboard chụp sau 400 ms còn toàn "—", reviewer bắt chụp lại | Mỗi worker mất thêm một lượt gọi; BUG-01 phải chụp lại và review lại | **Đã** sửa: đường dẫn tương đối tính từ `context.matchRoot`; `assertText` chờ tối đa 5 s; `screenshot` chờ hết request và chỉ báo loading (`aria-busy`, skeleton, spinner), tối đa 6 s, nếu không thì bước ghi `unsettled`; `idle:false` để chụp trạng thái đang tải. Evidence playbook có thêm ghi chú điều hướng mobile. Test trong `browser.test.mjs` |
+| L84 | CR-01: gate pass lúc 18:39:59Z, root gọi `worker_checkpoint resume` và giao sửa trong khi reviewer còn đang review candidate `cbf16833`; worker ghi vào worktree nên `result_handoff` của review đầu bị `CANDIDATE_STALE` lúc 18:40:51Z | Mất review đầu, reviewer phải review lại trên candidate mới | **Đã** sửa: `resume` trả `REVIEW_PENDING` khi candidate hiện tại đang chờ review (chưa handoff, không phải `repair`/`stale`); `abandonReview:true` chỉ dùng khi reviewer đã mất, candidate thành `stale`. Skill của orchestrator ghi luật này. Test trong `workflow.test.mjs` |
+
+## #16 · 02/11/2026 · tự luyện `4D895OVI` (pack sau commit `5f69e25` và các sửa chưa commit của #15)
+
+Nộp 3/10 item: BUG-02 (03:18:42Z → 03:32:14Z), PI-01 (03:30:06Z → 03:36:51Z), BUG-03 (03:26:25Z → 03:40:09Z), 340 điểm.
+TASK-03 bị từ chối `BACKLOG_ITEM_CLOSED` (L85). BUG-01, BUG-04, CR-01, CR-02, CR-03 và TASK-04 chưa nộp: người chạy
+bấm stop lúc 03:48:23Z để kiểm tra lỗi (`turn_aborted: interrupted`), từ đó tới khi trận kết thúc (03:57:47Z) không
+thread nào chạy; lúc đó BUG-04 đã qua gate và đang review. Số item nộp được vì vậy không phản ánh đủ trận. Thời gian code + test của
+BUG/CR chỉ 1–5 phút, evidence 5–10 phút mỗi lượt. Guardian không từ chối lần nào. Nguồn: `.team-work/journal.json`,
+transcript root `~/.codex/sessions/2026/11/02/rollout-2026-11-02T10-03-38-…-ea20faf82a86.jsonl` và 19 subagent cùng ngày.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L85 | `publish_item` của item answer-only: `own` (file source item sửa) luôn rỗng vì snapshot và `changedPaths` bỏ `answers/`, nên điều kiện `!own.length \|\| …` báo `CANDIDATE_STALE` mỗi khi main đổi sau lúc tạo worktree. TASK-03 job-33 (03:43:01Z) đã cherry-pick `658fad4` lên main rồi dừng; root theo `refresh_candidate` sync, gate `no_change`, publish lại `GATE_STALE`, cuối cùng tự `commit_and_push` đúng commit đó và `submit_work` lúc 03:45:54Z | Trễ hạn 8 giây (đóng 03:45:46Z): mất 50 điểm dù worker và solver cùng ra `"3"` | **Đã** sửa: chỉ so khi item có file source (`workflow.mjs`); answer vẫn so riêng. Test trong `workflow.test.mjs` |
+| L86 | Fingerprint môi trường hash nguyên `node_modules/.modules.yaml`; mọi lệnh `pnpm run/test/exec` ghi lại file này (đổi `prunedAt`, bỏ `ignoredBuilds`) dù dependency y nguyên | `EVIDENCE_STALE_APP` 4 lần (CR-01, CR-02 phải build lại app), TASK-03 job-37 `GATE_STALE: main environment changed since worktree creation` | **Đã** sửa: bỏ `prunedAt`, `ignoredBuilds`, `pendingBuilds` trước khi hash (`pnpmModulesText`); `EVIDENCE_STALE_APP` nêu file source nào đổi. Test trong `worktree-db.test.mjs` |
+| L87 | Evidence final so snapshot của cả source: sync chỉ kéo file của item khác về cũng làm mọi ảnh cũ. BUG-01 sync lúc 03:42:57Z để lấy bản sửa baseline của BUG-02 | BUG-01 chụp lại 4 ảnh (03:45 → 03:48Z), chưa kịp gate thì root bị ngắt | **Đã** sửa: manifest ghi `base` (HEAD worktree lúc chụp); preflight giữ ảnh khi mọi file đổi từ lúc chụp đều do main mang về và item không sửa. Test trong `workflow.test.mjs` |
+| L88 | `app_data` gọi từ subagent chạy trong helper không có session, `itemDatabase()` trả null nên rơi về khoá chung, dù worktree có database riêng (`freelanceos_4d895ovi_cr02`) | CR-02 chờ khoá của CR-01 rồi BUG-04 từ 03:38:26Z tới 03:42:34Z | **Đã** sửa: suy worktree từ `matchRoot` truyền vào hoặc từ app đang chạy của item, checkout chính là `<matches>/<id>/<folder>`; playbook bảo luôn truyền `matchRoot`. Test trong `worktree-db.test.mjs` |
+| L89 | `launch()` (`browser.mjs`) đọc `DevToolsActivePort` gặp `EBUSY` (Edge đang ghi) rồi ném lỗi mà không kill Edge; Edge mồ côi giữ profile `bug04-admin` | BUG-04: `INTERNAL_ERROR` 03:39:14Z, `BROWSER_START_FAILED` 03:39:59Z, đổi profile mới chạy được 03:41:08Z | **Đã** sửa: đọc lại khi `EBUSY/EPERM/EACCES`, kill Edge ở mọi lỗi lúc mở |
+| L90 | BUG-01 (sidebar che nội dung) chặn ảnh của item khác: CR-01 (03:42:34Z) và CR-02 (03:44:06Z) yield chờ bản sửa layout, bản đó không lên main. Thêm: CR-01 mất 3 lần `ELEMENT_NOT_FOUND` vì tưởng trang còn mở từ lần gọi trước; mỗi item chờ root sync ở `ready_for_evidence` khoảng 1 phút | Hai CR (260 điểm) kẹt tới hết trận | **Đã** sửa: `worker_checkpoint ready_for_evidence` tự sync worktree và mở ghi lại ngay (root chỉ xử lý khi xung đột hoặc cài lại dependency); prompt: không bao giờ chờ bản sửa của item khác, chụp ở viewport dưới breakpoint desktop khi bị che, mỗi lần gọi là trang mới; skill: nộp ngay item sửa lỗi dùng chung |
+| L91 | Fixer BUG-01 ghi PARTIAL và AC-4 `not_met` chỉ vì 2 test baseline của BUG-02, dù helper đã cảnh báo "use DONE"; root sync theo đó | Dẫn tới L87 | **Đã** sửa (prompt): baseline của item khác không làm `partial`/`not_met` và không cần sync; skill root trả lời todo đó bằng followup set DONE |

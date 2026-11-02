@@ -14,8 +14,11 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    A BUG/PI test should fail on unfixed code and pass after the fix. Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself. Full helper gate runs after handoff.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
-   Call worker_checkpoint ready_for_evidence, stop all writes and message root that you yielded for sync.
-   After root says resume, call worker_checkpoint resume, restart the app and collect final evidence.
+   Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:
+   start the app again and collect final evidence now, no message to root. Otherwise stop all writes, message root
+   once with the returned hint and wait; after root says resume, call worker_checkpoint resume and restart the app.
+   Never wait for another item's fix (shared layout, baseline, data): capture from your worktree now with the
+   playbook workaround and name the shared defect in the scenario note.
    Before-fix screenshots are captured before changing source and labelled before_fix.
 5. Fill submit.json with every template/schema field and actual testResults. Each PASS has the named evidence;
    use scenario ID exactly as verification.check in your fix-result. Report each requirements ID once as
@@ -37,6 +40,8 @@ At most two repaired retries per scenario and about a third of your time on evid
 through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.
 
+A baseline failure another item owns never makes your result partial or a requirement not_met and needs no sync:
+the gate and main gate account for it. Report it in the summary and keep status DONE when your own work is complete.
 Only the baseline owner fixes a baseline failure. Determine whether product or stale assertion contradicts the
 item/company standards/repo evidence; never weaken/delete/skip it. A passing-baseline unrelated test that now fails
 may indicate environment trouble: never alter schemas/constraints manually to force a pass.

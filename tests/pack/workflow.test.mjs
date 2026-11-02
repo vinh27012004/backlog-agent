@@ -114,10 +114,10 @@ test('manifest preserves before-fix separately and detects stale final source/mo
   const f = fixture(), snapshot = await f.rt.workflow.snapshot(f.key), path = join(f.dir, 'evidence', 'shot.png'); writeFileSync(path, 'bytes');
   const entry = { path, name: 'shot.png', phase: 'before_fix', source: 'old', environment: 'old', sha256: digest(readFileSync(path)) };
   const problems = () => evidenceProblems(f.rt.session.paths.teamWork, f.key, f.wt.matchRoot, snapshot);
-  recordEvidence(f.rt.session.paths.teamWork, f.key, entry); assert.deepEqual(problems(), []);
-  recordEvidence(f.rt.session.paths.teamWork, f.key, { ...entry, phase: 'final' }); assert.match(problems()[0], /older source/);
-  recordEvidence(f.rt.session.paths.teamWork, f.key, { ...entry, ...snapshot, phase: 'final' }); assert.deepEqual(problems(), []);
-  writeFileSync(path, 'changed'); assert.match(problems()[0], /bytes changed/);
+  recordEvidence(f.rt.session.paths.teamWork, f.key, entry); assert.deepEqual(await problems(), []);
+  recordEvidence(f.rt.session.paths.teamWork, f.key, { ...entry, phase: 'final' }); assert.match((await problems())[0], /older source/);
+  recordEvidence(f.rt.session.paths.teamWork, f.key, { ...entry, ...snapshot, phase: 'final' }); assert.deepEqual(await problems(), []);
+  writeFileSync(path, 'changed'); assert.match((await problems())[0], /bytes changed/);
 });
 
 test('source index refresh uses the yielded worktree after sync and before full review', async () => {
@@ -168,6 +168,29 @@ test('answer repair after integration only integrates new commits and submits th
   f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() }); f.rt.gm.postSubmission = async (key, intent) => { assert.equal(JSON.parse(intent.body).answer.note, 'final'); return { kind: 'SUBMITTED', submission: { id: randomUUID() } }; };
   const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise; const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
+});
+
+// PXWV53VC (TASK-01, TASK-02): core.autocrlf=true viết submit.json ra main bằng CRLF; nội dung vẫn là bản đã review.
+test('publish accepts an integrated answer that differs from the reviewed one only by CRLF line endings', async () => {
+  const f = fixture(); sh('git', ['config', 'core.autocrlf', 'true'], f.checkout);
+  writeFileSync(join(f.dir, 'submit.json'), `${JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: [] }] }, null, 2)}\n`);
+  const file = f.result(1), p = await f.preflight(file); await f.gate(file); await f.approve(p);
+  f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() }); f.rt.gm.postSubmission = async () => ({ kind: 'SUBMITTED', submission: { id: randomUUID() } });
+  const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.match(readFileSync(join(f.rt.session.paths.matchRoot, 'answers', f.key, 'submit.json'), 'utf8'), /\r\n/);
+  assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
+});
+
+// PXWV53VC (CR-01): root mở ghi cho worker khi review chưa handoff, review đầu mất vì CANDIDATE_STALE.
+test('resume waits for the review of the current candidate unless the review is abandoned', async () => {
+  const f = fixture(), p = await f.preflight(f.result(1)); assert.equal(p.ready, true);
+  assert.throws(() => f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume' }), /REVIEW_PENDING/);
+  assert.equal(f.ji.workerState, 'yielded');
+  await f.approve(p); assert.equal(f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume' }).writesAllowed, true);
+  const g = fixture(), q = await g.preflight(g.result(1));
+  g.rt.workflow.checkpoint({ backlogItemKey: g.key, phase: 'resume', abandonReview: true });
+  assert.equal(g.ji.candidate.id, q.candidateId); assert.equal(g.ji.candidate.state, 'stale');
 });
 
 test('a slot is held only while an item still needs its worker, so a new item starts when the others only wait', () => {
@@ -225,4 +248,50 @@ test('publish integrates when main moved in other files and asks for a sync only
   sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
   const k = await g.rt.workflow.publish({ backlogItemKey: g.key, candidateId: q.candidateId }); await g.rt.jobs.jobs.get(k.jobId).promise;
   assert.match(JSON.stringify(g.rt.jobs.view(g.rt.jobs.jobs.get(k.jobId))), /SYNC_REQUIRED.*lib\.js/);
+});
+
+// 4D895OVI TASK-03: answer_only chỉ sửa answers/, main có BUG-03 sau khi tạo worktree. Publish đã integrate rồi dừng ở
+// CANDIDATE_STALE vì không có file source nào của item để so, item đóng trước khi nộp.
+test('an answer-only item publishes after main moved since its worktree was created', async () => {
+  const f = fixture('TASK-01', true), file = f.result(1), p = await f.preflight(file); await f.gate(file);
+  await f.rt.workflow.handoff({ backlogItemKey: f.key, kind: 'hypothesis', resultFile: f.result(1, solver('2'), 'solver'), candidateId: p.candidateId });
+  writeFileSync(join(f.checkout, 'M1', 'src', 'status.js'), 'export const status=1;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout);
+  f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() }); f.rt.gm.postSubmission = async () => ({ kind: 'SUBMITTED', submission: { id: randomUUID() } });
+  const j = await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }); await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
+});
+
+// 4D895OVI BUG-01: sync chỉ để lấy bản sửa baseline của item khác làm 4 ảnh final bị coi là cũ và phải chụp lại.
+test('final evidence survives a sync that only brought other items\' files, not a later change to the item\'s own files', async () => {
+  const f = fixture(), shot = join(f.dir, 'evidence', 'final.png'); writeFileSync(shot, 'png');
+  const head = sh('git', ['rev-parse', 'HEAD'], f.wt.worktreeRoot), snapshot = await f.rt.workflow.snapshot(f.key);
+  recordEvidence(f.rt.session.paths.teamWork, f.key, { path: shot, name: 'final.png', phase: 'final', ...snapshot, base: head, sha256: digest(readFileSync(shot)) });
+  writeFileSync(join(f.checkout, 'M1', 'src', 'baseline.js'), 'export const fixed=true;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'baseline fix'], f.checkout);
+  assert.equal((await f.rt.worktree({ action: 'sync', backlogItemKey: f.key })).synced, true);
+  const stale = p => p.repair.todo.filter(t => /older source/.test(t.action));
+  assert.deepEqual(stale(await f.preflight(f.result(1))), [], 'main brought only baseline.js');
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=5;\n');
+  assert.equal(stale(await f.preflight(f.result(2))).length, 1, 'the item changed its own file after capture');
+});
+
+// 4D895OVI: CR-01, CR-02 dừng ở ready_for_evidence khoảng 1 phút chờ root sync rồi gửi resume.
+test('ready_for_evidence syncs the yielded worktree and resumes the worker without a root round trip', async () => {
+  const f = fixture(); f.ji.workerThread = '/root/bug01';
+  writeFileSync(join(f.checkout, 'M1', 'src', 'shared.js'), 'export const shared=1;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout);
+  const handler = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
+  const res = await handler({ backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(res.writesAllowed, true, JSON.stringify(res)); assert.equal(res.synced.synced, true);
+  assert.deepEqual([f.ji.workerState, f.ji.checkpoint, f.ji.workerThread], ['writing', 'resume', '/root/bug01']);
+  assert.equal(f.ji.worktreeBase, sh('git', ['rev-parse', 'HEAD'], f.checkout));
+  assert.equal(readFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'utf8').replace(/\r\n/g, '\n'), 'export const value=2;\n', 'own change kept');
+  // Cùng sửa một file: worktree giữ nguyên, worker vẫn yielded và báo root.
+  const g = fixture();
+  writeFileSync(join(g.checkout, 'M1', 'src', 'lib.js'), 'export const value=9;\n');
+  sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
+  const conflict = await g.rt.definitions().find(t => t.name === 'worker_checkpoint').handler({ backlogItemKey: g.key, phase: 'ready_for_evidence' });
+  assert.equal(conflict.writesAllowed, false); assert.equal(conflict.syncError.code, 'WORKTREE_CONFLICT'); assert.equal(g.ji.workerState, 'yielded');
 });

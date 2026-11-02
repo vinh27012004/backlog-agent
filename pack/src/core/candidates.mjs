@@ -27,6 +27,27 @@ export function resultArtifact(dir, file, kind) {
   return { file: resolve(file), hash: digest(raw), value };
 }
 
+// pnpm ghi lại node_modules/.modules.yaml ở mỗi lệnh `pnpm run/test/exec` (đổi prunedAt, thêm/bỏ ignoredBuilds) dù
+// dependency y nguyên. Hash cả file thì app vừa start đã "stale" (4D895OVI: EVIDENCE_STALE_APP 4 lần, TASK-03
+// GATE_STALE "main environment changed"). Bỏ các khoá đó trước khi hash; pnpm cũ ghi YAML, pnpm mới ghi JSON.
+const VOLATILE_PNPM = ['prunedAt', 'ignoredBuilds', 'pendingBuilds'];
+export function pnpmModulesText(text) {
+  try {
+    const value = JSON.parse(text);
+    for (const k of VOLATILE_PNPM) delete value[k];
+    return JSON.stringify(value);
+  } catch { /* YAML */ }
+  const out = [];
+  let skipping = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (new RegExp(`^["']?(${VOLATILE_PNPM.join('|')})["']?\\s*:`).test(line)) { skipping = true; continue; }
+    if (skipping && /^(\s+|-\s)/.test(line)) continue;
+    skipping = false;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 // Bao gồm cả .env bị gitignore, marker dependency và phiên bản runtime; chỉ hash rời khỏi helper.
 export function environmentFingerprint(matchRoot, profile, epoch = 0) {
   const roots = [...new Set([matchRoot, profile.root].filter(Boolean))];
@@ -35,7 +56,9 @@ export function environmentFingerprint(matchRoot, profile, epoch = 0) {
     const names = existsSync(root) ? readdirSync(root).filter(n => /^\.env($|\.)/.test(n)) : [];
     for (const name of [...names, 'node_modules/.package-lock.json', 'node_modules/.modules.yaml']) {
       const file = join(root, name);
-      if (existsSync(file) && statSync(file).isFile()) inputs.push([relative(matchRoot, file), digest(readFileSync(file))]);
+      if (!existsSync(file) || !statSync(file).isFile()) continue;
+      const raw = readFileSync(file);
+      inputs.push([relative(matchRoot, file), digest(name.endsWith('.modules.yaml') ? pnpmModulesText(raw.toString('utf8')) : raw)]);
     }
   }
   return digest({ inputs, node: process.version, platform: process.platform, arch: process.arch,

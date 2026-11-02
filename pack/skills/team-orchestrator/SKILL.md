@@ -41,11 +41,13 @@ For answer_only spawn the independent solver in the same step, with only item/so
 names; never give it the worker answer or result. Its path is <ID>-solver-<version>.json.
 
 ## Worker checkpoints and evidence
-The worker calls worker_checkpoint ready_for_evidence, stops writing and messages root once.
-When nextActions says sync_before_evidence: worktree sync only while yielded; wait for any setup job,
-then send resume to the existing worker. It calls worker_checkpoint resume and restarts the app before final evidence.
-Prioritize a shared layout/login/baseline fix before dependent final captures, without stopping unrelated code work.
-Never sync under a writing worker. A sync conflict leaves the worktree intact; return it to the worker with the error.
+The worker calls worker_checkpoint ready_for_evidence; the helper syncs its worktree and resumes it in the same call,
+so normally root does nothing. Only when the worker messages that it stayed yielded (conflict, dependency setup) and
+nextActions says sync_before_evidence: worktree sync while yielded, wait for any setup job, then send resume to the
+existing worker. It calls worker_checkpoint resume and restarts the app before final evidence.
+Publish an item that fixes a shared layout/login/baseline problem as soon as its gate and review pass; dependent items
+never wait for it. Never sync under a writing worker. A sync conflict leaves the worktree intact; return it to the
+worker with the error.
 
 The worker's final handoff is worker_checkpoint candidate plus an immutable numbered fix-result.
 Call candidate_preflight. RESULT_INVALID names fields to repair; RESULT_MUTATED requires a new filename.
@@ -59,6 +61,8 @@ Preflight returns candidateId, ready, repair.todo and reviewScope.
   Give reviewer candidateId, fix-result/material paths, requirements, worktree/base, gate warnings if available,
   and reviewScope. evidence_answer scope also gives priorReviewFile: check the changed answer/evidence and
   MVS meaning, retaining only the still-valid source review.
+  Never resume the worker while its candidate is under review: the reviewer reads the live worktree, so one
+  write loses the whole review (helper answers REVIEW_PENDING). Hand off the review, then send one complete todo.
 - ready=true, answer_only: run_gate and collect the independent solver; result_handoff binds the solver to
   this candidate. An inconclusive derivation remains unresolved; agreement does not recover missing source.
 - Gate is a helper job, no LLM needed to manage it. Wait through job_status; on newPI start it before returning.
@@ -74,8 +78,12 @@ list and a short time limit, resume writes, and specify the next result version.
 Use a new worker when implementation failed, the hypothesis must change, a stronger model is needed, or context
 has become unproductive. Pass prior hypotheses and exact failing checks. Gate repeat=3 normally stops the item.
 After source/dependency/environment changes, preflight again; helper reruns invalidated checks. Never force cache reuse.
-Before retrying, sync a yielded stale worktree. Snapshot changes can invalidate final captures; before-fix artifacts
-remain distinct. Missing required files must be captured; do not relabel absent evidence as PASS.
+Before retrying, sync a yielded stale worktree. Changes to the item's own files or environment invalidate final
+captures; a sync that only brings other items' files does not. Before-fix artifacts remain distinct. Missing required
+files must be captured; do not relabel absent evidence as PASS.
+Never sync only to pick up another item's baseline fix: the gate and main gate already account for baseline failures
+another item owns (4D895OVI: BUG-01 synced for BUG-02's fix and recaptured four screenshots). A todo that cites only
+such failures is answered by a followup asking the worker to report them in the summary and set DONE, without a sync.
 
 ## Publish
 Call publish_item with candidateId and a concise commit message after independent review/solver and gate.

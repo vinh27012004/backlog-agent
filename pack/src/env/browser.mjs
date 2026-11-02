@@ -10,6 +10,7 @@ import { locate as locateMatchRoot } from './app.mjs';
 import { seededAccount } from './applogin.mjs';
 import { fail, HelperError, sleep } from '../core/util.mjs';
 import { digest, sourceSnapshot } from '../core/candidates.mjs';
+import { revParse, treeChanges } from '../core/git.mjs';
 import { detectProfile } from './environment.mjs';
 import { recordEvidence } from './evidence.mjs';
 
@@ -36,8 +37,15 @@ const loopback = url => {
 };
 
 // Ảnh chỉ được ghi vào <TeamWorkspace>/matches/<matchId>/.../answers/<ID>/evidence/<file>.png
-export function evidencePath(teamWorkspace, path, { pngOnly = true } = {}) {
-  if (typeof path !== 'string' || !isAbsolute(path)) fail('INVALID_ARGUMENT', 'screenshot path must be absolute');
+// Đường dẫn tương đối (answers/<ID>/evidence/x.png, evidence/x.png, x.png) tính từ context.matchRoot: PXWV53VC cả ba
+// worker gửi đường dẫn tương đối, bị từ chối rồi gọi lại.
+export function evidencePath(teamWorkspace, path, { pngOnly = true, base = null, key = null } = {}) {
+  if (typeof path === 'string' && path && !isAbsolute(path) && base) {
+    const parts = path.split(/[\\/]+/).filter(p => p && p !== '.');
+    if (parts[0] === 'answers') path = join(base, ...parts);
+    else if (key) path = join(base, 'answers', key, 'evidence', ...(parts[0] === 'evidence' ? parts.slice(1) : parts));
+  }
+  if (typeof path !== 'string' || !isAbsolute(path)) fail('INVALID_ARGUMENT', 'screenshot path must be absolute, or relative to context.matchRoot (answers/<ID>/evidence/<name>.png)');
   const abs = resolve(path);
   const rel = relative(join(teamWorkspace, 'matches'), abs);
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) fail('PATH_NOT_ALLOWED', 'screenshot must be inside TeamWorkspace/matches');
@@ -86,24 +94,33 @@ class Cdp {
   }
 }
 
+// Trên Windows Edge giữ DevToolsActivePort lúc đang ghi: đọc gặp EBUSY/EPERM thì thử lại. Mở hỏng vì bất kỳ lý do gì
+// cũng phải kill Edge, nếu không tiến trình mồ côi giữ profile và lần sau cùng browserProfile báo BROWSER_START_FAILED
+// (4D895OVI: BUG-04 mất khoảng 2,5 phút rồi phải đổi profile).
+const FILE_BUSY = new Set(['EBUSY', 'EPERM', 'EACCES']);
+
 async function launch(browser, userDataDir, viewport) {
   mkdirSync(userDataDir, { recursive: true });
   const portFile = join(userDataDir, 'DevToolsActivePort');
-  rmSync(portFile, { force: true });
+  try { rmSync(portFile, { force: true }); } catch (error) { if (!FILE_BUSY.has(error.code)) throw error; }
   const child = spawn(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${userDataDir}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', '--disable-sync',
     '--disable-features=msEdgeSidebarV2,EdgeCollections', `--window-size=${viewport.width},${viewport.height}`, 'about:blank'],
   { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
-  const t0 = Date.now();
-  while (Date.now() - t0 < 15_000) {
-    if (existsSync(portFile)) {
-      const [port, path] = readFileSync(portFile, 'utf8').split(/\r?\n/);
+  try {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 15_000) {
+      let text = '';
+      try { text = existsSync(portFile) ? readFileSync(portFile, 'utf8') : ''; } catch (error) { if (!FILE_BUSY.has(error.code)) throw error; }
+      const [port, path] = text.split(/\r?\n/);
       if (port && path) return { child, endpoint: `ws://127.0.0.1:${port.trim()}${path.trim()}` };
+      await sleep(100);
     }
-    await sleep(100);
+    fail('BROWSER_START_FAILED', 'browser did not open a DevTools port; retry, or use a new browserProfile if it repeats');
+  } catch (error) {
+    kill(child);
+    throw error;
   }
-  kill(child);
-  fail('BROWSER_START_FAILED', 'browser did not open a DevTools port');
 }
 
 function kill(child) {
@@ -183,6 +200,14 @@ const PAGE_STATE = `() => {
   return { url: location.href, title: document.title, visibleText: (document.body && document.body.innerText || '').slice(0, 800), candidates };
 }`;
 
+// Chỉ báo đang tải còn hiện: aria-busy, progressbar không xác định, skeleton/spinner phổ biến. null = không có.
+const BUSY = `() => {
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  const el = [...document.querySelectorAll('[aria-busy=true],[role=progressbar]:not([aria-valuenow]),[data-loading=true],.animate-pulse,.animate-spin,.skeleton')].find(visible);
+  return el ? el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.') : '') : null;
+}`;
+
 // Bước route (mục 13): trình duyệt tự trả lời request khớp `url` thay cho server, để chụp được cách app xử lý lỗi
 // (500, timeout, mất mạng, mạng chậm) mà không sửa code hay tắt server/database dùng chung. Chỉ có tác dụng trong
 // trình duyệt headless của lần gọi này. `url`: chuỗi con của URL, hoặc mẫu có `*`.
@@ -213,11 +238,12 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   // Kiểm toàn bộ bước trước khi mở trình duyệt.
   const rules = new Map();
   const accounts = new Map();
+  const output = { base: context?.matchRoot ? locateMatchRoot(teamWorkspace, context.matchRoot).matchRoot : null, key: context?.backlogItemKey ?? null };
   for (const [i, s] of steps.entries()) {
     if (['goto', 'login'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
     if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
-    if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path);
-    if (s.action === 'download') s.path = evidencePath(teamWorkspace, s.path, { pngOnly: false });
+    if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path, output);
+    if (s.action === 'download') s.path = evidencePath(teamWorkspace, s.path, { ...output, pngOnly: false });
     if (s.action === 'route') rules.set(i, routeRule(s, i));
     if (s.action === 'drag') {
       if (!s.to || typeof s.to !== 'object' || (s.to.selector === undefined && s.to.text === undefined)) {
@@ -241,9 +267,17 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     if (existsSync(appState)) {
       const running = JSON.parse(readFileSync(appState, 'utf8'));
       if (resolve(running.matchRoot) !== resolve(where.matchRoot) || running.mode !== context.appMode) fail('EVIDENCE_APP_MISMATCH', 'running app worktree/mode differs from evidence context');
-      if (running.snapshot && JSON.stringify(running.snapshot) !== JSON.stringify(snapshot)) fail('EVIDENCE_STALE_APP', 'source/environment changed since app start; restart before evidence');
+      if (running.snapshot && JSON.stringify(running.snapshot) !== JSON.stringify(snapshot)) {
+        // Nói rõ cái gì đổi để worker biết chính nó vừa sửa file nào sau khi start app.
+        const changed = running.snapshot.source !== snapshot.source
+          ? `source files ${(await treeChanges(dirname(where.matchRoot), running.snapshot.source, snapshot.source)).slice(0, 6).join(', ') || 'unknown'}`
+          : 'environment (.env or installed dependencies)';
+        fail('EVIDENCE_STALE_APP', `${changed} changed since app start; restart the app before evidence`);
+      }
     }
-    provenance = { ...snapshot, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
+    // base: HEAD của worktree lúc chụp, để preflight biết file nào đổi sau đó là do sync kéo từ main về.
+    const base = await revParse(dirname(where.matchRoot)).catch(() => null);
+    provenance = { ...snapshot, base, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
       teamWork: dirname(where.logDir), key: context.backlogItemKey };
   }
   const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
@@ -285,8 +319,16 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       }
       if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(String(msg.params.exceptionDetails?.exception?.description ?? msg.params.exceptionDetails?.text ?? '').slice(0, 300));
     });
+    // Request đang bay, để screenshot chờ dữ liệu về (WebSocket/EventSource sống mãi nên không tính).
+    const inflight = new Map();
+    cdp.listeners.push(msg => {
+      if (msg.sessionId !== sessionId) return;
+      if (msg.method === 'Network.requestWillBeSent' && msg.params.type !== 'EventSource') inflight.set(msg.params.requestId, { url: msg.params.request.url, at: Date.now() });
+      if (msg.method === 'Network.loadingFinished' || msg.method === 'Network.loadingFailed') inflight.delete(msg.params.requestId);
+    });
     await send('Page.enable');
     await send('Runtime.enable');
+    await send('Network.enable');
     await send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false });
 
     // route: luật bật từ bước của nó trở đi, luật mới nhất thắng; unroute bỏ hết. Request không khớp đi tiếp như thường.
@@ -322,6 +364,22 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       const until = Math.min(deadline, Date.now() + 15_000);
       while (Date.now() < until) {
         if (await evaluate('document.readyState').catch(() => null) === 'complete') return;
+        await sleep(100);
+      }
+    };
+    // Trang yên khi 500 ms liền không còn request (bỏ long-poll đã chạy quá 15 s) và không còn chỉ báo loading hiện
+    // trên màn hình. PXWV53VC BUG-01: ảnh dashboard chụp sau 400 ms còn toàn "—", reviewer bắt chụp lại.
+    // Trả null khi yên, hoặc thứ còn đang chờ khi hết maxMs (vẫn chụp, kết quả ghi `unsettled`).
+    const settle = async maxMs => {
+      const until = Math.min(deadline, Date.now() + maxMs);
+      let quietSince = null;
+      for (;;) {
+        const now = Date.now();
+        const pending = [...inflight.values()].filter(r => now - r.at < 15_000);
+        const busy = pending.length ? null : await evaluate(`(${BUSY})()`).catch(() => null);
+        if (pending.length || busy) quietSince = null;
+        else if (now - (quietSince ??= now) >= 500) return null;
+        if (now >= until) return { pending: pending.slice(0, 3).map(r => r.url.slice(0, 120)), busy };
         await sleep(100);
       }
     };
@@ -519,13 +577,20 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             active.length = 0;
             break;
           case 'assertText': {
-            const found = await evaluate(`(t) => document.body && document.body.innerText.includes(t)`, String(s.text));
+            // Chờ text xuất hiện (mặc định 5 s): ngay sau click điều hướng, kiểm tức thì báo sai ASSERT_FAILED
+            // (PXWV53VC BUG-01 mobile: click "Money" rồi assertText "Accounting" khi trang chưa chuyển).
+            const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? (s.required === false ? 0 : 5000)));
+            let found;
+            while (!(found = await evaluate(`(t) => !!document.body && document.body.innerText.includes(t)`, String(s.text)).catch(() => false))
+              && Date.now() < until) await sleep(150);
             log.push({ step: i + 1, action: 'assertText', text: s.text, found });
             if (!found && s.required !== false) fail('ASSERT_FAILED', `text not on page: ${s.text}`);
             break;
           }
           case 'screenshot': {
             await sleep(Math.min(3000, s.settleMs ?? 400));
+            // idle:false chụp ngay (bằng chứng trạng thái đang tải, vd sau route delayMs).
+            const unsettled = s.idle === false ? null : await settle(6000);
             let params = { format: 'png' };
             if (s.fullPage) {
               const m = await send('Page.getLayoutMetrics');
@@ -538,6 +603,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             const bytes = statSync(s.path).size;
             if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
             shots.push(saved(s.path, 'screenshot'));
+            log.push({ step: i + 1, action: 'screenshot', ...(unsettled ? { unsettled,
+              hint: 'still loading after 6 s: waitFor the loaded content, then capture again (idle:false only for loading-state evidence)' } : {}) });
             break;
           }
           case 'download': {
@@ -576,7 +643,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           default:
             fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
         }
-        if (!['assertText', 'login', 'drag'].includes(s.action)) log.push({ step: i + 1, action: s.action });
+        if (!['assertText', 'login', 'drag', 'screenshot'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
     } catch (error) {
       // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).

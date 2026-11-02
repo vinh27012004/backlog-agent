@@ -360,3 +360,36 @@ test('capture_evidence drags with real mouse events and presses Space', { skip: 
     server.close();
   }
 });
+
+// PXWV53VC: đường dẫn tương đối bị từ chối (cả ba worker), ảnh dashboard chụp khi còn "—", assertText ngay sau click
+// điều hướng báo ASSERT_FAILED.
+test('evidence paths may be relative to context.matchRoot', () => {
+  const tw = join(tempDir('mtm-evpath-'), 'BUN'), base = join(tw, 'matches', 'M1', '.team-work', 'wt', 'BUG-01', 'M1');
+  const want = join(base, 'answers', 'BUG-01', 'evidence', 'a.png');
+  for (const p of ['answers/BUG-01/evidence/a.png', 'evidence/a.png', 'a.png', './answers/BUG-01/evidence/a.png']) assert.equal(evidencePath(tw, p, { base, key: 'BUG-01' }), want);
+  assert.throws(() => evidencePath(tw, 'a.png'), /relative to context.matchRoot/);
+  assert.throws(() => evidencePath(tw, '../../x.png', { base, key: 'BUG-01' }), /PATH_NOT_ALLOWED/);
+});
+
+test('screenshot waits for pending requests and loading indicators; assertText waits for the text', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-settle-'), 'BUN'), root = join(tw, 'matches', 'M1', 'M1'); mkdirSync(root, { recursive: true });
+  const server = createServer((req, res) => {
+    if (req.url === '/api/stats') return setTimeout(() => res.end('16'), 1500);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(page(`<p id="n" aria-busy="true">—</p><button id="go">Money</button><script>
+      fetch('/api/stats').then(r => r.text()).then(t => { n.textContent = 'Active companies ' + t; n.removeAttribute('aria-busy'); });
+      go.onclick = () => setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<h1>Accounting</h1>'), 800);</script>`));
+  });
+  await new Promise(ok => server.listen(0, '127.0.0.1', ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const context = { backlogItemKey: 'BUG-01', matchRoot: root, scenario: 'TC-1', phase: 'final', appMode: 'dev' };
+    const res = await captureEvidence({ teamWorkspace: tw, context, steps: [
+      { action: 'goto', url }, { action: 'screenshot', path: 'loading.png', idle: false }, { action: 'assertText', text: 'Active companies', required: false },
+      { action: 'screenshot', path: 'answers/BUG-01/evidence/loaded.png' }, { action: 'assertText', text: 'Active companies 16', timeoutMs: 0 },
+      { action: 'click', text: 'Money' }, { action: 'assertText', text: 'Accounting' }] });
+    assert.equal(res.screenshots[0].path, join(root, 'answers', 'BUG-01', 'evidence', 'loading.png'));
+    assert.equal(res.steps.find(s => s.step === 3).found, false);
+    assert.equal(res.steps.find(s => s.step === 5).found, true);
+    assert.ok(res.steps.filter(s => s.action === 'screenshot').every(s => !s.unsettled), JSON.stringify(res.steps));
+  } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});

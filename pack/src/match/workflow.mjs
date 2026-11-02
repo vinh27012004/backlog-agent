@@ -6,9 +6,11 @@ import { digest, repairPlan, resultArtifact, sourceSnapshot } from '../core/cand
 import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
+import { stopApp } from '../env/app.mjs';
 import { fail } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const textDigest = file => digest(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'));
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
 // cuối (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
@@ -83,11 +85,18 @@ export class Workflow {
     }
     return r.settleJob(job.id, Math.min(45, Math.max(0, waitSeconds)) * 1000);
   }
-  checkpoint({ backlogItemKey: key, phase, threadId = null }) {
+  checkpoint({ backlogItemKey: key, phase, threadId = null, abandonReview = false }) {
     const ji = this.item(key);
     if (!['ready_for_evidence', 'candidate', 'resume'].includes(phase)) fail('INVALID_ARGUMENT', 'checkpoint phase');
     if (phase === 'resume') {
       if (this.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before resuming this worker');
+      // Reviewer đọc worktree trực tiếp: worker ghi tiếp thì review đang chạy không bind được nữa (PXWV53VC CR-01:
+      // resume khi review chưa handoff, review đầu mất vì CANDIDATE_STALE). Chờ result_handoff rồi mới mở ghi.
+      const c = ji.candidate;
+      if (c && !c.review && !['repair', 'stale'].includes(c.state) && ji.verificationKind !== 'answer_only') {
+        if (!abandonReview) fail('REVIEW_PENDING', `candidate ${c.id.slice(0, 12)} is under review: hand off the review with result_handoff first; its findings join the repair list. abandonReview:true only when that reviewer is gone`);
+        c.state = 'stale';
+      }
       ji.workerState = 'writing';
       ji.workStartedAt = Date.now();
       if (threadId) ji.workerThread = threadId;
@@ -101,6 +110,31 @@ export class Workflow {
     this.rt.journal.save();
     return { key, phase, writesAllowed: phase === 'resume',
       hint: phase === 'ready_for_evidence' ? 'Stop writing. Root may sync now, then sends resume; restart the app before final evidence.' : null };
+  }
+  // ready_for_evidence: worker vừa ngừng ghi (đang chờ chính lời gọi này), nên helper sync luôn rồi mở ghi lại, không
+  // đợi root một vòng (4D895OVI: CR-01, CR-02 mỗi item chờ khoảng 1 phút). Root chỉ còn việc khi sync xung đột hoặc
+  // phải cài lại dependency; khi đó worker vẫn yielded và next_actions trả sync_before_evidence như cũ. Tool vẫn
+  // readOnly: sync này chỉ đụng worktree của chính item, xung đột thì giữ nguyên, không đụng main, remote hay Game Master.
+  async evidenceCheckpoint(args) {
+    const key = args.backlogItemKey, yielded = this.checkpoint(args);
+    const r = this.rt, ji = this.item(key);
+    if (!r.liveWorktree(key)) return yielded;
+    let synced;
+    try {
+      stopApp(r.teamWorkspace, key);
+      synced = await r.worktree({ action: 'sync', backlogItemKey: key });
+    } catch (e) {
+      return { ...yielded, syncError: { code: e.code ?? 'INTERNAL_ERROR', message: e.message },
+        hint: 'Helper could not sync: stay yielded, message root once with this error and wait for resume.' };
+    }
+    if (synced.setupJobId) return { ...yielded, synced, hint: 'Dependencies changed: stay yielded and message root once; root resumes you after setup.' };
+    try {
+      const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
+      return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
+        hint: 'Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.' };
+    } catch (e) {
+      return { ...yielded, synced, hint: `${e.code}: stay yielded and message root once.` };
+    }
   }
   async preflight({ backlogItemKey: key, fixResultFile, reviewFile = null }) {
     const since = Date.now(), r = this.rt, ji = this.item(key);
@@ -129,7 +163,15 @@ export class Workflow {
     if (Array.isArray(template?.testResults) && template.testResults.length) ji.requiredScenarios = new Set(template.testResults.map(x => x.id)).size;
     const status = submitted.status;
     const req = requirementsCheck(r.itemRequirements(key), artifact.value.requirements, status);
-    const evidence = evidenceProblems(r.session.paths.teamWork, key, paths.matchRoot, snapshot);
+    // Ảnh final chụp trước sync: mọi file đổi từ lúc chụp phải là file main mang về (entry.base → base hiện tại) và
+    // item không sửa file đó; worker tự sửa hay hoàn tác file sau khi chụp thì vẫn phải chụp lại.
+    const unchangedForItem = async entry => {
+      if (!entry.base || !ji.worktreeBase || !r.liveWorktree(key)) return false;
+      const [moved, fromMain, own] = await Promise.all([this.changedPaths(entry.source, snapshot.source),
+        this.changedPaths(entry.base, ji.worktreeBase), this.changedPaths(ji.worktreeBase, snapshot.source)]);
+      return moved.every(p => fromMain.includes(p) && !own.includes(p));
+    };
+    const evidence = await evidenceProblems(r.session.paths.teamWork, key, paths.matchRoot, snapshot, { unchangedForItem });
     const review = reviewFile ? this.artifact(reviewFile, 'review').value : old?.review?.value;
     const gate = old?.id === id && old.gateJobId ? r.jobs.jobs.get(old.gateJobId)?.result : null;
     const repair = repairPlan({ fixer: artifact.value, answerProblems: [...answer.problems, ...req.problems], evidenceProblems: evidence, gate, review });
@@ -267,11 +309,13 @@ export class Workflow {
           step('integrate'); await r.worktree({ action: 'integrate', backlogItemKey: key, message });
           ji.integratedCandidateId = c.id; r.journal.save();
         }
-        // Main phải chứa đúng nội dung đã review ở mọi file của item; file khác là thay đổi của item khác.
+        // Main phải chứa đúng nội dung đã review ở mọi file của item; file khác là thay đổi của item khác. Item chỉ sửa
+        // answers/ (answer_only) không có file source nào để so: answer được so riêng bên dưới (4D895OVI: TASK-03 đã
+        // integrate lên main rồi vẫn dừng ở đây vì main có BUG-03, trễ hạn 8 giây).
         const mainSource = (await this.snapshot(key, r.session.paths)).source;
         if (mainSource !== c.snapshot.source) {
           const own = await this.changedPaths(ji.worktreeBase, c.snapshot.source);
-          if (!own.length || (await this.changedPaths(c.snapshot.source, mainSource, own)).length) fail('CANDIDATE_STALE', 'main source differs from reviewed candidate in this item\'s files; sync, refresh evidence and review a new candidate');
+          if (own.length && (await this.changedPaths(c.snapshot.source, mainSource, own)).length) fail('CANDIDATE_STALE', 'main source differs from reviewed candidate in this item\'s files; sync, refresh evidence and review a new candidate');
         }
         step('main_gate');
         try { await r.requireGate(key, r.session.paths.checkoutRoot); }
@@ -281,10 +325,11 @@ export class Workflow {
           await r.jobs.jobs.get(pending.jobId).promise;
           await r.requireGate(key, r.session.paths.checkoutRoot);
         }
-        // Answer/evidence được integrate phải giữ nguyên bytes đã được reviewer kiểm.
+        // Answer được integrate phải giữ nguyên nội dung reviewer đã kiểm. So sau khi bỏ CRLF: với core.autocrlf=true,
+        // cherry-pick viết submit.json ra main bằng CRLF dù blob nộp vẫn là LF (PXWV53VC: TASK-01, TASK-02 kẹt ở đây).
         const answer = join(r.session.paths.matchRoot, 'answers', key, 'submit.json');
         const wtAnswer = join(r.wtPaths(key).matchRoot, 'answers', key, 'submit.json');
-        if (existsSync(wtAnswer) && digest(readFileSync(answer)) !== digest(readFileSync(wtAnswer))) fail('CANDIDATE_STALE', 'integrated answer differs from reviewed candidate');
+        if (existsSync(wtAnswer) && textDigest(answer) !== textDigest(wtAnswer)) fail('CANDIDATE_STALE', 'integrated answer differs from reviewed candidate');
         step('push');
         const pushed = await r.commitAndPush({ backlogItemKey: key, message });
         ji.publishedCandidateId = c.id; r.journal.save();
