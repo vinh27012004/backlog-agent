@@ -7,7 +7,7 @@ import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { stopApp } from '../env/app.mjs';
-import { fail } from '../core/util.mjs';
+import { fail, oneLine } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const textDigest = file => {
@@ -45,6 +45,27 @@ export class Workflow {
     return this.rt.journal.item(key);
   }
   artifact(file, kind) { return resultArtifact(join(this.rt.session.paths.teamWork, 'results'), file, kind); }
+  // Item đã đóng thì không preflight, gate hay nộp nữa (DVDPJAIB: TASK-03 đóng 14:31:25, 14:33:39 root vẫn publish_item,
+  // integrate lên main, push rồi bị BACKLOG_ITEM_CLOSED; BUG-02 chạy run_gate 97 s sau khi đóng). Còn submitIntent thì
+  // vẫn cho gửi lại: lần nộp trước có thể đã tới server trước lúc đóng, server trả lại biên nhận cũ.
+  assertOpen(key) {
+    const ji = this.item(key);
+    if (ji.outcome === 'CLOSED' && !ji.submitIntent) fail('ITEM_NOT_OPEN', `${key} closed at ${ji.endedAt}; stop its worker and move on`);
+  }
+  // candidateId do root chép lại từ preflight, một chuỗi hex 64 ký tự mà model chép sai được (DVDPJAIB PI-01: thừa một
+  // ký tự, ba lần CANDIDATE_STALE, PI mất ~1m45s). Lỗi tách id cũ khỏi id không có và luôn kèm id hiện tại.
+  // required=false: bỏ trống thì lấy candidate hiện tại; review, gate và snapshot vẫn kiểm theo chính candidate đó.
+  currentCandidate(key, candidateId, { required = true } = {}) {
+    const ji = this.item(key), c = ji.candidate;
+    if (!c) fail('CANDIDATE_REQUIRED', 'run candidate_preflight first');
+    if (candidateId === undefined || candidateId === null || candidateId === '') {
+      if (required) fail('INVALID_ARGUMENT', `candidateId is required; current candidateId is ${c.id}`);
+      return c;
+    }
+    if (candidateId === c.id) return c;
+    if ((ji.metrics ?? []).some(m => m.candidateId === candidateId)) fail('CANDIDATE_STALE', `${candidateId.slice(0, 12)}… is an older candidate of ${key}; current candidateId is ${c.id}`);
+    fail('CANDIDATE_UNKNOWN', `${key} has no candidate ${oneLine(String(candidateId), 80)} (copy it verbatim); current candidateId is ${c.id}`);
+  }
   nextResultFile(key, role = 'fixer') {
     const dir = join(this.rt.session.paths.teamWork, 'results');
     const re = new RegExp(`^${key.replace(/\./g, '\\.')}-${role}-(\\d+)\\.json$`, 'i');
@@ -179,6 +200,7 @@ export class Workflow {
   async preflight({ backlogItemKey: key, fixResultFile, reviewFile = null }) {
     const since = Date.now(), r = this.rt, ji = this.item(key);
     if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must checkpoint candidate before preflight');
+    this.assertOpen(key);
     const artifact = this.artifact(fixResultFile, 'fix-result');
     if (ji.submitIntent && !ji.receipt && ji.candidate?.fixResultHash !== artifact.hash) fail('SUBMISSION_PENDING', 'replay the pending submission before changing candidate');
     if (!new RegExp(`^${key.replace(/\./g, '\\.')}-fixer-\\d+\\.json$`, 'i').test(basename(fixResultFile))) fail('PATH_NOT_ALLOWED', 'fix-result must belong to this item');
@@ -262,8 +284,7 @@ export class Workflow {
     c.state = !result.passed || c.review?.value.verdict === 'request_changes' ? 'repair' : c.review ? 'reviewed' : 'ready';
   }
   async handoff({ backlogItemKey: key, kind, resultFile, candidateId, purpose = 'solver' }) {
-    const ji = this.item(key), c = ji.candidate;
-    if (!c || candidateId !== c.id) fail('CANDIDATE_STALE', 'result must name the current candidateId');
+    const ji = this.item(key), c = this.currentCandidate(key, candidateId);
     if (kind === 'fix-result') return this.preflight({ backlogItemKey: key, fixResultFile: resultFile });
     if (!['review', 'hypothesis'].includes(kind)) fail('INVALID_ARGUMENT', 'result kind');
     const artifact = this.artifact(resultFile, kind);
@@ -327,7 +348,8 @@ export class Workflow {
     let job = r.jobs.jobs.get(ji.publishJobId);
     if (job?.state === 'running') return r.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
     if (this.publishOwner) fail('PUBLISH_BUSY', `publish ${this.publishOwner} first`);
-    if (candidateId !== ji.candidate?.id) fail('CANDIDATE_STALE', 'publish requires current candidateId');
+    this.assertOpen(key);
+    candidateId = this.currentCandidate(key, candidateId, { required: false }).id;
     this.publishOwner = key;
     job = r.jobs.start('publish_item', async job => {
       const since = Date.now();

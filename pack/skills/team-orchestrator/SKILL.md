@@ -96,7 +96,10 @@ another item owns (4D895OVI: BUG-01 synced for BUG-02's fix and recaptured four 
 such failures is answered by a followup asking the worker to report them in the summary and set DONE, without a sync.
 
 ## Publish
-Call publish_item with candidateId and a concise commit message after independent review/solver and gate.
+Call publish_item with a concise commit message after independent review/solver and gate; it publishes the current
+candidate, so omit candidateId or pass it from next_actions arguments in code, never retyped by hand. Every
+candidateId error names the current id: CANDIDATE_UNKNOWN is a copy error, CANDIDATE_STALE an older candidate.
+ITEM_NOT_OPEN: the item is closed; stop its worker and start the next item.
 It serializes verification -> integrate -> main gate if needed -> push -> idempotent submit.
 Wait with job_status. On failure act on code/hint, then call publish_item again: successful steps/receipts survive.
 Publish integrates an item whose files main did not change since its base, evidence as captured; main gate tests the

@@ -116,6 +116,34 @@ test('publish replays an identical intent after restart/lost response without du
   assert.equal((await f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId })).result.replay, true); assert.equal(bodies.length, 2);
 });
 
+// DVDPJAIB PI-01: root chép sai candidateId một ký tự, ba lần CANDIDATE_STALE không kèm id đúng.
+test('candidateId errors tell a copy error from an older candidate and publish defaults to the current one', async () => {
+  const f = fixture(), file = f.result(1), p = await f.preflight(file); await f.gate(file); await f.approve(p);
+  const two = f.result(2, fix({ summary: 'Fixed value, restated' })), p2 = await f.preflight(two); await f.gate(two);
+  assert.notEqual(p2.candidateId, p.candidateId);
+  const typo = `${p2.candidateId.slice(0, 20)}6${p2.candidateId.slice(20)}`;
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: typo }), e => e.code === 'CANDIDATE_UNKNOWN' && e.message.includes(p2.candidateId));
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }), e => e.code === 'CANDIDATE_STALE' && e.message.includes(p2.candidateId));
+  await assert.rejects(f.approve(p, 2), e => e.code === 'CANDIDATE_STALE' && e.message.includes(p2.candidateId));
+  await f.approve(p2, 3);
+  // Bỏ trống candidateId: qua bước chọn candidate, job publish chạy trên candidate hiện tại.
+  const j = await f.rt.workflow.publish({ backlogItemKey: f.key }); await f.rt.jobs.jobs.get(j.jobId).promise;
+  const view = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(f.ji.publishJobId, j.jobId); assert.equal(view.progress[0], 'verification'); assert.doesNotMatch(view.error?.code ?? '', /CANDIDATE/);
+});
+
+// DVDPJAIB: TASK-03 đã đóng vẫn được integrate, push rồi POST (409 BACKLOG_ITEM_CLOSED); BUG-02 gate 97 s sau khi đóng.
+test('a closed item is not preflighted, gated or published', async () => {
+  const f = fixture(), file = f.result(1), p = await f.preflight(file); await f.gate(file); await f.approve(p);
+  const head = sh('git', ['rev-parse', 'HEAD'], f.checkout), bodies = [];
+  f.rt.gm.postSubmission = async (key, intent) => { bodies.push(intent.body); return { kind: 'SUBMITTED', submission: { id: randomUUID() } }; };
+  f.rt.endItem(f.key, 'CLOSED');
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, candidateId: p.candidateId }), /ITEM_NOT_OPEN/);
+  await assert.rejects(f.rt.gateFromFixResult({ backlogItemKey: f.key, fixResultFile: f.result(2), waitSeconds: 0 }), /ITEM_NOT_OPEN/);
+  await assert.rejects(f.preflight(f.result(3)), /ITEM_NOT_OPEN/);
+  assert.equal(sh('git', ['rev-parse', 'HEAD'], f.checkout), head); assert.equal(bodies.length, 0);
+});
+
 test('manifest preserves before-fix separately and detects stale final source/modified bytes', async () => {
   const f = fixture(), snapshot = await f.rt.workflow.snapshot(f.key), path = join(f.dir, 'evidence', 'shot.png'); writeFileSync(path, 'bytes');
   const entry = { path, name: 'shot.png', phase: 'before_fix', source: 'old', environment: 'old', sha256: digest(readFileSync(path)) };
