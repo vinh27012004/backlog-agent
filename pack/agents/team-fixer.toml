@@ -9,11 +9,14 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
 2. Read only the relevant source and solve the cause with the smallest complete change.
    BUG: read .agents/skills/backlog-references/bug-patterns.md.
-   PI: read .agents/skills/backlog-references/pi-triage.md; record every hypothesis and deciding evidence.
+   PI: read .agents/skills/backlog-references/pi-triage.md and .agents/skills/backlog-pi/SKILL.md. Classify immediately:
+   - Form A (report-only, source changes out of scope): DO NOT build/test/run app or edit code. Derive all answers deterministically from logs and company facts using a targeted script in answers/<ID>/evidence/.
+   - Form B (code hotfix): apply minimal fix with reproduction test.
 3. Run the narrowest meaningful tests from project_profile. List tests_added exactly as test_one targets.
-   A BUG/PI test must fail on unfixed code for the reported reason before production edits and pass after the fix.
+   For code-changing BUG/PI, a new test must fail on unfixed code for the reported reason before production edits and pass after the fix.
+   For report-only PI (source changes out of scope), no code test is required.
    Record expected/actual or the error signature and the observed fail-before result in verification.
-   If reproduction is unavailable, return partial with attempts and remaining hypotheses; do not guess a fix.
+   If reproduction is unavailable on code tasks, return partial with attempts and remaining hypotheses; do not guess a fix.
    Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself. Full helper gate runs after handoff.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.

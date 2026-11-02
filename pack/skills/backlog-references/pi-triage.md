@@ -3,15 +3,40 @@
 | Symptom | Likely causes (most common first) | Fastest check |
 |---|---|---|
 | Blank page / empty list | query returns nothing (filter, date range, tenant/user scope); exception swallowed and empty result returned; frontend expects a field that the API renamed | call the API directly: empty data or error? then check the query's WHERE and the date range |
-| HTTP 500 | unhandled exception (null, parse, constraint), missing config/env value, DB schema mismatch | error text/stack in item → signature → failing frame |
-| HTTP 4xx where it used to work | validation rule changed, auth/role check changed, route/path changed | recent commits on validation, security config, routes |
+| HTTP 500 | unhandled exception (null pointer, parse error, type mismatch, DB constraint violation), missing config/env value, schema mismatch | error text/stack in item → signature → failing frame (file:line) |
+| HTTP 4xx where it used to work | validation rule tightened, auth/role check changed, route/path renamed, header missing | recent commits on validation, security config, controllers/routes |
 | Slow / timeout | N+1 queries, missing index, unbounded query (no paging), external call without timeout, lock contention | count queries for one request; look for loops calling repository/HTTP |
-| Wrong numbers | calculation or rounding change, double counting, currency/units, time zone of aggregation | recompute one example by hand from the data |
-| "Since this morning / today" | recent deploy or config change, date boundary (new day/month/year), expired token/certificate, data that appeared today | `<recent_changes>` and `git log -p` on the path; what is special about today's date |
-| Only some users / some data | data-dependent: null column, new enum value, special characters, large size, specific role/tenant | compare a failing and a working example |
-| Intermittent | race condition, cache, connection pool exhaustion, retries, load balancer with mixed versions | look for shared state and missing transactions |
-| Duplicates | missing unique constraint, retry without idempotency, double submit, JOIN fan-out | check constraints and the JOIN |
-| Missing notification/email/job result | scheduler disabled/misconfigured, exception inside async job, queue consumer not running | job config and job error handling |
+| Wrong numbers / bad balance | calculation or rounding change, double counting, currency/units (cents vs dollars), time zone of aggregation | recompute one example with script; compare before vs after math |
+| "Since this morning / today" | recent deploy or config change, date boundary (new day/month/year), expired token/certificate, data that appeared today | deploy logs and `git log -p` on the path; what is special about today's date |
+| Stale data / wrong state shown | cache read without invalidation, cache TTL too long, background sync delayed, reading from read-replica before replication | check cache key/TTL, read logs for cache snapshot timestamp vs write timestamp |
+| Only some users / some data | data-dependent: null column, new enum value, special characters, large payload, specific role/tenant | compare a failing and a working record side by side |
+| Intermittent failures | race condition, concurrency without lock/transaction, connection pool exhaustion, unhandled promise rejection | check concurrency control, database connection pool limits |
+| Duplicates | missing unique constraint, retry without idempotency, double submit, JOIN fan-out | check DB constraints, deduplication key, JOIN multiplicity |
+| Missing notification/email/job | scheduler disabled/misconfigured, exception inside async worker, queue consumer dead, filter suppressed message | worker logs, queue consumer status, message filter predicates |
 
-Evidence to record for the report: the request you sent and the response you got, the code line
-(file:line), the commit that introduced it if found, the log line.
+---
+
+## The SRE Triangle Correlation (Find Root Cause in < 2 Minutes)
+Every production incident in MTM traces back to one root cause: a recent commit, a recent release, or an enabled feature flag. Find it via three vertices:
+1. **Timestamp & Symptom**: When was the incident reported, and when did symptoms first appear? (e.g. 10:05 UTC today).
+2. **Deploy / Release History**: Examine deploy logs (`service: deploy` or `git log --since="today" -p`). What release deployed right before the symptoms started? (The introducing release is the first release that changed the component, not a subsequent release that added metrics or logging).
+3. **Component & Containment Flag**: Check the service name and the exact feature flag (or config setting) deployed in that release from the deploy log or commit diff.
+
+---
+
+## Deterministic Log Correlation Pattern (Zero Mental Math)
+**CRITICAL RULE**: Never read 50+ lines of raw JSON logs manually or calculate affected records in your head. An agent doing mental math takes 8+ minutes and misses edge cases.
+Instead, write a 15-20 line targeted correlation script (`derive.mjs` or `derive.py` or `.ps1`) in `answers/<ID>/evidence/`:
+1. **Completeness Check**: In `search_logs.json`, check `assert(total === returned)` to ensure no logs were truncated.
+2. **Event Join**: Load event streams (e.g. payments and reminders, or requests and errors).
+3. **Temporal Ordering**: Always compare timestamps via standard ISO parsing (`new Date(a.ts) < new Date(b.ts)`).
+   - **TRAP**: Never sort opaque request IDs alphabetically (e.g. `req-BUN-91d2` vs `req-BUN-7f3a`); sort strictly by event timestamp `ts` ascending.
+4. **Boundary Filtering**: Filter records strictly based on the company standard (e.g. status after transaction is settled, payment strictly before the event, balance == 0).
+5. **Output & Artifacts**: Print the exact answers for `submit.json` and save the script output to `answers/<ID>/evidence/derivation.json`.
+
+---
+
+## Common SRE Traps to Avoid
+- **Trap 1: Monitoring Release vs Introducing Release**: If release `rel-2` turned on the bad flag and release `rel-4` added a Prometheus metric for it, the root cause release is `rel-2`, NOT `rel-4`.
+- **Trap 2: Customer Complaint Bias**: Customer tickets only reflect the users who complained. The incident report requires **ALL** affected records across the entire dataset. Always derive from complete logs.
+- **Trap 3: Settle Timing Traps**: Exclude records where payment happened *after* the event was dispatched, or where payments were partial and balance remained overdue.

@@ -6,3 +6,5 @@ You are the team orchestrator for an MTM 2026 match. Follow the skill named in t
 every Game Master call, progress event, git commit/push and submission; never call those endpoints,
 write the progress log, or run git push yourself. Keep secrets out of messages and files.
 """
+# Rules
+# Never call request_user_input or request_user_input_async during the match.

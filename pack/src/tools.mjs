@@ -360,6 +360,10 @@ export class Runtime {
         if (branch.out.trim() !== repository.branch) fail('CHECKOUT_MISMATCH', `checkout is on ${branch.out.trim()}`);
       }
       if (!existsSync(matchRoot)) fail('CHECKOUT_MISMATCH', `${repository.folder}/ is missing in the repository`);
+      if (!this.journal.data.initialRevision) {
+        this.journal.data.initialRevision = await revParse(checkoutRoot);
+        this.journal.save();
+      }
       const d = this.session.descriptor;
       await git(['config', '--local', 'user.name', `${d.teamName ?? d.teamId} team`], { cwd: checkoutRoot });
       await git(['config', '--local', 'user.email', `${d.teamId.toLowerCase()}-team@users.noreply.github.com`], { cwd: checkoutRoot });
@@ -586,20 +590,22 @@ export class Runtime {
   // như PI (FMC0ZXFC: TASK-03 hạn 8 phút ra khi 4 slot đều bận, TASK-04 70 điểm chờ tới hết trận; 120 điểm mất).
   itemNotice() {
     if (this.session.phase !== 'GAME' || !this.gm.view) return null;
-    const rows = this.itemRows().filter(r => typeOf(r.key) !== 'PI' && r.status !== 'CLOSED');
+    const pendingPI = this.pendingPI();
+    const rows = this.itemRows().filter(r => r.status !== 'CLOSED');
     const freeSlots = this.freeSlots(rows);
-    const todo = new Set(rows.filter(r => r.local === 'todo' && (r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
+    const todo = new Set(rows.filter(r => r.local === 'todo' && (typeOf(r.key) === 'PI' || r.minutesLeft === null || r.minutesLeft >= NEW_ITEM_MIN)).map(r => r.key));
     const waiting = this.matchState().suggestedOrder.filter(k => todo.has(k));
-    const answerOnly = waiting.filter(k => this.answerOnlyItem(k));
-    const newItems = freeSlots > 0 ? waiting : answerOnly;
+    const answerOnly = waiting.filter(k => this.answerOnlyItem(k) || typeOf(k) === 'PI');
+    const newItems = freeSlots > 0 || pendingPI.length > 0 ? waiting : answerOnly;
     const slotted = waiting.filter(k => !answerOnly.includes(k)).slice(0, Math.max(0, freeSlots));
     const ungated = this.ungatedResults();
     const hints = [];
+    if (pendingPI.length) hints.push(`🚨 CRITICAL: PI ${pendingPI.join(', ')} is live! First team to submit gets 100% points. Prepare and dispatch PI immediately!`);
     if (ungated.length) hints.push(`Fix-result waiting for preflight: ${ungated.map(r => r.key).join(', ')}; call candidate_preflight for ${ungated.map(r => r.fixResultFile).join(', ')} now.`);
-    if (answerOnly.length) hints.push(`Answer-only, needs no slot: start ${answerOnly.join(', ')} now (One item, step 1), then carry on.`);
+    if (answerOnly.length) hints.push(`Needs no slot (PI / answer-only): start ${answerOnly.join(', ')} now (One item, step 1), then carry on.`);
     if (freeSlots > 0 && slotted.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${slotted.join(', ')} now (One item, step 1), then carry on.`);
-    if (!hints.length) return null;
-    return { ...(newItems.length ? { newItems, ...(freeSlots > 0 ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
+    if (!hints.length && !pendingPI.length) return null;
+    return { ...(pendingPI.length ? { urgentPI: pendingPI } : {}), ...(newItems.length ? { newItems, ...(freeSlots > 0 ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
       ...(ungated.length ? { ungated } : {}), hint: hints.join(' ') };
   }
 
@@ -715,8 +721,8 @@ export class Runtime {
     const typeRank = { PI: 0, BUG: 1, CR: 2, TASK: 3 };
     const suggestedOrder = open.sort((a, b) => {
       if ((a.type === 'PI') !== (b.type === 'PI')) return a.type === 'PI' ? -1 : 1;
-      const da = a.deadlineMinutes ? a.minutesLeft ?? 999 : 999;
-      const db = b.deadlineMinutes ? b.minutesLeft ?? 999 : 999;
+      const da = (a.deadlineMinutes || a.minutesLeft !== null) ? (a.minutesLeft ?? 999) : 999;
+      const db = (b.deadlineMinutes || b.minutesLeft !== null) ? (b.minutesLeft ?? 999) : 999;
       if (da !== db) return da - db;
       // Item chỉ trả lời xong trong vài phút (MZP27104 TASK-01: 4m41s) nên đi trước item phải sửa code.
       const oa = this.answerOnlyItem(a.key), ob = this.answerOnlyItem(b.key);
@@ -924,7 +930,10 @@ export class Runtime {
         if (existsSync(wt.worktreeRoot)) {
           rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
         }
-        const base = await revParse(checkoutRoot);
+        let base = await revParse(checkoutRoot);
+        if (this.answerOnlyItem(key) && this.journal?.data?.initialRevision) {
+          base = this.journal.data.initialRevision;
+        }
         // node_modules của pnpm vượt 260 ký tự dưới .team-work/wt/<ID>/: không có longpaths thì git status/diff hỏng.
         if (process.platform === 'win32') await git(['config', 'core.longpaths', 'true'], { cwd: checkoutRoot, allowFail: true });
         await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
@@ -1628,13 +1637,34 @@ export class Runtime {
     delete e.playerSessionId;
     if (e.type === 'ORCHESTRATOR_RESTARTED') e.attempt = this.progress.state.restartCount + 1;
     if (e.type === 'BACKLOG_STATUS') {
+      if (e.backlogItemKey && !e.backlogId) e.backlogId = e.backlogItemKey;
       const item = this.gm.view?.items.find(i => i.key === e.backlogId);
       e.title ??= item?.title ?? e.backlogId;
+      e.summary ??= e.reason ?? e.message ?? e.status;
       e.revision ??= null;
       e.receiptId ??= null;
       if (e.status === 'FAILED' && isKey(e.backlogId)) this.endItem(e.backlogId, 'FAILED');   // root bỏ item
     }
-    if (e.type === 'BLOCKER_OPENED') e.backlogId ??= null;
+    if (e.type === 'BLOCKER_OPENED') {
+      if (e.backlogItemKey && !e.backlogId) e.backlogId = e.backlogItemKey;
+      e.backlogId ??= null;
+      e.summary ??= e.message ?? e.reason ?? 'Blocker encountered';
+    }
+    const validEventKeys = {
+      ORCHESTRATOR_RESTARTED: ['type', 'attempt', 'phase', 'reason', 'summary'],
+      PREPARATION_STATUS: ['type', 'stage', 'status', 'summary'],
+      GAME_START_STATUS: ['type', 'stage', 'status', 'summary'],
+      BACKLOG_STATUS: ['type', 'backlogId', 'title', 'status', 'summary', 'revision', 'receiptId'],
+      BLOCKER_OPENED: ['type', 'blockerId', 'backlogId', 'summary'],
+      BLOCKER_RESOLVED: ['type', 'blockerId', 'summary'],
+      ORCHESTRATOR_ENDED: ['type', 'status', 'summary']
+    };
+    if (validEventKeys[e.type]) {
+      const allowedSet = new Set(validEventKeys[e.type]);
+      for (const k of Object.keys(e)) {
+        if (!allowedSet.has(k)) delete e[k];
+      }
+    }
     return this.progress.write(e);
   }
 

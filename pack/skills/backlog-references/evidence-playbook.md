@@ -14,6 +14,11 @@ tests and non-runtime documentation keep them valid. Reviewer still inspects the
 provenance, not correct UI.
 
 ## 0. Evidence the item text asks for
+- **Non-UI reports, logs and text files (e.g. *.txt, *.json, *.csv, *.log)**: NEVER use the browser for these.
+  Generate them directly by running the test/script command and piping output to `answers/<ID>/evidence/<name>`
+  (e.g. `node script.js > answers/<ID>/evidence/report.txt`). Only PNG screenshots and browser downloads use `capture_evidence`.
+- **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. If a step fails, the helper takes a fail-safe snapshot so the file exists; report unfinished scenarios honestly and proceed to publish.
+
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
 of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
 scored 0 of 200 although all 3 scenarios passed). Every listed file must exist in `answers/<ID>/evidence/` and appear

@@ -447,6 +447,16 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const click = async (q, { timeoutMs = 5000, force = false } = {}) => {
       const until = Math.min(deadline, Date.now() + timeoutMs);
       let last = null;
+      if (q.selector && /role=["']?option/i.test(q.selector)) {
+        const optCount = await evaluate(`() => document.querySelectorAll('[role=option]').length`).catch(() => 0);
+        if (optCount === 0) {
+          await evaluate(`() => {
+            const trigger = document.querySelector('[role=combobox],[data-radix-collection-item],button[aria-haspopup="listbox"],button[aria-haspopup="dialog"]');
+            if (trigger) trigger.click();
+          }`).catch(() => null);
+          await sleep(250);
+        }
+      }
       for (;;) {
         const box = await locate(q, Math.max(500, until - Date.now()));
         await sleep(120);
@@ -463,7 +473,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         last = probe;
         if (Date.now() >= until) break;
       }
-      if (force && last) {
+      if (last) {
         // Cho lớp che (vd sidebar của BUG-01 đè tab Invoices ở mọi item khác) tạm pointer-events:none rồi bấm bằng
         // chuột thật như thường: Radix Tabs/Select nhận đúng chuỗi pointer. Trả lại style sau cú bấm.
         const through = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null;
@@ -694,6 +704,21 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         if (!['assertText', 'login', 'drag', 'screenshot'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
     } catch (error) {
+      // Fail-safe snapshot: chụp ngay màn hình hiện tại cho các screenshot còn thiếu để không bị mất điểm oan
+      if (send) {
+        for (const s of steps.filter(s => s && s.action === 'screenshot')) {
+          if (s.path && !existsSync(s.path)) {
+            try {
+              const res = await send('Page.captureScreenshot', { format: 'png' }).catch(() => null);
+              if (res?.data) {
+                mkdirSync(dirname(s.path), { recursive: true });
+                writeFileSync(s.path, Buffer.from(res.data, 'base64'));
+                saved(s.path, 'screenshot');
+              }
+            } catch { /* fallback best effort */ }
+          }
+        }
+      }
       // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).
       if (error instanceof HelperError && at >= 0) {
         const step = steps[at];

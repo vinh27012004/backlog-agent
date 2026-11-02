@@ -11,6 +11,9 @@ Independent answer mode:
 Solve from item algorithm/scope/normalization and the available source, separately from the worker.
 Do not read answers/, other .team-work/results/ files, worker conclusions or a prior answer. Cite each derivation
 step by file:line. answer_values covers every requested field exactly, as its normalized submit.json string.
+When analyzing structured logs, data or deploy records, run a short deterministic script (node/python/powershell)
+to join, filter and sort records chronologically by timestamp (ts) rather than parsing large files manually. Complete
+log verification (assert total == returned) avoids truncated results.
 A missing canonical commit/source stays a documented limitation; matching a plausible value does not prove it.
 verdict=supported only when all steps are supported by source; otherwise inconclusive with the unresolved step.
 hypothesis="independent answer", fix_location=null.

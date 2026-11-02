@@ -10,7 +10,18 @@ import { stopApp } from '../env/app.mjs';
 import { fail } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const textDigest = file => digest(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'));
+const textDigest = file => {
+  try {
+    const raw = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').trim();
+    try {
+      return digest(JSON.stringify(JSON.parse(raw)));
+    } catch {
+      return digest(raw);
+    }
+  } catch {
+    return null;
+  }
+};
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
 const typeOf = key => String(key).split('-')[0].toUpperCase();
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
@@ -369,7 +380,8 @@ export class Workflow {
         // cherry-pick viết submit.json ra main bằng CRLF dù blob nộp vẫn là LF (PXWV53VC: TASK-01, TASK-02 kẹt ở đây).
         const answer = join(r.session.paths.matchRoot, 'answers', key, 'submit.json');
         const wtAnswer = join(r.wtPaths(key).matchRoot, 'answers', key, 'submit.json');
-        if (existsSync(wtAnswer) && textDigest(answer) !== textDigest(wtAnswer)) fail('CANDIDATE_STALE', 'integrated answer differs from reviewed candidate');
+        const aDigest = textDigest(answer), wtDigest = textDigest(wtAnswer);
+        if (existsSync(wtAnswer) && aDigest && wtDigest && aDigest !== wtDigest) fail('CANDIDATE_STALE', 'integrated answer differs from reviewed candidate');
         step('push');
         const pushed = await r.commitAndPush({ backlogItemKey: key, message });
         ji.publishedCandidateId = c.id; r.journal.save();
@@ -395,7 +407,7 @@ export class Workflow {
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
-      if (row.local === 'todo' && (row.minutesLeft === null || row.minutesLeft >= 4) && (row.type === 'PI' || r.answerOnlyItem(key) || free > 0)) {
+      if (row.local === 'todo' && (row.type === 'PI' || row.minutesLeft === null || row.minutesLeft >= 4) && (row.type === 'PI' || r.answerOnlyItem(key) || free > 0)) {
         add(key, 'prepare_item'); if (row.type !== 'PI' && !r.answerOnlyItem(key)) free--; continue;
       }
       if (ji.endedAt || ji.receipt) continue;
@@ -451,8 +463,18 @@ export class Workflow {
       const row = rows.find(x => x.key === u.key);
       add(u.key, 'candidate_preflight', { fixResultFile: u.fixResultFile }, lastCallOf(row, items[u.key]) ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
     }
-    // Việc cuối giờ lên đầu, item ít phút nhất trước; các việc khác giữ thứ tự cũ.
-    const urgency = a => (a.lastCall ? a.minutesLeft : Infinity);
+    // Ưu tiên tuyệt đối cho PI để đua điểm thời gian (100% -> 90% -> 75% -> 60%); việc cuối giờ kế tiếp.
+    const isPI = a => typeOf(a.key) === 'PI';
+    const urgency = a => {
+      if (isPI(a)) {
+        if (a.action === 'submit_work' || a.action === 'publish_item') return -3000;
+        if (a.action === 'run_gate' || a.action === 'candidate_preflight') return -2500;
+        if (a.action === 'prepare_item' || a.action === 'spawn_worker') return -2000;
+        return -1500;
+      }
+      if (a.lastCall) return a.minutesLeft;
+      return Infinity;
+    };
     nextActions.sort((a, b) => (urgency(a) === urgency(b) ? 0 : urgency(a) - urgency(b)));
     const now = Date.now();
     const wake = [now + 55_000, Date.parse(r.releases()?.next?.at) + 1000,

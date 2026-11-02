@@ -112,9 +112,15 @@ may carry honest FAIL/NOT_RUN scenarios or an explicitly unverified derivation. 
 build/regression, fabricated evidence or marking uncertainty as PASS. A missing file explicitly required by the item is still a repair.
 An automatic approval rejection ends that attempted action: use an authorized safe path if one exists,
 otherwise record FAILED for that item and continue; do not bypass the rejection or await a human during the match.
+Never call request_user_input or request_user_input_async: there is no human operator in the match.
 
 ## Priorities and time
-PI first, then least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
+🚨 **PI (Product Incident) is TOP PRIORITY over EVERYTHING (Speed Race)**:
+- Game Rules §6: Teams are ranked by submission time: 100% points for the fastest team, decreasing to 90%, 75%, 60%.
+- When notice.urgentPI or a new PI appears: IMMEDIATELY prepare and dispatch it! Do not wait for other tasks. PI does not occupy standard slots.
+- For PI: spawn team_fixer + independent team_pi_hypothesis solver right away.
+- When PI candidate is ready: run_gate and publish_item IMMEDIATELY. PI publish preempts any other pending publication.
+- Next priorities: least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
 Under four minutes left do not begin a new ordinary item. In an item's last six minutes next_actions puts its
 entries first with lastCall: stop_worker, run_gate, then publish_item with the lastChance it supplies; do them before
 any other work and skip further review or repair of that item.
