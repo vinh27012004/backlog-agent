@@ -1,0 +1,9 @@
+{
+  "ladder": [
+    { "tier": "cheap", "model": "gpt-6-luna", "effort": "medium" },
+    { "tier": "small", "model": "gpt-6.1-terra", "effort": "medium" },
+    { "tier": "strong", "model": "gpt-6.1-sol", "effort": "high" },
+    { "tier": "top", "model": "gpt-6-astra", "effort": "medium" }
+  ],
+  "roles": { "reviewer": "small", "piHypothesis": "strong", "verifier": "small", "evidence": "small" }
+}

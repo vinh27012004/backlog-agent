@@ -1,0 +1,5 @@
+{"schemaVersion":1,"playerSessionId":"865a8311-a067-4d92-98db-3986a64848b5","type":"ORCHESTRATOR_STARTED","summary":"Team orchestrator started."}
+{"schemaVersion":1,"playerSessionId":"865a8311-a067-4d92-98db-3986a64848b5","type":"PREPARATION_STATUS","stage":"GIT_AUTH","status":"IN_PROGRESS","summary":"Checking Git access to the assigned repository."}
+{"schemaVersion":1,"playerSessionId":"865a8311-a067-4d92-98db-3986a64848b5","type":"PREPARATION_STATUS","stage":"GIT_AUTH","status":"BLOCKED","summary":"Git access to the assigned repository failed."}
+{"schemaVersion":1,"playerSessionId":"865a8311-a067-4d92-98db-3986a64848b5","type":"BLOCKER_OPENED","blockerId":"GIT_AUTHENTICATION_REQUIRED","backlogId":null,"summary":"Git cannot read the assigned repository without a prompt."}
+{"schemaVersion":1,"playerSessionId":"865a8311-a067-4d92-98db-3986a64848b5","type":"PREPARATION_STATUS","stage":"GIT_AUTH","status":"BLOCKED","summary":"Assigned repository authentication failed during ls-remote; clone could not begin."}

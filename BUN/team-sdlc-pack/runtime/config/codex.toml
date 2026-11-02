@@ -1,0 +1,58 @@
+# Managed by team-sdlc-pack. Installed to <TeamWorkspace>/.codex/config.toml.
+# Player đặt model, effort, sandbox, approval cho thread; file này chỉ khai MCP helper.
+
+[mcp_servers.team_runtime]
+command = "node"
+args = [__TEAM_RUNTIME_SERVER__]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+# Codex chỉ chuyển một số biến môi trường cho MCP stdio; git (GCM), pnpm và npm cần thêm các biến này.
+env_vars = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "PROGRAMFILES", "PROGRAMDATA",
+  "ProgramFiles(x86)", "SystemRoot", "SYSTEMROOT", "ComSpec", "PATHEXT", "TEMP", "TMP", "PNPM_HOME",
+  "NODE_USE_ENV_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "JAVA_HOME", "MAVEN_HOME", "GOPATH",
+  # Jev (D9): chỉ helper cầm key; shell của model không thấy vì shell_environment_policy loại *KEY*.
+  "TYPESAFE_API_KEY"]
+
+# BEGIN codegraph: installer bỏ khối này khi chưa cài được codegraph (config/codegraph.json, 05 §5.21).
+# Code graph cho agent: index .codegraph/ do helper dựng ở thư mục trận và mỗi worktree. Mọi tool có readOnlyHint.
+[mcp_servers.codegraph]
+command = "node"
+args = [__CODEGRAPH_SHIM__, "serve", "--mcp"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+env_vars = ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"]
+
+[mcp_servers.codegraph.env]
+CODEGRAPH_TELEMETRY = "0"
+DO_NOT_TRACK = "1"
+CODEGRAPH_NO_DOWNLOAD = "1"
+CODEGRAPH_MCP_TOOLS = __CODEGRAPH_TOOLS__
+# END codegraph
+
+# ZVUYZ41V (L48): spawn_agent thứ tư bị từ chối ("agent thread limit reached") khi đã có 3 subagent chạy. Tối đa 4 item
+# cùng lúc (MAX_ITEMS_IN_FLIGHT), mỗi item đang publish thêm verifier + reviewer, PI kẹt thêm 2–3 pi-hypothesis.
+# Nặng nhất: 4 item × (verifier + reviewer) + PI (fixer + 3 pi-hypothesis) = 12; BTC không giới hạn nên đặt 16 cho dư.
+# Codex 0.165 kiểm khoá này (>= 1, không có giá trị "không giới hạn"); tên cũ là max_threads.
+[agents]
+max_concurrent_threads_per_session = 16
+
+[shell_environment_policy]
+exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]
+
+# Practice 26/10: root xin quyền computer use để điều khiển Edge thật của operator (profile cá nhân).
+# Tắt mọi tính năng điều khiển desktop/trình duyệt và plugin; ảnh evidence chụp bằng Edge headless.
+# Giữ multi_agent (subagent native), view_image và web search (Q11).
+[features]
+computer_use = false
+browser_use = false
+browser_use_external = false
+browser_use_full_cdp_access = false
+browser_annotation_api = false
+in_app_browser = false
+apps = false
+plugins = false
+remote_plugin = false
+plugin_sharing = false
+image_generation = false
+tool_suggest = false
+multi_agent = true

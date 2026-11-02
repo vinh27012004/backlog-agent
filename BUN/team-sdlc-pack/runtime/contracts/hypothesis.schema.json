@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hypothesis",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hypothesis": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "supported",
+        "refuted",
+        "inconclusive"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "file:line, command output, API response"
+    },
+    "fix_location": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "if supported: file:line, the condition that goes wrong there, and the root-cause change"
+    },
+    "next_check": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "if inconclusive: the single most useful next check"
+    },
+    "answer_values": {
+      "type": "array",
+      "description": "independent answer only: your value for each field in <independent_answer>, exactly as it would go into submit.json; [] otherwise",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "value"
+        ]
+      }
+    }
+  },
+  "required": [
+    "hypothesis",
+    "verdict",
+    "evidence",
+    "fix_location",
+    "next_check",
+    "answer_values"
+  ]
+}

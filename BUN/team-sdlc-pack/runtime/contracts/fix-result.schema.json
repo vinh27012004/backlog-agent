@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fix-result",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "fixed",
+        "partial",
+        "cannot_fix"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "description": "what was changed and why, for the submission"
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "done-conditions you derived from the item (PI: symptoms)"
+    },
+    "suspects": {
+      "type": "array",
+      "description": "code you identified as involved, at most 6",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "file",
+          "reason"
+        ]
+      }
+    },
+    "root_cause": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "BUG/PI: the cause; null for TASK/CR"
+    },
+    "hypotheses": {
+      "type": "array",
+      "description": "BUG/PI: every cause you considered, most likely first, with the check that decides it and what it showed; [] for TASK/CR. The next attempt and the parallel checkers start from this list",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "check": {
+            "type": "string",
+            "description": "the test, request or reading whose outcome confirms or refutes it"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "refuted",
+              "open"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "what the check showed (file:line, command output, response); null while open"
+          }
+        },
+        "required": [
+          "cause",
+          "check",
+          "verdict",
+          "evidence"
+        ]
+      }
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests_added": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "each entry exactly as the {target} of test_one in the project profile, e.g. Java OrderServiceTest#percentCoupon, pytest tests/test_order.py::test_coupon, unittest tests.test_order.OrderTest.test_coupon, jest src/order.test.ts"
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "not_run"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "check",
+          "command",
+          "result",
+          "note"
+        ]
+      }
+    },
+    "needs_dependency": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "groupId:artifactId:version the orchestrator must download"
+    },
+    "test_change": {
+      "description": "Only when you changed an existing test because it contradicts the intended behaviour (e.g. a baseline-failing test): why, and where that behaviour is stated. null otherwise",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "which test, what it asserted, what the intended behaviour is"
+            },
+            "source": {
+              "type": "string",
+              "description": "item text quote, company standard id, or repo file:line (migration, code comment, organizer seed)"
+            }
+          },
+          "required": [
+            "reason",
+            "source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "requirements": {
+      "type": "array",
+      "description": "one entry per id in <requirements> (the item's acceptance criteria, requirements and submission rules); [] when the brief has none",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "not_applicable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "what shows it: test name, file:line, evidence file, command and result; for not_met, why"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ]
+      }
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "criteria",
+    "suspects",
+    "root_cause",
+    "hypotheses",
+    "changed_files",
+    "tests_added",
+    "verification",
+    "needs_dependency",
+    "test_change",
+    "risks",
+    "confidence",
+    "requirements"
+  ]
+}

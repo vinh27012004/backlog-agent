@@ -1,0 +1,12 @@
+---
+name: stack-notes
+description: Stack-specific pitfalls and commands (java, node, python, dotnet, go, php, unknown). Read the one matching detect_profile.
+---
+
+- `dotnet.md`
+- `go.md`
+- `java.md`
+- `node.md`
+- `php.md`
+- `python.md`
+- `unknown.md`
