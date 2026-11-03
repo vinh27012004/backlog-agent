@@ -1,6 +1,6 @@
 ---
 name: backlog-references
-description: Shared MTM worker and checker constraints, code discovery and focused references for bugs, PI, retries and evidence.
+description: Shared MTM worker constraints, code discovery and focused references for bugs, PI and evidence.
 ---
 
 # Shared team constraints
@@ -26,7 +26,7 @@ Only the designated baseline owner may correct a stale test, citing intended beh
 Never change protected exam-info.json or env-require files.
 
 # Handoffs
-The profile grants writing your own results JSON even for read-only roles. Write the strict contract to a temporary
+The profile grants writing your own results JSON. Write the strict contract to a temporary
 file beside the given results path, then rename atomically. Each handoff uses a NEW numbered filename; never overwrite
 a result already handed off. Match the item's language in human-readable fields; report only observed outcomes.
 Do not repeatedly report progress. Final replies reach root automatically; message once when yielding for sync,
@@ -35,6 +35,4 @@ or when a decision/lookup only root can make blocks you.
 # Read only the relevant reference
 - BUG investigation: bug-patterns.md.
 - PI investigation: pi-triage.md.
-- Retry/continuation: retry-playbook.md.
 - Workers capturing UI/data/download evidence: evidence-playbook.md.
-Read-only reviewers and solvers do not seed, build, start the app or capture evidence.

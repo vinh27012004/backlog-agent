@@ -62,4 +62,4 @@ For every feature or modification introduced in the CR, write tests covering 4 k
 3. **Diff Hygiene (J3)**:
    - Verify `git diff`: ensure zero leftover debug statements (`console.log`, `print`, temporary stubs), no unrelated file touches, and no formatting churn.
 4. **Candidate Checkpoint**:
-   - Checkpoint candidate, trigger gate, and notify orchestrator for publish.
+   - Checkpoint candidate and hand off; root publishes it as is.

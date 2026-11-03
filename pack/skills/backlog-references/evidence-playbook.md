@@ -10,7 +10,7 @@ Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenar
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
 outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale when your own files or the
 environment change after capture; runtime changes synced from other items also invalidate them. Only syncs limited to
-tests and non-runtime documentation keep them valid. Reviewer still inspects their content. A manifest proves
+tests and non-runtime documentation keep them valid. A manifest proves
 provenance, not correct UI.
 
 ## 0. Evidence the item text asks for
@@ -22,7 +22,7 @@ provenance, not correct UI.
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
 of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
 scored 0 of 200 although all 3 scenarios passed). Every listed file must exist in `answers/<ID>/evidence/` and appear
-in `evidenceFiles`; the gate fails the attempt as `evidence_missing` otherwise.
+in `evidenceFiles`; a missing file scores the whole item 0.
 - `beforeFix: true`: capture it **first**, before you change any code, on the unfixed app (`app start`, one
   `capture_evidence` call, `app stop`). It shows the defect, so take it even though the screen looks broken.
 - Code already changed (a retry): save your change as a patch, undo it, capture, re-apply it:
@@ -68,24 +68,28 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
   call with `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls
   to `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
 - Give every call the same `browserProfile` (e.g. `"<id>-admin"`): the login cookie is kept, so later calls may start
-  at the screen. `BROWSER_START_FAILED` twice in a row: use a new `browserProfile` name and log in again. A failed step whose `error.details.url` is `/login` means the session is gone: put the `login` step
-  back in (it returns `alreadySignedIn` when the cookie still holds).
+  at the screen, and parallel calls may share it. A failed step whose `error.details.url` is `/login` means the
+  session is gone: put the `login` step back in (it returns `alreadySignedIn` when the cookie still holds).
+- `NAVIGATION_FAILED` (connection refused): the app is not running on that url; check `app status`, never retry blindly.
 - `LOGIN_FAILED`: the app refused the seeded account; `error.details.visibleText` has its message. Seeding again
   (`app_data` lock, §6) may restore it; otherwise the scenario is `NOT_RUN` with that message. A login bug the item
   itself is about is evidence: screenshot the error instead.
 - An action rejected by auto-review: do not retry it or reach the same result another way. Finish everything else,
   mark only the scenarios that needed it `NOT_RUN` with the stated reason, and return; never ask for approval
   (nobody answers during the match).
-- File names: exactly what the MVS lists under "Required evidence"; the gate fails a `PASS` that misses one.
+- File names: exactly what the MVS lists under "Required evidence"; a `PASS` that misses one is not a pass.
 - `assertText` before `screenshot`: a picture of the wrong state is worse than none.
   `assertText` waits up to 5 s; `screenshot` waits until requests and loading indicators are gone. A step with
   `unsettled` was captured while still loading: `waitFor` the loaded content and capture again. Paths may be
   relative to `context.matchRoot` (`answers/<ID>/evidence/<name>.png`).
 
 ## 3. Selectors
-- `selector` is plain CSS. Playwright syntax (`:has-text()`, `>>`, `text=`) fails with `INVALID_SELECTOR`.
+- `selector` is CSS or Playwright selector syntax (`text=Invoices`, `[role=tab]:has-text("Invoices")`,
+  `role=button[name="Save"]`, `>> nth=1`).
 - Pick by visible text with `selector` + `text` together: `{selector: "[role=tab]", text: "Invoices"}`,
-  `{selector: "button", text: "New invoice"}`; `index` picks the n-th match.
+  `{selector: "button", text: "New invoice"}`; an exact text match wins over a partial one; `index` picks the n-th match.
+- `ELEMENT_NOT_ACTIONABLE`: the element is there but not clickable (the message says why, e.g. `element is not
+  enabled`): wait for the state that enables it (`waitFor {selector, state: "enabled"}`) instead of retrying.
 - Mobile viewport: the desktop sidebar is hidden and navigation moves to a menu or bottom bar with its own labels.
   Use `goto` unless the scenario is about that navigation; otherwise take the label from `error.details.candidates`.
 - A custom select (Radix, shadcn): click its trigger, then `{action: "click", selector: "[role=option]", text: "<name>"}`.
@@ -93,10 +97,12 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 - A failed step returns `error.details`: `failedStep`, `url`, `visibleText` and the clickable `candidates` on the page.
   Fix the steps from those, never by guessing.
 
-## 4. Something covers the target (`ELEMENT_OBSCURED`)
-- On a UI-layout bug, the cover is the bug: that failure is your "before" evidence.
-- Otherwise retry that click with `force: true` (Practice #5: BUG-01's sidebar covered the Accounting tabs in every
-  other item's worktree). Say in the scenario note that a shared layout bug was clicked through.
+## 4. Something covers the target (`obscuredBy`)
+- A click on a covered element goes through the cover with real mouse events, and the step in the result carries
+  `obscuredBy` naming the cover (Practice #5: BUG-01's sidebar covered the Accounting tabs in every other item's
+  worktree). Say in the scenario note that a shared layout bug was clicked through.
+- On a UI-layout bug, the cover is the bug: `obscuredBy` plus a screenshot of the covered screen is your "before"
+  evidence.
 - The cover also hides what your screenshot must show: when the scenario names no viewport, capture at a width below
   the app's desktop breakpoint (e.g. 1023 or 767 px, where the sidebar collapses) so the content is visible, and say so.
 - Never copy another item's files and never wait or yield for another item's fix (Practice 4D895OVI: CR-01 and CR-02

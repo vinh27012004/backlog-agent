@@ -3,10 +3,10 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { run, runPwsh } from '../core/jobs.mjs';
-import { baselineOf, runTests } from '../gate/testreport.mjs';
+import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from '../core/util.mjs';
 
-export { failingTests, parseTestCounts } from '../gate/testreport.mjs';
+export { failingTests, parseTestCounts } from './testreport.mjs';
 
 const MANIFESTS = ['package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'pyproject.toml',
   'requirements.txt', 'go.mod', 'composer.json'];

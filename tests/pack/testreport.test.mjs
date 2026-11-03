@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { disappearedTests } from '../../pack/src/gate/gate.mjs';
-import { baselineOf, fillTargets, readReport, rerunTargets, scriptEndsWithRunner, testCommand } from '../../pack/src/gate/testreport.mjs';
+import { baselineOf, fillTargets, readReport, rerunTargets, scriptEndsWithRunner, testCommand } from '../../pack/src/env/testreport.mjs';
 import { tempDir } from './support.mjs';
 
 test('vitest JSON report (format of a real vitest 3.2 run) gives one id per test', () => {
@@ -69,15 +68,9 @@ test('reporter flags only where they reach the runner', () => {
   assert.equal(fillTargets('gradle -q test --tests {target}', ['a.B.m', 'a.C.n'], 'java-gradle'), "gradle -q test --tests 'a.B.m' --tests 'a.C.n'");
 });
 
-test('baseline keeps per-test status; disappeared tests by id, else by count', () => {
+test('baseline keeps per-test status', () => {
   const tests = new Map([['t > a', 'passed'], ['t > b', 'failed'], ['t > c', 'skipped']]);
   const base = baselineOf({ res: { code: 1, timedOut: false }, report: { tests }, counts: { total: 3 }, failing: ['t > b'], source: 'report' });
   assert.deepEqual(base.tests, { 't > a': 'passed', 't > b': 'failed', 't > c': 'skipped' });
   assert.deepEqual(baselineOf({ res: { timedOut: true } }), { status: 'TIMEOUT' });
-  const now = new Map([['t > b', 'failed'], ['t > d', 'passed']]);
-  assert.deepEqual(disappearedTests(base, { report: { tests: now } }), ['t > a']);
-  assert.deepEqual(disappearedTests(base, { report: { tests: new Map([['t > a', 'skipped'], ['t > b', 'passed']]) } }), ['t > a']);
-  assert.deepEqual(disappearedTests(base, { report: { tests: now } }, ['t > a']), []);
-  assert.deepEqual(disappearedTests({ counts: { total: 12 } }, { counts: { total: 11 } }), ['1 of 12 baseline tests']);
-  assert.deepEqual(disappearedTests({ counts: { total: 12 } }, { counts: { total: 13 } }), []);
 });

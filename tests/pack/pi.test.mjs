@@ -36,7 +36,7 @@ test('a job wait returns early when a PI is released, and at once while one wait
   const rt = new Runtime({ teamWorkspace: tempDir('mtm-pi-') });
   let pending = [];
   rt.pendingPI = () => pending;
-  const job = rt.jobs.start('run_gate', () => new Promise(resolve => setTimeout(() => resolve({ passed: true }), 2_500)));
+  const job = rt.jobs.start('publish_item', () => new Promise(resolve => setTimeout(() => resolve({ passed: true }), 2_500)));
   setTimeout(() => rt.events.push('ITEM_NEW', { key: 'BUG-03', itemType: 'BUG' }), 100);   // item khác không cắt lượt chờ
   setTimeout(() => { pending = ['PI-01']; rt.events.push('ITEM_NEW', { key: 'PI-01', itemType: 'PI', type: 'PI' }); }, 300);
   const t0 = Date.now();

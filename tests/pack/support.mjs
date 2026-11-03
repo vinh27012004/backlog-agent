@@ -1,7 +1,7 @@
 // Hạ tầng test cho pack: đường dẫn source Player (oracle), workspace tạm, client MCP, Game Master giả.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,6 +10,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 export const validFixResult = (overrides = {}) => ({ status: 'fixed', summary: 'fixture', criteria: [], suspects: [], root_cause: null,
   hypotheses: [], changed_files: [], tests_added: [], verification: [], needs_dependency: [], test_change: null, risks: [], confidence: 0.8, requirements: [], ...overrides });
+// Ghi team-sdlc-pack/local/runtime.json của workspace tạm.
+export function localRuntime(teamWorkspace, cfg) {
+  mkdirSync(join(teamWorkspace, 'team-sdlc-pack', 'local'), { recursive: true });
+  writeFileSync(join(teamWorkspace, 'team-sdlc-pack', 'local', 'runtime.json'), JSON.stringify(cfg));
+}
 export const REPO = resolve(here, '..', '..');
 export const PACK = join(REPO, 'pack');
 export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.44', 'app', 'src');
@@ -17,14 +22,30 @@ export const hasPlayer = existsSync(join(PLAYER_SRC, 'progress.mjs'));
 
 export const player = async name => import(pathToFileURL(join(PLAYER_SRC, name)).href);
 
+// capture_evidence cần playwright-core đúng phiên bản của pack/config/playwright.json. Test dùng bản ở <repo>/playwright
+// (gitignore), tự cài lần đầu hoặc khi đổi phiên bản; helper cài trong workspace tạm (install --no-playwright) tìm nó qua
+// MTM_PLAYWRIGHT_DIR.
+export const PLAYWRIGHT_DIR = join(REPO, 'playwright');
+process.env.MTM_PLAYWRIGHT_DIR ??= PLAYWRIGHT_DIR;
+export function ensurePlaywright() {
+  const cfg = JSON.parse(readFileSync(join(PACK, 'config', 'playwright.json'), 'utf8'));
+  const pkg = join(PLAYWRIGHT_DIR, 'node_modules', ...cfg.package.split('/'), 'package.json');
+  if (existsSync(pkg) && JSON.parse(readFileSync(pkg, 'utf8')).version === cfg.version) return;
+  const npmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const res = spawnSync(process.execPath, [npmCli, 'install', '--prefix', PLAYWRIGHT_DIR, '--no-save', '--no-fund', '--no-audit',
+    `${cfg.package}@${cfg.version}`], { encoding: 'utf8', timeout: 600_000, env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } });
+  if (res.status !== 0) throw new Error(`npm install ${cfg.package}@${cfg.version}: ${res.stderr}`);
+}
+
 export function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-// Test không tải codegraph từ npm (--no-codegraph); codegraph.test.mjs dùng một bản giả đặt sẵn.
+// Test không tải codegraph và playwright-core từ npm (--no-codegraph, --no-playwright); codegraph.test.mjs dùng một bản
+// giả đặt sẵn, capture_evidence qua helper đã cài dùng MTM_PLAYWRIGHT_DIR.
 export function install(teamWorkspace, { codegraph = false } = {}) {
   const res = spawnSync(process.execPath, [join(PACK, 'scripts', 'install.mjs'), '--team-workspace', teamWorkspace,
-    ...(codegraph ? [] : ['--no-codegraph'])], { encoding: 'utf8' });
+    ...(codegraph ? [] : ['--no-codegraph']), '--no-playwright'], { encoding: 'utf8' });
   if (res.status !== 0) throw new Error(`install failed: ${res.stdout} ${res.stderr}`);
   return JSON.parse(res.stdout.trim().split('\n').pop());
 }

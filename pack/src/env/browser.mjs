@@ -1,11 +1,10 @@
-// capture_evidence: điều khiển Edge/Chrome headless đã cài sẵn qua Chrome DevTools Protocol (CDP),
-// không cần Playwright hay dependency nào. Chỉ mở URL loopback (app do đội tự chạy); ảnh chỉ lưu vào
-// answers/<ID>/evidence/ trong thư mục trận. Click/gõ phím dùng sự kiện input thật nên React nhận.
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+// capture_evidence: điều khiển Edge/Chrome headless đã cài sẵn qua Playwright (playwright-core, không tải trình duyệt
+// riêng; installer cài vào team-sdlc-pack/playwright/, phiên bản ở config/playwright.json). Chỉ mở URL loopback (app do
+// đội tự chạy); ảnh chỉ lưu vào answers/<ID>/evidence/ trong thư mục trận. Click/gõ phím là sự kiện input thật nên React nhận.
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { locate as locateMatchRoot } from './app.mjs';
 import { seededAccount } from './applogin.mjs';
 import { fail, HelperError, sleep } from '../core/util.mjs';
@@ -15,6 +14,8 @@ import { detectProfile } from './environment.mjs';
 import { recordEvidence } from './evidence.mjs';
 
 const MAX_TOTAL_MS = 50_000;
+// pack/ trong repo, team-sdlc-pack/runtime/ khi đã cài: playwright/ nằm cạnh nó (repo/playwright, team-sdlc-pack/playwright).
+const PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export function findBrowser() {
   const env = process.env;
@@ -28,6 +29,23 @@ export function findBrowser() {
     '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
   ].filter(Boolean);
   return candidates.find(p => existsSync(p)) ?? null;
+}
+
+// playwright-core đúng phiên bản của config/playwright.json: cạnh runtime/ (bản cài), hoặc MTM_PLAYWRIGHT_DIR (test).
+let loaded = null;
+export async function loadPlaywright() {
+  if (loaded) return loaded;
+  const cfg = JSON.parse(readFileSync(join(PACK_ROOT, 'config', 'playwright.json'), 'utf8'));
+  let found = null;
+  for (const dir of [join(PACK_ROOT, '..', 'playwright'), process.env.MTM_PLAYWRIGHT_DIR].filter(Boolean)) {
+    const pkgDir = join(dir, 'node_modules', ...cfg.package.split('/'));
+    if (!existsSync(join(pkgDir, 'package.json'))) continue;
+    found = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')).version;
+    if (found !== cfg.version) continue;
+    loaded = await import(pathToFileURL(join(pkgDir, 'index.mjs')).href);
+    return loaded;
+  }
+  fail('PLAYWRIGHT_NOT_INSTALLED', `${cfg.package}@${cfg.version} ${found ? `not found (installed ${found})` : 'not installed'}; rerun pack/install.ps1`);
 }
 
 const loopback = url => {
@@ -66,90 +84,6 @@ export function evidencePath(teamWorkspace, path, { pngOnly = true, base = null,
   return abs;
 }
 
-class Cdp {
-  constructor(ws) {
-    this.ws = ws;
-    this.id = 0;
-    this.pending = new Map();
-    this.listeners = [];
-    ws.addEventListener('message', ev => {
-      const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8'));
-      if (msg.id && this.pending.has(msg.id)) {
-        const { resolve: ok, reject } = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message)); else ok(msg.result);
-      } else if (msg.method) {
-        for (const l of this.listeners) l(msg);
-      }
-    });
-  }
-
-  send(method, params = {}, sessionId) {
-    const id = ++this.id;
-    return new Promise((ok, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new HelperError('CDP_TIMEOUT', `${method} did not answer in 15 seconds`)); }, 15_000);
-      this.pending.set(id, { resolve: value => { clearTimeout(timer); ok(value); }, reject: error => { clearTimeout(timer); reject(error); } });
-      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    });
-  }
-}
-
-// Trên Windows Edge giữ DevToolsActivePort lúc đang ghi: đọc gặp EBUSY/EPERM thì thử lại. Mở hỏng vì bất kỳ lý do gì
-// cũng phải kill Edge, nếu không tiến trình mồ côi giữ profile và lần sau cùng browserProfile báo BROWSER_START_FAILED
-// (4D895OVI: BUG-04 mất khoảng 2,5 phút rồi phải đổi profile).
-const FILE_BUSY = new Set(['EBUSY', 'EPERM', 'EACCES']);
-
-async function launch(browser, userDataDir, viewport) {
-  mkdirSync(userDataDir, { recursive: true });
-  const portFile = join(userDataDir, 'DevToolsActivePort');
-  try { rmSync(portFile, { force: true }); } catch (error) { if (!FILE_BUSY.has(error.code)) throw error; }
-  const child = spawn(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${userDataDir}`,
-    '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', '--disable-sync',
-    '--disable-features=msEdgeSidebarV2,EdgeCollections', `--window-size=${viewport.width},${viewport.height}`, 'about:blank'],
-  { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
-  try {
-    const t0 = Date.now();
-    while (Date.now() - t0 < 15_000) {
-      let text = '';
-      try { text = existsSync(portFile) ? readFileSync(portFile, 'utf8') : ''; } catch (error) { if (!FILE_BUSY.has(error.code)) throw error; }
-      const [port, path] = text.split(/\r?\n/);
-      if (port && path) return { child, endpoint: `ws://127.0.0.1:${port.trim()}${path.trim()}` };
-      await sleep(100);
-    }
-    fail('BROWSER_START_FAILED', 'browser did not open a DevTools port; retry, or use a new browserProfile if it repeats');
-  } catch (error) {
-    kill(child);
-    throw error;
-  }
-}
-
-function kill(child) {
-  if (!child?.pid) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else try { process.kill(-child.pid, 'SIGKILL'); } catch { /* đã chết */ }
-}
-
-// JS chạy trong trang: tìm phần tử theo selector CSS, theo text hiển thị, hoặc cả hai (text lọc trong các phần tử
-// khớp selector, `index` chọn phần tử thứ n).
-const FIND = `(q) => {
-  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
-  const textOf = el => ((el.innerText || el.textContent || '').trim() || el.getAttribute('aria-label') || '').trim().toLowerCase();
-  const hasText = q.text !== undefined && q.text !== null && String(q.text) !== '';
-  const want = String(q.text ?? '').trim().toLowerCase();
-  if (q.selector) {
-    const all = [...document.querySelectorAll(q.selector)].filter(visible);
-    if (!hasText) return all[q.index || 0] || null;
-    const exact = all.filter(el => textOf(el) === want);
-    return (exact.length ? exact : all.filter(el => textOf(el).includes(want)))[q.index || 0] || null;
-  }
-  const pool = [...document.querySelectorAll('button,a,[role=button],[role=option],[role=menuitem],[role=tab],[role=link],label,summary,li,td,th,span,div,p,h1,h2,h3,h4,h5,h6,strong,dt,dd')].filter(visible);
-  const exact = pool.filter(el => textOf(el) === want);
-  const loose = pool.filter(el => textOf(el).includes(want));
-  const pick = list => list.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
-  return pick(exact) || pick(loose) || null;
-}`;
-
 // Bước login: đánh dấu ô mật khẩu đang hiện, ô tên/email đứng trước nó trong cùng form và nút gửi. null = không có form.
 const LOGIN_FORM = `() => {
   const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
@@ -172,17 +106,20 @@ const LOGIN_FORM = `() => {
 }`;
 const LOGIN_ROUTE = /\/(login|signin|sign-in|auth)\b/i;
 
-// Practice #5 (BC3JL6ZC): fixer viết selector Playwright (`:has-text()`, `>> nth=0`); querySelectorAll ném lỗi,
-// lỗi bị nuốt và tool chờ hết giờ rồi báo ELEMENT_NOT_FOUND. Chặn ngay, chỉ cách viết đúng.
-const PLAYWRIGHT_ONLY = /:has-text\(|:text(-is|-matches)?\(|:visible\b|:nth-match\(|>>|^\s*(text|css|xpath|role)=/;
+// Selector là CSS hoặc cú pháp Playwright (text=, :has-text(), role=, >>, nth=): Playwright phân tích. Sai cú pháp thì
+// báo ngay, không chờ hết giờ.
+const BAD_SELECTOR = /while parsing|is not a valid selector|Unknown engine|Unexpected token|Unsupported token|Malformed/i;
+
+const TARGETED = new Set(['click', 'fill', 'select', 'drag', 'download', 'waitFor']);
 
 function checkSelector(s, i) {
-  if (s.selector === undefined) return;
-  if (typeof s.selector !== 'string' || !s.selector.trim()) fail('INVALID_SELECTOR', `step ${i + 1}: selector must be a non-empty CSS string`);
-  if (PLAYWRIGHT_ONLY.test(s.selector)) {
-    fail('INVALID_SELECTOR', `step ${i + 1}: "${s.selector}" is Playwright syntax; selector is plain CSS. ` +
-      'Pick by visible text with {selector, text} (e.g. {selector:"[role=tab]", text:"Invoices"}) or {text} alone; index picks the n-th match');
+  if (s.selector === undefined) {
+    if (TARGETED.has(s.action) && (s.text === undefined || s.text === null || String(s.text).trim() === '')) {
+      fail('INVALID_ARGUMENT', `step ${i + 1} (${s.action}) needs a selector or a text`);
+    }
+    return;
   }
+  if (typeof s.selector !== 'string' || !s.selector.trim()) fail('INVALID_SELECTOR', `step ${i + 1}: selector must be a non-empty string`);
 }
 
 // Khi một bước lỗi: trang đang ở đâu và có gì bấm được, để lần gọi sau sửa bước mà không phải đoán. Phần tử gần bước
@@ -202,7 +139,7 @@ const PAGE_STATE = `(q) => {
   const label = el => (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().replace(/\\s+/g, ' ').toLowerCase();
   const want = q && q.text ? String(q.text).trim().replace(/\\s+/g, ' ').toLowerCase() : '';
   let same = new Set();
-  try { if (q && q.selector) same = new Set(document.querySelectorAll(q.selector)); } catch (e) { /* selector đã kiểm trước */ }
+  try { if (q && q.selector) same = new Set(document.querySelectorAll(q.selector)); } catch (e) { /* selector Playwright, không phải CSS */ }
   const score = el => { const t = label(el); let s = 0;
     if (want && t === want) s += 8; else if (want && t.length > 2 && (t.includes(want) || want.includes(t))) s += 4;
     if (same.has(el)) s += 3;
@@ -227,16 +164,6 @@ export function failureHint(step, state, code) {
   }
   if (state.exact && step.text !== undefined && step.text !== null) return `"${step.text}" is on the page as ${state.exact}: use that selector.`;
   return null;
-}
-
-// Pre-gate (tools.mjs) chạy test của item trong lúc worker chụp. Hỏng thì kết quả chụp báo luôn, để worker sửa code ngay
-// thay vì chụp xong mới biết (helper của subagent không có session nên đọc journal của trận).
-export function preGateNotice(teamWork, key) {
-  try {
-    const p = JSON.parse(readFileSync(join(teamWork, 'journal.json'), 'utf8')).items?.[key]?.preGate;
-    return p?.state === 'failed' ? { jobId: p.jobId, failKind: p.failKind, detail: p.detail,
-      hint: 'Your tests failed the early checks: stop evidence, fix the code, rerun the focused tests, then worker_checkpoint ready_for_evidence again.' } : null;
-  } catch { return null; }
 }
 
 // Mỗi lần gọi mở một trang trắng: bước thao tác trước goto/login chắc chắn hỏng sau khi chờ hết giờ (NBDB5U0O BUG-02:
@@ -271,6 +198,15 @@ function routeRule(s, i) {
     left: Number.isInteger(s.times) && s.times > 0 ? s.times : Infinity,
     matches(url, method) { return (pattern ? pattern.test(url) : url.includes(s.url)) && (!this.method || this.method === method); } };
 }
+
+// Dòng đầu của lỗi Playwright, bỏ mã màu và call log.
+const firstLine = error => String(error?.message ?? error).replace(/\x1b\[[0-9;]*m/g, '').split('\n')[0].slice(0, 300);
+// Lý do Playwright còn chờ: dòng "element is ..." cuối của call log, vd "element is not enabled".
+const waitingFor = error => String(error?.message ?? '').replace(/\x1b\[[0-9;]*m/g, '').split('\n')
+  .map(l => l.replace(/^\s*(\d+ × )?-?\s*/, '').trim()).filter(l => /^element /.test(l)).pop()?.slice(0, 160) ?? 'not actionable';
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const cssString = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+const describeQuery = q => q.selector ? `${q.selector}${q.text ? ` "${q.text}"` : ''}` : `text "${q.text}"`;
 
 export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
   timeoutMs = 45_000, context = null }) {
@@ -328,29 +264,38 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     provenance = { ...snapshot, base, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
       teamWork: dirname(where.logDir), key: context.backlogItemKey };
   }
-  const profileDir = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
-    ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', browserProfile)
-    : join(tmpdir(), `mtm-browser-${process.pid}-${Date.now()}`);
+  // browserProfile giữ cookie và localStorage giữa các lần gọi trong một file storageState (không dùng thư mục profile của
+  // Edge: hai lần gọi song song cùng profile không khoá nhau, và đóng trình duyệt không phải chờ ghi profile).
+  const stateFile = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
+    ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', `${browserProfile}.json`) : null;
   const deadline = Date.now() + Math.min(MAX_TOTAL_MS, timeoutMs);
-  const { child, endpoint } = await launch(browser, profileDir, vp);
+  const left = (cap = Infinity) => Math.max(100, Math.min(cap, deadline - Date.now()));
+  const { chromium } = await loadPlaywright();
+  // launchServer + kill thay cho launch + close: Edge đóng êm mất ~2 s mỗi lần gọi, kill ~0,4 s. Cookie đã nằm trong
+  // storageState nên không cần Edge ghi profile.
+  let server;
+  let instance;
+  try {
+    server = await chromium.launchServer({ executablePath: browser, headless: true, timeout: 15_000 });
+    instance = await chromium.connect(server.wsEndpoint(), { timeout: 15_000 });
+  } catch (error) {
+    await server?.kill().catch(() => null);
+    fail('BROWSER_START_FAILED', `${firstLine(error)}; retry once`);
+  }
   const log = [];
   const consoleErrors = [];
   const shots = [];
   const downloads = [];
-  const downloadDir = join(teamWorkspace, 'team-sdlc-pack', 'local', 'downloads', randomUUID());
-  let ws;
-  let cdp;
+  let ctx;
+  let page;
   try {
-    ws = new WebSocket(endpoint);
-    await new Promise((ok, reject) => { ws.addEventListener('open', ok, { once: true }); ws.addEventListener('error', () => reject(new Error('cdp connect failed')), { once: true }); });
-    cdp = new Cdp(ws);
-    const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
-    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
-    const send = (m, p) => cdp.send(m, p, sessionId);
-    if (steps.some(s => s.action === 'download')) {
-      mkdirSync(downloadDir, { recursive: true });
-      await cdp.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: downloadDir, eventsEnabled: true });
-    }
+    const options = { viewport: vp, deviceScaleFactor: 1, acceptDownloads: true };
+    ctx = stateFile && existsSync(stateFile)
+      ? await instance.newContext({ ...options, storageState: stateFile }).catch(() => instance.newContext(options))
+      : await instance.newContext(options);
+    page = await ctx.newPage();
+    page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(15_000);
     const saved = (path, kind) => {
       const bytes = readFileSync(path), sha256 = digest(bytes);
       const record = { path, bytes: bytes.length, sha256 };
@@ -360,61 +305,44 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       }
       return record;
     };
-    cdp.listeners.push(msg => {
-      if (msg.sessionId !== sessionId) return;
-      if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
-        consoleErrors.push(msg.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 300));
-      }
-      if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(String(msg.params.exceptionDetails?.exception?.description ?? msg.params.exceptionDetails?.text ?? '').slice(0, 300));
-    });
+    page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text().slice(0, 300)); });
+    page.on('pageerror', error => consoleErrors.push(String(error?.message ?? error).slice(0, 300)));
     // Request đang bay, để screenshot chờ dữ liệu về (WebSocket/EventSource sống mãi nên không tính).
     const inflight = new Map();
-    cdp.listeners.push(msg => {
-      if (msg.sessionId !== sessionId) return;
-      if (msg.method === 'Network.requestWillBeSent' && msg.params.type !== 'EventSource') inflight.set(msg.params.requestId, { url: msg.params.request.url, at: Date.now() });
-      if (msg.method === 'Network.loadingFinished' || msg.method === 'Network.loadingFailed') inflight.delete(msg.params.requestId);
-    });
-    await send('Page.enable');
-    await send('Runtime.enable');
-    await send('Network.enable');
-    await send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false });
+    page.on('request', r => { if (!['eventsource', 'websocket'].includes(r.resourceType())) inflight.set(r, { url: r.url(), at: Date.now() }); });
+    page.on('requestfinished', r => inflight.delete(r));
+    page.on('requestfailed', r => inflight.delete(r));
 
     // route: luật bật từ bước của nó trở đi, luật mới nhất thắng; unroute bỏ hết. Request không khớp đi tiếp như thường.
     const active = [];
     const routed = [];
     if (rules.size) {
-      cdp.listeners.push(msg => {
-        if (msg.sessionId !== sessionId || msg.method !== 'Fetch.requestPaused') return;
-        const { requestId, request } = msg.params;
-        const rule = active.find(r => r.left > 0 && r.matches(request.url, request.method));
-        (async () => {
-          if (!rule) return send('Fetch.continueRequest', { requestId });
+      await ctx.route('**/*', async route => {
+        const request = route.request();
+        const rule = active.find(r => r.left > 0 && r.matches(request.url(), request.method()));
+        try {
+          if (!rule) return await route.fallback();
           rule.left--;
-          routed.push({ step: rule.step, method: request.method, url: request.url.slice(0, 200),
+          routed.push({ step: rule.step, method: request.method(), url: request.url().slice(0, 200),
             ...(rule.status ? { status: rule.status } : {}), ...(rule.abort ? { abort: rule.abort } : {}), ...(rule.delayMs ? { delayMs: rule.delayMs } : {}) });
           if (rule.delayMs) await sleep(rule.delayMs);
-          if (rule.abort) return send('Fetch.failRequest', { requestId, errorReason: rule.abort });
-          if (!rule.status) return send('Fetch.continueRequest', { requestId });
-          return send('Fetch.fulfillRequest', { requestId, responseCode: rule.status,
-            responseHeaders: [{ name: 'Content-Type', value: rule.contentType }], body: Buffer.from(rule.body).toString('base64') });
-        })().catch(() => { /* request đã huỷ (trang chuyển đi) */ });
+          if (rule.abort) return await route.abort(rule.abort.toLowerCase());
+          if (!rule.status) return await route.fallback();
+          return await route.fulfill({ status: rule.status, contentType: rule.contentType, body: rule.body });
+        } catch { /* request đã huỷ (trang chuyển đi) */ }
       });
-      await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
     }
 
-    const evaluate = async (expression, arg) => {
-      const res = await send('Runtime.evaluate', { expression: arg === undefined ? expression : `(${expression})(${JSON.stringify(arg)})`,
-        returnByValue: true, awaitPromise: true });
-      if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description ?? 'evaluate failed');
-      return res.result.value;
-    };
-    const waitReady = async () => {
-      const until = Math.min(deadline, Date.now() + 15_000);
-      while (Date.now() < until) {
-        if (await evaluate('document.readyState').catch(() => null) === 'complete') return;
-        await sleep(100);
+    const evaluate = (expression, arg) => page.evaluate(arg === undefined ? expression : `(${expression})(${JSON.stringify(arg)})`);
+    // goto: lỗi kết nối (app chưa chạy, sai cổng) báo ngay; trang tải chậm quá 15 s thì vẫn đi tiếp như trước.
+    const navigate = async url => {
+      try { await page.goto(url, { waitUntil: 'load', timeout: left(15_000) }); }
+      catch (error) {
+        if (/net::ERR_(CONNECTION|NAME|ADDRESS|EMPTY_RESPONSE|UNSAFE_PORT)/.test(error.message)) fail('NAVIGATION_FAILED', firstLine(error));
+        if (error.name !== 'TimeoutError' && !/net::ERR_ABORTED|interrupted by another navigation/.test(error.message)) throw error;
       }
     };
+    const waitReady = () => page.waitForLoadState('load', { timeout: left(15_000) }).catch(() => null);
     // Trang yên khi 500 ms liền không còn request (bỏ long-poll đã chạy quá 15 s) và không còn chỉ báo loading hiện
     // trên màn hình. PXWV53VC BUG-01: ảnh dashboard chụp sau 400 ms còn toàn "—", reviewer bắt chụp lại.
     // Trả null khi yên, hoặc thứ còn đang chờ khi hết maxMs (vẫn chụp, kết quả ghi `unsettled`).
@@ -431,22 +359,75 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         await sleep(100);
       }
     };
-    const locate = async (q, waitMs = 5000) => {
+
+    // Tìm phần tử đang hiện theo selector, theo chữ hiển thị (hoặc aria-label), hoặc cả hai: chữ khớp đúng trước, chứa
+    // chữ sau; `index` chọn phần tử thứ n.
+    const candidatesFor = q => {
+      const t = String(q.text ?? '').trim();
+      const exact = new RegExp(`^\\s*${esc(t)}\\s*$`, 'i');
+      const aria = page.locator(`[aria-label="${cssString(t)}" i]`);
+      if (q.selector) {
+        const base = page.locator(q.selector);
+        return t ? [base.filter({ hasText: exact }), base.and(aria), base.filter({ hasText: t })] : [base];
+      }
+      return [page.getByText(exact), aria, page.getByText(t)];
+    };
+    const findNow = async q => {
+      for (const c of candidatesFor(q)) {
+        const visible = c.filter({ visible: true });
+        let n = 0;
+        try { n = await visible.count(); } catch (error) {
+          if (BAD_SELECTOR.test(error.message)) fail('INVALID_SELECTOR', `${q.selector} is not a valid selector: ${firstLine(error)}`);
+        }
+        if (n > (q.index | 0)) return visible.nth(q.index | 0);
+      }
+      return null;
+    };
+    const find = async (q, waitMs = 5000) => {
       const until = Math.min(deadline, Date.now() + waitMs);
       for (;;) {
-        const box = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; el.scrollIntoView({block:'center', inline:'center'});
-          const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName }; }`, q)
-          .catch(e => /not a valid selector/i.test(e.message) ? fail('INVALID_SELECTOR', `${q.selector} is not valid CSS`) : null);
-        if (box) return box;
+        const loc = await findNow(q);
+        if (loc) return loc;
         if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', q.selector ?? `text "${q.text}"`);
         await sleep(150);
       }
     };
-    // Click như người dùng: chỉ bấm khi điểm giữa phần tử ổn định và không bị phần tử khác che.
-    // Bị che (vd sidebar đè nội dung) → ELEMENT_OBSCURED, trừ khi force thì click bằng JS.
-    const click = async (q, { timeoutMs = 5000, force = false } = {}) => {
+    // Bị che (vd sidebar của BUG-01 đè tab Invoices ở mọi item khác): cho lớp che tạm pointer-events:none rồi bấm bằng
+    // chuột thật như thường (Radix Tabs/Select nhận đúng chuỗi pointer), trả lại style sau cú bấm. Bước ghi obscuredBy.
+    const clickThrough = async loc => {
+      const peel = await loc.evaluate(el => {
+        const label = n => n ? n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + ' "' + (n.innerText || n.getAttribute('aria-label') || '').trim().slice(0, 40) + '"' : 'nothing';
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        let by = null;
+        for (let n = 0; n < 6; n++) {
+          const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          if (hit && (el === hit || el.contains(hit))) return { ok: true, by };
+          by ??= label(hit);
+          if (!hit || hit.contains(el)) return { ok: false, by };
+          let cover = hit; while (cover.parentElement && !cover.parentElement.contains(el)) cover = cover.parentElement;
+          cover.setAttribute('data-mtm-pe', cover.style.pointerEvents || ''); cover.style.pointerEvents = 'none';
+        }
+        return { ok: false, by };
+      }).catch(() => ({ ok: false, by: null }));
+      try {
+        if (peel.ok) await loc.click({ force: true, timeout: left(2000) });
+        // Không gỡ được lớp che: đủ chuỗi sự kiện con trỏ bằng JS (Radix kích hoạt ở pointerdown/mousedown).
+        else await loc.evaluate(el => { const r = el.getBoundingClientRect();
+          const o = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, pointerType: 'mouse', isPrimary: true };
+          el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new MouseEvent('mousedown', o)); el.focus?.();
+          el.dispatchEvent(new PointerEvent('pointerup', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); el.dispatchEvent(new MouseEvent('click', o)); });
+      } finally {
+        await evaluate(`() => { for (const el of document.querySelectorAll('[data-mtm-pe]')) {
+          el.style.pointerEvents = el.getAttribute('data-mtm-pe'); el.removeAttribute('data-mtm-pe'); } }`).catch(() => null);
+      }
+      return { obscured: true, by: peel.by ?? 'another element', forced: true };
+    };
+    // Click như người dùng: Playwright chờ phần tử hiện, ổn định, bật và nhận được sự kiện. Lần đầu chờ tối đa 1,5 s;
+    // bị che thì bấm xuyên lớp che ngay, lý do khác (đang tắt, đang chạy animation) thì chờ hết timeoutMs.
+    const click = async (q, { timeoutMs = 5000 } = {}) => {
       const until = Math.min(deadline, Date.now() + timeoutMs);
-      let last = null;
+      const rest = () => Math.max(200, until - Date.now());
       if (q.selector && /role=["']?option/i.test(q.selector)) {
         const optCount = await evaluate(`() => document.querySelectorAll('[role=option]').length`).catch(() => 0);
         if (optCount === 0) {
@@ -457,61 +438,24 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           await sleep(250);
         }
       }
-      for (;;) {
-        const box = await locate(q, Math.max(500, until - Date.now()));
-        await sleep(120);
-        const probe = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; const r = el.getBoundingClientRect();
-          const x = r.left + r.width / 2, y = r.top + r.height / 2; const hit = document.elementFromPoint(x, y);
-          const label = n => n ? (n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + ' "' + (n.innerText || n.getAttribute('aria-label') || '').trim().slice(0, 40) + '"') : 'nothing';
-          return { x, y, covered: !hit || !(el === hit || el.contains(hit)), by: label(hit) }; }`, q).catch(() => null);
-        if (probe && !probe.covered && Math.abs(probe.x - box.x) < 2 && Math.abs(probe.y - box.y) < 2) {
-          for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
-            await send('Input.dispatchMouseEvent', { type, x: probe.x, y: probe.y, button: 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
-          }
-          return { obscured: false };
-        }
-        last = probe;
-        if (Date.now() >= until) break;
+      const loc = await find(q, rest());
+      const covered = error => /intercepts pointer events/.test(error.message);
+      let error;
+      try { await loc.click({ timeout: Math.min(rest(), 1500) }); return { obscured: false }; } catch (e) { error = e; }
+      if (!covered(error)) {
+        try { await loc.click({ timeout: rest() }); return { obscured: false }; } catch (e) { error = e; }
       }
-      if (last) {
-        // Cho lớp che (vd sidebar của BUG-01 đè tab Invoices ở mọi item khác) tạm pointer-events:none rồi bấm bằng
-        // chuột thật như thường: Radix Tabs/Select nhận đúng chuỗi pointer. Trả lại style sau cú bấm.
-        const through = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null;
-          for (let n = 0; n < 6; n++) {
-            const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
-            const hit = document.elementFromPoint(x, y);
-            if (hit && (el === hit || el.contains(hit))) return { x, y };
-            if (!hit || hit.contains(el)) return null;
-            let cover = hit; while (cover.parentElement && !cover.parentElement.contains(el)) cover = cover.parentElement;
-            cover.setAttribute('data-mtm-pe', cover.style.pointerEvents || ''); cover.style.pointerEvents = 'none';
-          }
-          return null; }`, q).catch(() => null);
-        if (through) {
-          for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
-            await send('Input.dispatchMouseEvent', { type, x: through.x, y: through.y, button: 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
-          }
-        }
-        await evaluate(`() => { for (const el of document.querySelectorAll('[data-mtm-pe]')) {
-          el.style.pointerEvents = el.getAttribute('data-mtm-pe'); el.removeAttribute('data-mtm-pe'); } }`).catch(() => null);
-        if (through) return { obscured: true, by: last.by, forced: true };
-        // Không gỡ được lớp che: đủ chuỗi sự kiện con trỏ bằng JS (Radix kích hoạt ở pointerdown/mousedown).
-        await evaluate(`(q) => { const el = (${FIND})(q); const r = el.getBoundingClientRect();
-          const o = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, pointerType: 'mouse', isPrimary: true };
-          el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new MouseEvent('mousedown', o)); el.focus?.();
-          el.dispatchEvent(new PointerEvent('pointerup', o)); el.dispatchEvent(new MouseEvent('mouseup', o)); el.dispatchEvent(new MouseEvent('click', o)); }`, q);
-        return { obscured: true, by: last.by, forced: true };
-      }
-      fail('ELEMENT_OBSCURED', `${q.selector ?? `text "${q.text}"`} is covered by ${last?.by ?? 'another element'} at its centre; ` +
-        'force:true clicks through the cover');
+      if (covered(error)) return clickThrough(loc);
+      if (error.name === 'TimeoutError') fail('ELEMENT_NOT_ACTIONABLE', `${describeQuery(q)} is on the page but cannot be clicked: ${waitingFor(error)}`);
+      throw error;
     };
-    // Gõ như người dùng: bấm vào ô, chọn hết, xoá, chèn text (input có kiểm soát của React nhận sự kiện input).
-    const fill = async (q, value, opts) => {
-      const r = await click(q, opts);
-      await evaluate(`(q) => { const el = (${FIND})(q); el.focus(); if (el.select) el.select(); }`, q);
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-      await send('Input.insertText', { text: String(value ?? '') });
-      return r;
+    // Gõ như người dùng: Playwright xoá ô rồi nhập (input có kiểm soát của React nhận sự kiện input).
+    const fill = async (q, value, { timeoutMs = 5000, force = false } = {}) => {
+      const loc = await find(q, timeoutMs);
+      try { await loc.fill(String(value ?? ''), { timeout: left(timeoutMs), force }); } catch (error) {
+        if (error.name === 'TimeoutError') fail('ELEMENT_NOT_ACTIONABLE', `${describeQuery(q)} cannot be filled: ${waitingFor(error)}`);
+        throw error;
+      }
     };
 
     let at = -1;
@@ -522,24 +466,20 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         const q = { selector: s.selector, text: s.text, index: s.index };
         switch (s.action) {
           case 'goto':
-            await send('Page.navigate', { url: s.url });
-            await waitReady();
+            await navigate(s.url);
             break;
           case 'click': {
-            const r = await click(q, { timeoutMs: s.timeoutMs, force: s.force });
+            const r = await click(q, { timeoutMs: s.timeoutMs });
             if (r.obscured) log.push({ step: i + 1, action: 'click', obscuredBy: r.by, forced: true });
             break;
           }
-          case 'fill': {
-            const r = await fill(q, s.value, { timeoutMs: s.timeoutMs, force: s.force });
-            if (r.obscured) log.push({ step: i + 1, action: 'fill', obscuredBy: r.by, forced: true });
+          case 'fill':
+            await fill(q, s.value, { timeoutMs: s.timeoutMs, force: s.force });
             break;
-          }
           case 'login': {
             // Tài khoản seed do helper tìm (applogin.mjs); giá trị không vào log, kết quả hay error.details.
             const account = accounts.get(i);
-            await send('Page.navigate', { url: s.url });
-            await waitReady();
+            await navigate(s.url);
             const formUntil = Math.min(deadline, Date.now() + 10_000);
             let form = null;
             while (!(form = await evaluate(`(${LOGIN_FORM})()`).catch(() => null))) {
@@ -555,9 +495,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             }
             await fill({ selector: '[data-mtm-login=user]' }, account.username, { force: true });
             await fill({ selector: '[data-mtm-login=password]' }, account.password, { force: true });
-            if (form.submit) await click({ selector: '[data-mtm-login=submit]' }, { force: true });
-            else await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
-              .then(() => send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }));
+            if (form.submit) await click({ selector: '[data-mtm-login=submit]' });
+            else await page.keyboard.press('Enter');
             const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 15_000));
             while (await evaluate(`[...document.querySelectorAll('input[type=password]')].some(el => el.getBoundingClientRect().width > 0)`).catch(() => true)) {
               if (Date.now() >= until) {
@@ -570,61 +509,64 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             log.push({ step: i + 1, action: 'login', account: account.sources });
             break;
           }
-          case 'press': {
+          case 'press':
             // Space + mũi tên: kéo-thả bằng bàn phím của @hello-pangea/dnd, dnd-kit (Space nhấc, mũi tên di, Space thả).
-            const key = s.key === ' ' || s.key === 'Space' ? ' ' : String(s.key ?? 'Enter');
-            const codes = { Enter: 13, Tab: 9, Escape: 27, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Backspace: 8, ' ': 32 };
-            const code = key === ' ' ? 'Space' : key;
-            for (const type of ['keyDown', 'keyUp']) {
-              await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: codes[key] ?? 0,
-                ...(type === 'keyDown' && key === 'Enter' ? { text: '\r' } : type === 'keyDown' && key === ' ' ? { text: ' ' } : {}) });
-            }
+            await page.keyboard.press(s.key === ' ' || s.key === 'Space' ? 'Space' : String(s.key ?? 'Enter'));
             break;
-          }
           case 'drag': {
             // Kéo bằng chuột thật (FMC0ZXFC BUG-04: không có step kéo-thả, TC-02 NOT_RUN). Nhấn ở giữa nguồn, nhích quá
             // ngưỡng bắt đầu kéo (5 px của @hello-pangea/dnd), đi từng bước tới mép trên (before) / dưới (after) / giữa đích.
-            const to = { selector: s.to.selector, text: s.to.text, index: s.to.index };
-            await locate(to, s.timeoutMs);
-            const from = await locate(q, s.timeoutMs);
-            const dst = await evaluate(`(q) => { const el = (${FIND})(q); if (!el) return null; const r = el.getBoundingClientRect();
-              return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, bottom: r.bottom }; }`, to);
-            if (!dst) fail('ELEMENT_NOT_FOUND', to.selector ?? `text "${to.text}"`);
-            const ty = s.position === 'before' ? dst.top + 4 : s.position === 'after' ? dst.bottom - 4 : dst.y;
-            const mouse = (type, x, y) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left',
-              buttons: type === 'mouseReleased' ? 0 : 1, clickCount: type === 'mouseMoved' ? 0 : 1 });
-            await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
-            await mouse('mousePressed', from.x, from.y);
+            const target = await find({ selector: s.to.selector, text: s.to.text, index: s.to.index }, s.timeoutMs);
+            const source = await find(q, s.timeoutMs);
+            await source.scrollIntoViewIfNeeded({ timeout: left(5000) });
+            const fb = await source.boundingBox(), tb = await target.boundingBox();
+            if (!fb) fail('ELEMENT_NOT_FOUND', describeQuery(q));
+            if (!tb) fail('ELEMENT_NOT_FOUND', describeQuery(s.to));
+            const from = { x: fb.x + fb.width / 2, y: fb.y + fb.height / 2 };
+            const dst = { x: tb.x + tb.width / 2, y: tb.y + tb.height / 2 };
+            const ty = s.position === 'before' ? tb.y + 4 : s.position === 'after' ? tb.y + tb.height - 4 : dst.y;
+            await page.mouse.move(from.x, from.y);
+            await page.mouse.down();
             await sleep(150);
-            await mouse('mouseMoved', from.x, from.y + (ty < from.y ? -10 : 10));
+            await page.mouse.move(from.x, from.y + (ty < from.y ? -10 : 10));
             await sleep(100);
             const moves = 20;
             for (let n = 1; n <= moves; n++) {
-              await mouse('mouseMoved', from.x + (dst.x - from.x) * n / moves, from.y + (ty - from.y) * n / moves);
+              await page.mouse.move(from.x + (dst.x - from.x) * n / moves, from.y + (ty - from.y) * n / moves);
               await sleep(25);
             }
             await sleep(250);
-            await mouse('mouseReleased', dst.x, ty);
+            await page.mouse.up();
             await sleep(Math.min(3000, s.settleMs ?? 500));
             log.push({ step: i + 1, action: 'drag', from: { x: Math.round(from.x), y: Math.round(from.y) }, to: { x: Math.round(dst.x), y: Math.round(ty) } });
             break;
           }
-          case 'select':
-            await locate(q, s.timeoutMs);
-            await evaluate(`(q) => { const el = (${FIND})(q); el.value = q.value; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }`, { ...q, value: s.value });
+          case 'select': {
+            const loc = await find(q, s.timeoutMs);
+            if (await loc.evaluate(el => el.tagName === 'SELECT')) await loc.selectOption(String(s.value), { timeout: left(5000) });
+            else await loc.evaluate((el, value) => { el.value = value; el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true })); }, String(s.value));
             break;
-          case 'waitFor':
-            if (s.selector && !s.state) { await locate(q, s.timeoutMs ?? 10_000); break; }
-            {
-              const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
-              const want = String(s.text ?? '').toLowerCase();
-              if (s.state && !['visible', 'hidden', 'enabled'].includes(s.state)) fail('INVALID_ARGUMENT', 'waitFor state is visible, hidden or enabled');
-              while (!(await evaluate(`(q) => { const el = (${FIND})(q); return q.state === 'hidden' ? !el : q.state === 'enabled' ? !!el && !el.disabled && el.getAttribute('aria-disabled') !== 'true' : q.selector ? !!el : !!document.body && document.body.innerText.toLowerCase().includes(q.want); }`, { ...q, want, state: s.state }).catch(() => false))) {
-                if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', `text "${s.text}"`);
-                await sleep(150);
+          }
+          case 'waitFor': {
+            if (s.state && !['visible', 'hidden', 'enabled'].includes(s.state)) fail('INVALID_ARGUMENT', 'waitFor state is visible, hidden or enabled');
+            const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
+            const want = String(s.text ?? '').toLowerCase();
+            const ready = async () => {
+              if (s.state === 'hidden') return !(await findNow(q));
+              if (s.state === 'enabled') {
+                const loc = await findNow(q);
+                return !!loc && await loc.isEnabled().catch(() => false) && await loc.getAttribute('aria-disabled').catch(() => null) !== 'true';
               }
+              if (q.selector || s.state === 'visible') return !!(await findNow(q));
+              return evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false);
+            };
+            while (!(await ready())) {
+              if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', s.selector ? describeQuery(q) : `text "${s.text}"`);
+              await sleep(150);
             }
             break;
+          }
           case 'wait':
             await sleep(Math.min(10_000, Math.max(0, s.ms | 0)));
             break;
@@ -649,15 +591,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             await sleep(Math.min(3000, s.settleMs ?? 400));
             // idle:false chụp ngay (bằng chứng trạng thái đang tải, vd sau route delayMs).
             const unsettled = s.idle === false ? null : await settle(6000);
-            let params = { format: 'png' };
-            if (s.fullPage) {
-              const m = await send('Page.getLayoutMetrics');
-              const size = m.cssContentSize ?? m.contentSize;
-              params = { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.min(15000, Math.ceil(size.height)), scale: 1 } };
-            }
-            const { data } = await send('Page.captureScreenshot', params);
+            const png = await page.screenshot({ fullPage: !!s.fullPage, timeout: left(15_000) });
             mkdirSync(dirname(s.path), { recursive: true });
-            writeFileSync(s.path, Buffer.from(data, 'base64'));
+            writeFileSync(s.path, png);
             const bytes = statSync(s.path).size;
             if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
             shots.push(saved(s.path, 'screenshot'));
@@ -666,36 +602,29 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             break;
           }
           case 'download': {
-            let guid = null, complete = false, cancelled = null;
-            // Listener được đăng ký trước click: cả URL download và Blob dùng cùng profile/cookie của trang.
-            const listener = msg => {
-              if (msg.method === 'Browser.downloadWillBegin' && !guid) {
-                guid = msg.params.guid;
-                const url = msg.params.url;
-                if (!(loopback(url) || (url.startsWith('blob:') && loopback(url.slice(5))))) cancelled = 'download URL must be loopback or a loopback Blob';
-              }
-              if (msg.method === 'Browser.downloadProgress' && msg.params.guid === guid) {
-                if (msg.params.receivedBytes > 5 * 1024 * 1024) cancelled = 'download exceeds 5 MB';
-                if (msg.params.state === 'canceled') cancelled = 'browser canceled download';
-                if (msg.params.state === 'completed') complete = true;
-              }
-            };
-            cdp.listeners.push(listener);
-            try {
-              await click(q, s);
-              const until = Math.min(deadline, Date.now() + Math.min(30_000, s.timeoutMs ?? 20_000));
-              while (!complete && !cancelled && Date.now() < until) await sleep(100);
-              if (cancelled) fail('DOWNLOAD_FAILED', cancelled);
-              if (!complete || !guid) fail('DOWNLOAD_TIMEOUT', 'download did not complete; verify selector and page state');
-              const bytes = readFileSync(join(downloadDir, guid));
-              if (bytes.length > 5 * 1024 * 1024) fail('DOWNLOAD_TOO_LARGE', 'download exceeds 5 MB');
-              mkdirSync(dirname(s.path), { recursive: true });
-              writeFileSync(s.path, bytes);
-              downloads.push(saved(s.path, 'download'));
-            } finally {
-              cdp.listeners = cdp.listeners.filter(l => l !== listener);
-              if (guid && !complete) await cdp.send('Browser.cancelDownload', { guid }).catch(() => null);
+            // Chờ download đăng ký trước click: cả URL download và Blob dùng cùng cookie của trang.
+            const started = page.waitForEvent('download', { timeout: left() }).then(d => ({ d }), e => ({ e }));
+            await click(q, { timeoutMs: s.timeoutMs });
+            const got = await Promise.race([started, sleep(Math.min(30_000, s.timeoutMs ?? 20_000)).then(() => null)]);
+            if (!got?.d) fail('DOWNLOAD_TIMEOUT', 'download did not complete; verify selector and page state');
+            const url = got.d.url();
+            if (!(loopback(url) || (url.startsWith('blob:') && loopback(url.slice(5))))) {
+              await got.d.cancel().catch(() => null);
+              fail('DOWNLOAD_FAILED', 'download URL must be loopback or a loopback Blob');
             }
+            const failure = await got.d.failure();
+            if (failure) fail('DOWNLOAD_FAILED', failure);
+            // Trình duyệt nối qua connect(): Playwright chỉ chuyển file bằng saveAs, không có path().
+            const tmp = join(teamWorkspace, 'team-sdlc-pack', 'local', 'downloads', randomUUID());
+            let bytes;
+            try {
+              await got.d.saveAs(tmp);
+              bytes = readFileSync(tmp);
+            } finally { rmSync(tmp, { force: true }); }
+            if (bytes.length > 5 * 1024 * 1024) fail('DOWNLOAD_TOO_LARGE', 'download exceeds 5 MB');
+            mkdirSync(dirname(s.path), { recursive: true });
+            writeFileSync(s.path, bytes);
+            downloads.push(saved(s.path, 'download'));
             break;
           }
           default:
@@ -703,64 +632,65 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         }
         if (!['assertText', 'login', 'drag', 'screenshot'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
-    } catch (error) {
+    } catch (caught) {
+      // Lỗi của Playwright (trang đóng, phím không tồn tại...) cũng tới agent như lỗi của bước, kèm trạng thái trang.
+      const error = caught instanceof HelperError ? caught
+        : new HelperError(caught?.name === 'TimeoutError' ? 'STEP_TIMEOUT' : 'BROWSER_STEP_FAILED', firstLine(caught));
       // Fail-safe snapshot: chụp ngay màn hình hiện tại cho các screenshot còn thiếu để không bị mất điểm oan
-      if (send) {
-        for (const s of steps.filter(s => s && s.action === 'screenshot')) {
-          if (s.path && !existsSync(s.path)) {
-            try {
-              const res = await send('Page.captureScreenshot', { format: 'png' }).catch(() => null);
-              if (res?.data) {
-                mkdirSync(dirname(s.path), { recursive: true });
-                writeFileSync(s.path, Buffer.from(res.data, 'base64'));
-                saved(s.path, 'screenshot');
-              }
-            } catch { /* fallback best effort */ }
-          }
+      for (const s of steps.filter(s => s && s.action === 'screenshot')) {
+        if (s.path && !existsSync(s.path)) {
+          try {
+            const png = await page.screenshot({ timeout: 5000 }).catch(() => null);
+            if (png) {
+              mkdirSync(dirname(s.path), { recursive: true });
+              writeFileSync(s.path, png);
+              saved(s.path, 'screenshot');
+            }
+          } catch { /* fallback best effort */ }
         }
       }
-      // Kèm trạng thái trang vào lỗi (callTool trả nó trong error.details).
-      if (error instanceof HelperError && at >= 0) {
+      if (at >= 0) {
         const step = steps[at];
         const state = await evaluate(PAGE_STATE, { selector: step.selector ?? null, text: step.text ?? null }).catch(() => null);
         const hint = failureHint(step, state, error.code);
-        const preGateFailed = provenance ? preGateNotice(provenance.teamWork, provenance.key) : null;
         error.details = { failedStep: at + 1, action: step.action, ...(state ?? {}), ...(hint ? { hint } : {}), stepsDone: log,
-          consoleErrors: consoleErrors.slice(0, 5), ...(preGateFailed ? { preGateFailed } : {}) };
+          consoleErrors: consoleErrors.slice(0, 5) };
       }
       throw error;
     }
-    const finalUrl = await evaluate('location.href').catch(() => null);
-    const title = await evaluate('document.title').catch(() => null);
+    const finalUrl = page.url();
+    const title = await page.title().catch(() => null);
     const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
-    const preGateFailed = provenance ? preGateNotice(provenance.teamWork, provenance.key) : null;
     return { screenshots: shots, downloads, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
-      ...(preGateFailed ? { preGateFailed } : {}),
       ...(rules.size ? { routed: routed.slice(0, 30),
         note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
   } finally {
-    // Đóng êm để trình duyệt ghi cookie ra profile: kill ngay thì browserProfile mất đăng nhập ở lần gọi sau
-    // (Practice #5: fixer goto /accounting bị đẩy về /login, tưởng tab Invoices không tồn tại).
-    if (cdp) await closeGracefully(cdp, child);
-    try { ws?.close(); } catch { /* bỏ qua */ }
-    kill(child);
-    if (!browserProfile) await removeLater(profileDir);
-    if (existsSync(downloadDir)) await removeLater(downloadDir);
+    // Lưu cookie cả khi bước lỗi (Practice #5: mất đăng nhập ở lần gọi sau thì fixer tưởng tab Invoices không tồn tại).
+    // Ghi file tạm rồi đổi tên: lần gọi song song cùng profile không đọc phải file dở.
+    if (stateFile && ctx) {
+      try {
+        mkdirSync(dirname(stateFile), { recursive: true });
+        const tmp = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
+        writeFileSync(tmp, JSON.stringify(await ctx.storageState()));
+        renameSync(tmp, stateFile);
+      } catch { /* trình duyệt đã đóng */ }
+    }
+    await Promise.race([instance.close().catch(() => null), sleep(2000)]);
+    await server.kill().catch(() => null);
   }
 }
 
 const basenamePath = path => path.split(/[\\/]/).pop();
 
-async function closeGracefully(cdp, child) {
-  if (child.exitCode !== null) return;
-  const exited = new Promise(ok => child.once('exit', ok));
-  await Promise.race([cdp.send('Browser.close').catch(() => null), sleep(2000)]);
-  await Promise.race([exited, sleep(3000)]);
-}
-
-// Tiến trình con của Edge còn giữ file vài trăm ms sau khi bị kill: dọn best-effort, không làm hỏng kết quả.
-async function removeLater(dir) {
-  for (let i = 0; i < 10; i++) {
-    try { rmSync(dir, { recursive: true, force: true }); return; } catch { await sleep(300); }
-  }
+// Dùng cho check-distribution: mở trình duyệt đã cài bằng playwright-core và đóng lại.
+export async function browserSmoke() {
+  const browser = findBrowser();
+  if (!browser) fail('BROWSER_NOT_FOUND', 'no Edge or Chrome installation found');
+  const { chromium } = await loadPlaywright();
+  const instance = await chromium.launch({ executablePath: browser, headless: true, timeout: 15_000 });
+  try {
+    const page = await instance.newPage();
+    await page.setContent('<p>ok</p>');
+    return { browser, version: instance.version(), text: await page.textContent('p') };
+  } finally { await instance.close().catch(() => null); }
 }

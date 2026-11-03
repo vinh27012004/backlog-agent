@@ -9,9 +9,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { HelperError, fail, writeFileAtomic } from './util.mjs';
 
-// Tool subagent gọi được qua proxy. Root vẫn tự kiểm từng lời gọi (Runtime.proxyCall): run_gate chỉ trên worktree và
-// chỉ từ file fix-result, worktree chỉ status. Tool Game Master, git publish và progress không bao giờ có ở đây.
-export const PROXY_TOOLS = new Set(['read_item', 'run_gate', 'job_status', 'worktree', 'worker_checkpoint']);
+// Tool subagent gọi được qua proxy. Root vẫn tự kiểm từng lời gọi (Runtime.proxyCall): worktree chỉ status. Tool Game
+// Master, git publish và progress không bao giờ có ở đây.
+export const PROXY_TOOLS = new Set(['read_item', 'job_status', 'worktree', 'worker_checkpoint']);
 const MAX_LINE = 1024 * 1024;
 
 export const endpointFile = teamWorkspace => join(teamWorkspace, 'team-sdlc-pack', 'local', 'runtime-endpoint.json');

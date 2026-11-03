@@ -6,6 +6,11 @@ rồi đối chiếu từng mục dưới đây với transcript (`~/.codex/sess
 có `agent_path`) và `<checkout>/.team-work/journal.json`. Ghi kết quả vào `practice-log.md` mục #8; mục nào đạt thì xoá
 khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục #7, "Đối chiếu checklist".
 
+> **03/11:** bỏ gate, `team_reviewer`, `team_pi_hypothesis`, `team_verifier` và verified mode. Mục nào về gate, main gate,
+> pre-gate, reviewer, solver hay checker giả thuyết không còn áp dụng; thay vào đó kiểm: mỗi item đúng một fixer (thêm
+> một worker evidence khi tier strong), fixer chạy cả bộ test trước evidence, `publish_item` nộp ngay sau bàn giao, và
+> `/judge-practice` có bao nhiêu item nộp sai mà trước đây reviewer/gate có thể bắt.
+
 ## Trước trận
 
 - [ ] Mở Player **0.9.39** ở `D:\mtm\MTM-PLAYER\0.9.39\mtm-player.exe`; không mở bản 0.9.35.

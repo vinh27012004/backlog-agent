@@ -1,23 +1,21 @@
 # 01 · Kiến trúc hiện hành
 
-Cập nhật 31/10/2026. Chi tiết API, cache và recovery: [13 · Workflow tối ưu](13-workflow-toi-uu.md).
+Cập nhật 03/11/2026. Chi tiết API và recovery: [13 · Workflow candidate](13-workflow-toi-uu.md).
 
 ## Thành phần
 MTM Player sở hữu một phiên Codex root. Subagent chỉ tạo bằng cơ chế native, không thêm coding-agent CLI.
-Helper Node.js dùng built-in, giữ credential/API/git/gate/journal/progress/jobs; codegraph là MCP riêng do installer cài.
+Helper Node.js dùng built-in, giữ credential/API/git/journal/progress/jobs; codegraph là MCP riêng do installer cài.
 
 ```text
 MTM Player -> team_orchestrator
-               |-> team_runtime: prepare -> preflight -> gate -> publish
+               |-> team_runtime: prepare -> publish
                |                 journal / events / progress / evidence manifest
-               |-> code item: team_fixer + team_reviewer, worktree riêng
-               |-> answer_only: team_fixer + team_pi_hypothesis giải độc lập
+               |-> mỗi item: một team_fixer, worktree riêng (tier strong: thêm worker evidence)
 ```
 
 Root giao việc, lookup Company Tools và thực hiện thao tác agent native. Helper trả nextActions có thứ tự.
-Worker sửa code/test/answer/evidence. Reviewer kiểm source, ý nghĩa MVS và nội dung ảnh/CSV/log;
-verifier tất định đã chuyển vào helper. Profile team_verifier còn để tương thích/điều tra được chỉ định,
-không thuộc pipeline mặc định. PI khó hoặc tranh chấp đáp án có thể thêm checker.
+Worker sửa code, chạy test, chụp evidence và ghi fix-result; helper nộp nguyên kết quả đó, kiểm answer/evidence chỉ
+ra cảnh báo. 03/11 bỏ team_reviewer, team_pi_hypothesis, team_verifier và gate cho đơn giản (bản cũ ở git).
 
 ## Quyết định thiết kế
 
@@ -26,26 +24,24 @@ không thuộc pipeline mặc định. PI khó hoặc tranh chấp đáp án có
 | D1 | Một phiên Codex do Player sở hữu, chỉ subagent native. |
 | D2 | Runtime/installer dùng Node.js built-in; không thêm npm dependency. |
 | D3 | Root mỏng, helper giữ logic tất định và trạng thái. |
-| D4 | Helper root là một writer, giữ credential. Proxy worker: read_item, run_gate, job_status, worktree status, worker_checkpoint. Company Tools do root lookup. |
+| D4 | Helper root là một writer, giữ credential. Proxy worker: read_item, job_status, worktree status, worker_checkpoint. Company Tools do root lookup. |
 | D5 | Frame qua configure_session, credential không vào brief/log/file. |
 | D6 | Worktree riêng, tích hợp tuần tự vào branch được giao, không force push. |
 | D7 | Submit intent lưu trước POST, replay cùng body/key/SHA; receipt có rồi không nộp lại. |
 | D8 | Progress một writer, schema và ngân sách byte; metrics/manifest nằm ngoài progress. |
-| D9 | Jev có fallback/cờ tắt, không vượt hard gate. Workflow quyết định reviewer mặc định. |
-| D10 | Worker + reviewer cho code; worker + solver cho answer_only. |
-| D11 | Publish đúng snapshot có gate; rebase do push rejection luôn dừng để gate/review nguồn mới. |
+| D9 | Jev có fallback/cờ tắt, chỉ quyết định triage và tier model; luật cứng ở code. |
+| D10 | Một worker mỗi item; kết quả bàn giao được nộp nguyên (03/11, trước đó worker + reviewer/solver). |
+| D11 | Publish đúng snapshot đã bàn giao; push bị từ chối thì rebase, sạch thì push tiếp. |
 | D12 | Giả định bị kill bất cứ lúc nào; journal/git/server là nguồn bền, thread/job RAM không còn sau restart. |
 | D13 | Workspace phải trust để Codex nạp config. |
 | D14 | Guardrail code, execpolicy, prompt và kiểm path/symlink cùng bảo vệ phạm vi trận. |
 
 ## Candidate và recovery
 Mỗi bàn giao là một file kết quả bất biến có version mới, tách khỏi số lần spawn.
-Preflight validate schema/claims/answer/evidence, trả toàn bộ repair.todo.
-Worker nhường quyền ghi trước sync/final evidence; gate và reviewer chạy song song khi candidate đủ điều kiện.
-Answer/evidence-only thường followup worker cũ; code thất bại/đổi giả thuyết/cần model mạnh hơn mới cân nhắc worker mới.
+publish_item validate schema của fix-result, kiểm answer/evidence (chỉ cảnh báo) rồi nộp.
+Worker nhường quyền ghi trước sync/final evidence.
 
-Code proof chỉ tái dùng khi source/test/dependency/config/môi trường còn khớp. Answer/evidence vẫn kiểm lại.
-publish_item có checkpoint verification/integrate/main gate/push/submit. Integration có kế hoạch bền và dấu
+publish_item có checkpoint verification/integrate/push/submit. Integration có kế hoạch bền và dấu
 cherry-pick để nhận ra commit đã tạo trước lúc mất checkpoint. Intent chưa rõ kết quả phải replay trước khi sửa candidate.
 
 Mục tiêu khoảng 10 thay vì 23 subagent áp dụng bộ đề W4T85TGM, không phải giới hạn cứng hay benchmark đã đạt.

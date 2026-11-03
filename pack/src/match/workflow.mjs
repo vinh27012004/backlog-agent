@@ -1,7 +1,8 @@
-// Điều phối tất định: chuẩn bị, preflight, bàn giao, checkpoint và publish có thể tiếp tục sau restart.
+// Điều phối tất định: chuẩn bị, bàn giao, checkpoint và publish có thể tiếp tục sau restart. Worker code, test và chụp
+// evidence; fix-result nó bàn giao được nộp nguyên như vậy, kiểm answer/evidence chỉ ra cảnh báo.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { answerAgreement, answerCheck, answerFields, requirementsCheck } from '../gate/gate.mjs';
+import { answerCheck, requirementsCheck } from './answers.mjs';
 import { digest, repairPlan, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
@@ -24,8 +25,8 @@ const textDigest = file => {
 };
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
 const typeOf = key => String(key).split('-')[0].toUpperCase();
-// Còn chừng này phút (theo hạn item hoặc hết trận) thì không sửa/review thêm: dừng worker, gate rồi nộp theo luật cơ hội
-// cuối (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
+// Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
+// (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
 // Đường dẫn skill theo loại item và stack-notes theo profile (java-maven → java), để brief ghi đúng file: từ khi brief
 // chỉ ghi "stack notes", fixer mở mục lục stack-notes/SKILL.md rồi mới tới <stack>.md (27/62 thread từ 01/11).
@@ -44,12 +45,12 @@ export class Workflow {
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
     return this.rt.journal.item(key);
   }
-  artifact(file, kind) { return resultArtifact(join(this.rt.session.paths.teamWork, 'results'), file, kind); }
-  nextResultFile(key, role = 'fixer') {
+  artifact(file) { return resultArtifact(join(this.rt.session.paths.teamWork, 'results'), file, 'fix-result'); }
+  nextResultFile(key) {
     const dir = join(this.rt.session.paths.teamWork, 'results');
-    const re = new RegExp(`^${key.replace(/\./g, '\\.')}-${role}-(\\d+)\\.json$`, 'i');
+    const re = new RegExp(`^${key.replace(/\./g, '\\.')}-fixer-(\\d+)\\.json$`, 'i');
     const versions = existsSync(dir) ? readdirSync(dir).map(f => Number(f.match(re)?.[1] ?? 0)) : [];
-    return join(dir, `${key}-${role}-${Math.max(0, ...versions) + 1}.json`);
+    return join(dir, `${key}-fixer-${Math.max(0, ...versions) + 1}.json`);
   }
   paths(key) {
     const r = this.rt;
@@ -107,32 +108,23 @@ export class Workflow {
           companyFactsDir: join(r.itemDir(key), 'company'), resultsDir: join(r.session.paths.teamWork, 'results'),
           knowledgeHints: ji.signals?.kb ?? null,
           fixResultFile: this.nextResultFile(key),
-          ...(started.independentAnswer ? { independentAnswer: { ...started.independentAnswer, resultsFile: this.nextResultFile(key, 'solver') } } : {}),
-          worker: 'team_fixer', checker: ji.verificationKind === 'answer_only' ? 'team_pi_hypothesis' : 'team_reviewer',
-          next: 'Spawn worker and the independent solver for answer_only; for code items open review only after preflight. No default verifier LLM.' };
+          worker: 'team_fixer', next: 'Spawn the worker. Its handed-off fix-result is submitted as is.' };
       }, { key });
       ji.prepareJobId = job.id;
       r.journal.save();
     }
     return r.settleJob(job.id, Math.min(45, Math.max(0, waitSeconds)) * 1000);
   }
-  checkpoint({ backlogItemKey: key, phase, threadId = null, abandonReview = false }) {
+  checkpoint({ backlogItemKey: key, phase, threadId = null }) {
     const ji = this.item(key);
     if (!['ready_for_evidence', 'candidate', 'resume'].includes(phase)) fail('INVALID_ARGUMENT', 'checkpoint phase');
     if (phase === 'resume') {
       if (this.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before resuming this worker');
-      // Reviewer đọc worktree trực tiếp: worker ghi tiếp thì review đang chạy không bind được nữa (PXWV53VC CR-01:
-      // resume khi review chưa handoff, review đầu mất vì CANDIDATE_STALE). Chờ result_handoff rồi mới mở ghi.
-      const c = ji.candidate;
-      if (c && !c.review && !['repair', 'stale'].includes(c.state) && ji.verificationKind !== 'answer_only') {
-        if (!abandonReview) fail('REVIEW_PENDING', `candidate ${c.id.slice(0, 12)} is under review: hand off the review with result_handoff first; its findings join the repair list. abandonReview:true only when that reviewer is gone`);
-        c.state = 'stale';
-      }
       ji.workerState = 'writing';
       ji.workStartedAt = Date.now();
       if (threadId) ji.workerThread = threadId;
-      // Lần mở ghi đầu cho candidate cần sửa evidence/answer: root đã chọn ai làm (worker evidence mới hay worker cũ).
-      if (ji.evidenceHandoff?.state === 'pending' && c?.state === 'repair' && c.repair?.keepImplementation) {
+      // Lần mở ghi đầu cho bàn giao chỉ có code: worker evidence đã nhận việc.
+      if (ji.evidenceHandoff?.state === 'pending' && ji.candidate?.state === 'repair') {
         ji.evidenceHandoff = { ...ji.evidenceHandoff, state: 'done', thread: threadId ?? ji.workerThread ?? null };
       }
     } else {
@@ -165,21 +157,18 @@ export class Workflow {
     if (synced.setupJobId) return { ...yielded, synced, hint: 'Dependencies changed: stay yielded and message root once; root resumes you after setup.' };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
-      // Test của worker chạy trong lúc nó chụp evidence (pre-gate), cùng khoá cache với gate của candidate sau.
-      const preGateJobId = Array.isArray(args.testsAdded) ? r.startPreGate(key, { testsAdded: args.testsAdded,
-        needsDependency: args.needsDependency, allowTestChange: args.testChange ?? null }) : null;
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
-        ...(preGateJobId ? { preGateJobId } : {}),
-        hint: `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${preGateJobId
-          ? ' Your tests and the fail-before check run meanwhile; a capture result with preGateFailed means stop, fix the code, then ready_for_evidence again.' : ''}` };
+        hint: 'Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.' };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and message root once.` };
     }
   }
-  async preflight({ backlogItemKey: key, fixResultFile, reviewFile = null }) {
+  // Ghi candidate từ fix-result vừa bàn giao. Kiểm answer, evidence và yêu cầu chỉ thành cảnh báo; chỉ bàn giao chỉ có
+  // code (evidenceHandoff) mới chờ worker evidence.
+  async preflight({ backlogItemKey: key, fixResultFile }) {
     const since = Date.now(), r = this.rt, ji = this.item(key);
-    if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must checkpoint candidate before preflight');
-    const artifact = this.artifact(fixResultFile, 'fix-result');
+    if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must checkpoint candidate before publish');
+    const artifact = this.artifact(fixResultFile);
     if (ji.submitIntent && !ji.receipt && ji.candidate?.fixResultHash !== artifact.hash) fail('SUBMISSION_PENDING', 'replay the pending submission before changing candidate');
     if (!new RegExp(`^${key.replace(/\./g, '\\.')}-fixer-\\d+\\.json$`, 'i').test(basename(fixResultFile))) fail('PATH_NOT_ALLOWED', 'fix-result must belong to this item');
     ji.artifacts ??= {};
@@ -201,8 +190,7 @@ export class Workflow {
     for (const req of r.itemRequirements(key)) if (artifact.value.requirements.filter(x => x.id === req.id).length !== 1) answer.problems.push(`${req.id}: fix-result must address this requirement exactly once`);
     ji.verificationKind ??= r.answerOnlyItem(key) && !Array.isArray(template?.testResults) ? 'answer_only' : r.itemMvs(key) ? 'mvs' : 'acceptance';
     if (Array.isArray(template?.testResults) && template.testResults.length) ji.requiredScenarios = new Set(template.testResults.map(x => x.id)).size;
-    const status = submitted.status;
-    const req = requirementsCheck(r.itemRequirements(key), artifact.value.requirements, status);
+    const req = requirementsCheck(r.itemRequirements(key), artifact.value.requirements, submitted.status);
     // Chỉ miễn chụp lại khi sync mang về test/tài liệu không chạy trong app. File runtime của item khác vẫn có thể
     // đổi layout hoặc dữ liệu trên màn hình; không suy ra độc lập chỉ từ quyền sở hữu file.
     const unchangedForItem = async entry => {
@@ -219,114 +207,49 @@ export class Workflow {
       return moved.every(p => nonRuntime(p) && fromMain.includes(p) && !own.includes(p));
     };
     const evidence = await evidenceProblems(r.session.paths.teamWork, key, paths.matchRoot, snapshot, { unchangedForItem });
-    const review = reviewFile ? this.artifact(reviewFile, 'review').value : old?.review?.value;
-    const gate = old?.id === id && old.gateJobId ? r.jobs.jobs.get(old.gateJobId)?.result : null;
-    const repair = repairPlan({ fixer: artifact.value, answerProblems: [...answer.problems, ...req.problems], evidenceProblems: evidence, gate, review });
-    const blocked = answer.problems.length || req.problems.length || evidence.length || artifact.value.status !== 'fixed'
-      || (gate && !gate.passed) || (old?.id === id && review?.verdict === 'request_changes')
-      || artifact.value.requirements.some(x => x.status === 'not_met')
-      || (Array.isArray(submitted.testResults) && submitted.testResults.some(x => !/^pass(ed)?$/i.test(x.result ?? '')));
-    const priorApproval = old?.review?.value.verdict === 'approve' && old.review.scope === 'full' && equal(old.snapshot, snapshot) ? old.review : old?.codeReview;
-    const codeReview = priorApproval && equal(priorApproval.snapshot, snapshot) ? priorApproval : null;
+    const repair = repairPlan({ fixer: artifact.value, answerProblems: [...answer.problems, ...req.problems], evidenceProblems: evidence });
+    // Chỉ chờ khi worker tier strong mới bàn giao code (partial) để worker evidence chụp; còn lại nộp như đã có.
+    const blocked = ji.evidenceHandoff?.state === 'pending' && artifact.value.status !== 'fixed';
     const candidate = old?.id === id ? old : { id, fixResultFile, fixResultHash: artifact.hash, snapshot, answerTree,
-      createdAt: new Date().toISOString(), state: 'preflight', codeReview,
-      solver: equal(old?.snapshot, snapshot) ? old?.solver : null };
+      createdAt: new Date().toISOString() };
     candidate.repair = repair;
-    candidate.state = blocked ? 'repair' : candidate.review ? 'reviewed' : 'ready';
-    candidate.reviewScope = codeReview ? 'evidence_answer' : 'full';
+    candidate.state = blocked ? 'repair' : 'ready';
     ji.candidate = candidate;
     ji.artifacts[basename(fixResultFile)] = artifact.hash;
     ji.workerState = 'yielded';
-    // Chỉ còn sửa evidence/answer: kiểm code (test, fail-before) chạy trong lúc sửa, gate của bản sau chỉ còn build.
-    const fr = artifact.value;
-    const preGateJobId = blocked && repair.keepImplementation && ji.verificationKind !== 'answer_only'
-      ? r.startPreGate(key, { testsAdded: fr.tests_added, needsDependency: fr.needs_dependency.length > 0, allowTestChange: fr.test_change ?? null }) : null;
-    // Worker đã bàn giao và ngừng ghi: reviewer nhận graph của source cuối cùng.
-    const codegraph = !blocked && !codeReview ? await r.refreshCodegraph(key, paths.matchRoot) : null;
     this.metric(key, 'handoff', since, { candidateId: id });
-    return { candidateId: id, ready: !blocked, verificationKind: ji.verificationKind ?? 'acceptance', repair,
-      nextFixResultFile: this.nextResultFile(key), ...(preGateJobId ? { preGateJobId } : {}),
-      reviewScope: candidate.reviewScope, priorReviewFile: codeReview?.file ?? null, codegraph,
-      warnings: [...answer.warnings, ...req.warnings],
-      next: blocked ? 'Repair the whole todo list before full review. Answer/evidence repair uses followup_task on the worker; then a new numbered result and preflight.'
-        : ji.verificationKind === 'answer_only' ? 'Run the gate; validate independent solver through result_handoff. No default reviewer/verifier.'
-          : 'Run gate and independent reviewer in parallel; reviewer checks MVS meaning and evidence content.' };
-  }
-  gateComplete(key, result, jobId) {
-    const c = this.item(key).candidate;
-    if (!c || result.where !== 'worktree') return;
-    c.gateJobId = jobId;
-    c.repair = repairPlan({ fixer: this.artifact(c.fixResultFile, 'fix-result').value, gate: result,
-      answerProblems: c.repair.todo.filter(t => t.source === 'answer').map(t => t.action),
-      evidenceProblems: c.repair.todo.filter(t => t.source === 'evidence').map(t => t.action), review: c.review?.value });
-    c.state = !result.passed || c.review?.value.verdict === 'request_changes' ? 'repair' : c.review ? 'reviewed' : 'ready';
-  }
-  async handoff({ backlogItemKey: key, kind, resultFile, candidateId, purpose = 'solver' }) {
-    const ji = this.item(key), c = ji.candidate;
-    if (!c || candidateId !== c.id) fail('CANDIDATE_STALE', 'result must name the current candidateId');
-    if (kind === 'fix-result') return this.preflight({ backlogItemKey: key, fixResultFile: resultFile });
-    if (!['review', 'hypothesis'].includes(kind)) fail('INVALID_ARGUMENT', 'result kind');
-    const artifact = this.artifact(resultFile, kind);
-    ji.artifacts ??= {};
-    if (ji.artifacts[basename(resultFile)] && ji.artifacts[basename(resultFile)] !== artifact.hash) fail('RESULT_MUTATED', 'write a new numbered result');
-    if (!equal(await this.snapshot(key), c.snapshot)) fail('CANDIDATE_STALE', 'source/environment changed during review');
-    if (kind === 'review') {
-      if (!new RegExp(`^${key.replace(/\./g, '\\.')}-reviewer-\\d+\\.json$`, 'i').test(basename(resultFile))) fail('PATH_NOT_ALLOWED', 'review result must belong to this item');
-      const binding = ji.reviewBindings?.[basename(resultFile)];
-      if (binding && binding !== c.id) fail('RESULT_ALREADY_BOUND', 'review belongs to another candidate; request a new numbered delta review');
-      for (const req of this.rt.itemRequirements(key)) if (artifact.value.requirements.filter(x => x.id === req.id).length !== 1) fail('RESULT_INVALID', `$.requirements: review must address ${req.id} exactly once`);
-      ji.reviewBindings = { ...(ji.reviewBindings ?? {}), [basename(resultFile)]: c.id };
-      c.review = { file: resultFile, hash: artifact.hash, value: artifact.value, snapshot: c.snapshot, scope: c.reviewScope };
-      c.repair = repairPlan({ fixer: this.artifact(c.fixResultFile, 'fix-result').value,
-        answerProblems: c.repair.todo.filter(t => t.source === 'answer').map(t => t.action),
-        evidenceProblems: c.repair.todo.filter(t => t.source === 'evidence').map(t => t.action),
-        gate: c.gateJobId ? this.rt.jobs.jobs.get(c.gateJobId)?.result : null, review: artifact.value });
-      c.state = artifact.value.verdict === 'approve' ? 'reviewed' : 'repair';
-    } else {
-      const role = purpose === 'arbitration' ? 'arbitration' : purpose === 'hypothesis' ? 'pi_hypothesis' : 'solver';
-      if (!new RegExp(`^${key.replace(/\./g, '\\.')}-${role}-\\d+\\.json$`, 'i').test(basename(resultFile))) fail('PATH_NOT_ALLOWED', 'hypothesis result path does not match item and purpose');
-      if (purpose === 'hypothesis') c.hypotheses = [...(c.hypotheses ?? []), { file: resultFile, hash: artifact.hash }];
-      else c[purpose === 'arbitration' ? 'arbitration' : 'solver'] = { file: resultFile, hash: artifact.hash };
-    }
-    ji.artifacts[basename(resultFile)] = artifact.hash;
-    this.rt.journal.save();
-    return { candidateId: c.id, kind, accepted: true, state: c.state, repair: c.repair };
-  }
-  answerProof(key, matchRoot, { allowUnverified = false } = {}) {
-    const c = this.item(key).candidate;
-    if (!c?.solver) { if (allowUnverified) return { supported: false, solverFile: null }; fail('ANSWER_UNVERIFIED', 'validate the independent solver with result_handoff first'); }
-    const s = this.artifact(c.solver.file, 'hypothesis');
-    if (s.hash !== c.solver.hash) fail('RESULT_MUTATED', 'solver changed after handoff');
-    const fields = answerFields(this.rt.itemTemplate(key));
-    const covers = fields.length > 0 && fields.every(f => s.value.answer_values.filter(v => v.field === f).length === 1);
-    if (!covers && !allowUnverified) fail('ANSWER_UNVERIFIED', 'solver must cover each answer field exactly once');
-    const answer = JSON.parse(readFileSync(join(matchRoot, 'answers', key, 'submit.json'), 'utf8'));
-    const agreement = answerAgreement(answer, s.value.answer_values, fields);
-    if (agreement?.state !== 'agree') {
-      const arbitration = c.arbitration && this.artifact(c.arbitration.file, 'hypothesis');
-      if (!arbitration || arbitration.hash !== c.arbitration.hash || arbitration.value.verdict !== 'refuted' || !arbitration.value.evidence.length) {
-        if (allowUnverified) return { supported: false, solverFile: c.solver.file };
-        fail('ANSWER_DISPUTED', 'independent answer differs; validate a checker refutation with result_handoff purpose=arbitration, or change the answer and preflight again');
-      }
-    }
-    return { supported: covers && s.value.verdict === 'supported' && s.value.evidence.length > 0, solverFile: c.solver.file, fields, derivation: s.value.evidence };
+    return { candidateId: id, ready: !blocked, verificationKind: ji.verificationKind ?? 'acceptance',
+      warnings: [...answer.problems, ...req.problems, ...evidence, ...answer.warnings, ...req.warnings] };
   }
   async assertCandidate(key, { main = false } = {}) {
     const c = this.item(key).candidate;
-    if (!c) fail('CANDIDATE_REQUIRED', 'run candidate_preflight first');
-    const a = this.artifact(c.fixResultFile, 'fix-result');
+    if (!c) fail('CANDIDATE_REQUIRED', 'publish_item with the handed-off fixResultFile first');
+    const a = this.artifact(c.fixResultFile);
     if (a.hash !== c.fixResultHash) fail('RESULT_MUTATED', 'fix-result changed after handoff');
     const p = main ? this.rt.session.paths : this.paths(key);
     const tree = await contentTree(p.worktreeRoot ?? p.checkoutRoot, this.rt.session.descriptor.matchId);
-    if (!main && (tree !== c.answerTree || !equal(await this.snapshot(key), c.snapshot))) fail('CANDIDATE_STALE', 'candidate changed; checkpoint and preflight the new version');
+    if (!main && (tree !== c.answerTree || !equal(await this.snapshot(key), c.snapshot))) fail('CANDIDATE_STALE', 'candidate changed; the worker writes and hands off the next numbered result');
     return c;
   }
-  async publish({ backlogItemKey: key, candidateId, message = 'work', lastChance = null, waitSeconds = 0 }) {
+  async publish({ backlogItemKey: key, candidateId, fixResultFile = null, message = 'work', lastChance = null, waitSeconds = 0 }) {
     const r = this.rt, ji = this.item(key);
     if (ji.receipt) return { state: 'done', result: { status: 'SUBMITTED', receiptId: ji.receipt.id, replay: true } };
     let job = r.jobs.jobs.get(ji.publishJobId);
     if (job?.state === 'running') return r.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
     if (this.publishOwner) fail('PUBLISH_BUSY', `publish ${this.publishOwner} first`);
+    // Root đưa fix-result vừa bàn giao, helper ghi candidate rồi nộp trong cùng lời gọi. Bàn giao chỉ có code thì dừng
+    // ở đây: next_actions đưa spawn_evidence_worker.
+    let warnings = [];
+    if (fixResultFile && !candidateId) {
+      const same = ji.candidate?.fixResultFile === fixResultFile && ji.candidate.state !== 'stale';
+      const pre = same ? { candidateId: ji.candidate.id, ready: ji.candidate.state !== 'repair', warnings: [] } : await this.preflight({ backlogItemKey: key, fixResultFile });
+      if (!pre.ready && !lastChance) {
+        return { state: 'evidence_pending', candidateId: pre.candidateId, warnings: pre.warnings,
+          next: 'Code-only handoff recorded: do spawn_evidence_worker from next_actions; publish its result.' };
+      }
+      candidateId = pre.candidateId;
+      warnings = pre.warnings;
+    }
     if (candidateId !== ji.candidate?.id) fail('CANDIDATE_STALE', 'publish requires current candidateId');
     this.publishOwner = key;
     job = r.jobs.start('publish_item', async job => {
@@ -337,58 +260,41 @@ export class Workflow {
           step('submit'); return await r.submitWork({ backlogItemKey: key, gitRevision: ji.publishedRevision, lastChance });
         }
         const c = await this.assertCandidate(key);
-        if (c.state === 'repair' && !lastChance) fail('PREFLIGHT_REQUIRED', 'candidate still has repair tasks');
-        if (ji.verificationKind !== 'answer_only') {
-          if (!c.review || c.review.value.verdict !== 'approve') {
-            if (!lastChance) fail('REVIEW_REQUIRED', 'independent review must approve this candidate');
-          }
-          if (c.review && this.artifact(c.review.file, 'review').hash !== c.review.hash) fail('RESULT_MUTATED', 'review changed after handoff');
-        }
-        if (!c.gateJobId) fail('GATE_REQUIRED', 'run_gate with this candidate fixResultFile first');
-        step('verification');
-        const verification = r.recordVerification({ backlogItemKey: key, gateJobId: c.gateJobId, lastChance: Boolean(lastChance) });
-        if (verification.status !== 'PASSED' && !lastChance) fail('VERIFICATION_REQUIRED', verification.hint ?? 'verification has not passed');
+        if (c.state === 'repair' && !lastChance) fail('EVIDENCE_PENDING', 'code-only handoff: spawn_evidence_worker from next_actions captures the evidence first');
+        step('verification'); r.recordVerification(key);
         if (!ji.integratedRevision || ji.integratedCandidateId !== c.id) {
-          // Main đổi ở file khác thì integrate luôn, main_gate test cây đã gộp; chỉ khi cả hai cùng sửa một file mới
-          // phải sync và làm lại evidence (NBDB5U0O: CR-01, CR-02, BUG-04 chụp lại toàn bộ sau BUG-01, mỗi item ~15 phút).
+          // Main đổi ở file khác thì integrate luôn; chỉ khi cả hai cùng sửa một file mới phải sync và làm lại evidence
+          // (NBDB5U0O: CR-01, CR-02, BUG-04 chụp lại toàn bộ sau BUG-01, mỗi item ~15 phút).
           const base = ji.integratedRevision ?? ji.worktreeBase, head = await revParse(r.session.paths.checkoutRoot);
           if (!ji.integratePlan && head !== base) {
             const others = new Set(await this.changedPaths(base, head));
             const shared = (await this.changedPaths(base, c.snapshot.source)).filter(p => others.has(p));
-            if (shared.length) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and preflight before integrate`);
+            if (shared.length) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and hand off a new result before integrate`);
           }
           step('integrate'); await r.worktree({ action: 'integrate', backlogItemKey: key, message });
           ji.integratedCandidateId = c.id; r.journal.save();
         }
-        // Main phải chứa đúng nội dung đã review ở mọi file của item; file khác là thay đổi của item khác. Item chỉ sửa
+        // Main phải chứa đúng nội dung đã bàn giao ở mọi file của item; file khác là thay đổi của item khác. Item chỉ sửa
         // answers/ (answer_only) không có file source nào để so: answer được so riêng bên dưới (4D895OVI: TASK-03 đã
         // integrate lên main rồi vẫn dừng ở đây vì main có BUG-03, trễ hạn 8 giây).
         const mainSource = (await this.snapshot(key, r.session.paths)).source;
         if (mainSource !== c.snapshot.source) {
           const own = await this.changedPaths(ji.worktreeBase, c.snapshot.source);
-          if (own.length && (await this.changedPaths(c.snapshot.source, mainSource, own)).length) fail('CANDIDATE_STALE', 'main source differs from reviewed candidate in this item\'s files; sync, refresh evidence and review a new candidate');
+          if (own.length && (await this.changedPaths(c.snapshot.source, mainSource, own)).length) fail('CANDIDATE_STALE', 'main source differs from the handed-off candidate in this item\'s files; sync, refresh evidence and hand off a new result');
         }
-        step('main_gate');
-        try { await r.requireGate(key, r.session.paths.checkoutRoot); }
-        catch (e) {
-          if (!['GATE_REQUIRED', 'GATE_STALE'].includes(e.code)) throw e;
-          const pending = await r.runGate({ backlogItemKey: key, where: 'main', waitSeconds: 0 });
-          await r.jobs.jobs.get(pending.jobId).promise;
-          await r.requireGate(key, r.session.paths.checkoutRoot);
-        }
-        // Answer được integrate phải giữ nguyên nội dung reviewer đã kiểm. So sau khi bỏ CRLF: với core.autocrlf=true,
+        // Answer được integrate phải giữ nguyên nội dung đã bàn giao. So sau khi bỏ CRLF: với core.autocrlf=true,
         // cherry-pick viết submit.json ra main bằng CRLF dù blob nộp vẫn là LF (PXWV53VC: TASK-01, TASK-02 kẹt ở đây).
         const answer = join(r.session.paths.matchRoot, 'answers', key, 'submit.json');
         const wtAnswer = join(r.wtPaths(key).matchRoot, 'answers', key, 'submit.json');
         const aDigest = textDigest(answer), wtDigest = textDigest(wtAnswer);
-        if (existsSync(wtAnswer) && aDigest && wtDigest && aDigest !== wtDigest) fail('CANDIDATE_STALE', 'integrated answer differs from reviewed candidate');
+        if (existsSync(wtAnswer) && aDigest && wtDigest && aDigest !== wtDigest) fail('CANDIDATE_STALE', 'integrated answer differs from the handed-off candidate');
         step('push');
         const pushed = await r.commitAndPush({ backlogItemKey: key, message });
         ji.publishedCandidateId = c.id; r.journal.save();
         step('submit');
         const receipt = await r.submitWork({ backlogItemKey: key, gitRevision: pushed.revision, lastChance });
         if (receipt.status === 'SUBMITTED') step('done');
-        return receipt;
+        return warnings.length ? { ...receipt, warnings } : receipt;
       } finally { this.publishOwner = null; this.metric(key, 'publish', since); }
     }, { key });
     ji.publishJobId = job.id;
@@ -402,9 +308,12 @@ export class Workflow {
     const order = r.matchState().suggestedOrder;
     const nextActions = [];
     const add = (key, action, args = {}, extra = {}) => nextActions.push({ key, action, arguments: { backlogItemKey: key, ...args }, ...extra });
+    const fresh = r.newResults();
+    const freshKeys = new Set(fresh.map(u => u.key));
     let free = r.freeSlots(rows);
     const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
-    const lastCallOf = (row, ji) => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
+    const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
+    const lastChanceReason = row => `${Math.floor(row.minutesLeft)} min left: final evidence not captured; unverified scenarios stay FAIL/NOT_RUN`;
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
@@ -415,64 +324,34 @@ export class Workflow {
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy }); continue; }
-      if (ji.startedAt && lastCallOf(row, ji)) {
-        // Cuối giờ: worker bàn giao ngay, gate rồi nộp; review/sửa thêm không kịp. Gate không qua build + regression thì
-        // không có gì nộp được (luật cơ hội cuối không bao giờ che build/regression hỏng).
+      if (ji.startedAt && lastCallOf(row)) {
+        // Cuối giờ: worker bàn giao ngay rồi nộp những gì đang có.
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };
         if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
         if (c && c.state !== 'stale') {
-          if (ji.verificationKind === 'answer_only') {
-            add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: `${Math.floor(row.minutesLeft)} min left: deadline approaching, submitting answer immediately` } }, extra);
-            continue;
-          }
-          const gate = c.gateJobId ? r.jobs.jobs.get(c.gateJobId) : null;
-          if (!gate) { add(key, 'run_gate', { fixResultFile: c.fixResultFile }, extra); continue; }
-          if (gate.state === 'running') continue;
-          if (ji.lastGate?.jobId !== c.gateJobId || !ji.lastGate.tree) continue;
-          const verified = gate.result?.passed && c.review?.value.verdict === 'approve';
-          add(key, 'publish_item', { candidateId: c.id, ...(verified ? {} : { lastChance: { reason:
-            `${Math.floor(row.minutesLeft)} min left: no time for another repair or review; unverified scenarios stay FAIL/NOT_RUN` } }) }, extra);
+          if (!freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id, ...(c.state === 'repair' ? { lastChance: { reason: lastChanceReason(row) } } : {}) }, extra);
           continue;
         }
       }
       if (ji.prepared && !ji.workerThread && !c) { add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId }); continue; }
-      // Pre-gate hỏng khi worker còn đang ghi (thường là đang chụp evidence): báo worker sửa code ngay, một lần mỗi jobId.
-      if (ji.preGate?.state === 'failed' && ji.workerState === 'writing') {
-        add(key, 'pre_gate_failed', {}, { preGateJobId: ji.preGate.jobId, failKind: ji.preGate.failKind, detail: ji.preGate.detail, workerThread: ji.workerThread ?? null });
-        continue;
-      }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
       if (c?.state === 'repair') {
-        const attempts = (ji.gateHistory ?? []).filter(h => h.where === 'worktree').length;
-        if (attempts >= 2 && ji.lastGate?.tree && c.repair?.keepImplementation) {
-          // Code đã pass build và test, nhưng thử chụp evidence 2 lần vẫn kẹt: nộp ngay theo luật cơ hội cuối thay vì lặp vô tận làm nghẽn toàn bộ các task khác.
-          add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: `Evidence repair attempt limit reached (${attempts} attempts); code and regression verified, submitting available evidence under last-chance rule` } });
-          continue;
-        }
+        // Worker evidence đang ghi, hay đã có fix-result mới (vòng bên dưới đưa publish_item).
+        if (ji.workerState === 'writing' || freshKeys.has(key) || ji.evidenceHandoff?.state !== 'pending') continue;
         // Worker tier strong đã bàn giao code + test: evidence do worker model nhanh làm tiếp (prepare: evidenceHandoff).
-        const handoff = ji.evidenceHandoff?.state === 'pending' && c.repair?.keepImplementation ? ji.evidenceHandoff : null;
-        add(key, handoff ? 'spawn_evidence_worker' : 'repair_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair,
-          nextFixResultFile: this.nextResultFile(key),
-          ...(handoff ? { model: handoff.model, reasoning_effort: handoff.reasoning_effort, priorFixResultFile: c.fixResultFile } : {}) });
+        const h = ji.evidenceHandoff;
+        add(key, 'spawn_evidence_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair,
+          nextFixResultFile: this.nextResultFile(key), model: h.model, reasoning_effort: h.reasoning_effort, priorFixResultFile: c.fixResultFile });
         continue;
       }
-      if (c && (!c.gateJobId || !r.jobs.jobs.has(c.gateJobId))) add(key, 'run_gate', { fixResultFile: c.fixResultFile });
-      if (c && ji.verificationKind !== 'answer_only' && !c.review && c.state !== 'repair') add(key, 'review_candidate', {}, { candidateId: c.id, scope: c.reviewScope });
-      if (c && ji.verificationKind === 'answer_only' && !c.solver) add(key, 'collect_solver', {}, { candidateId: c.id });
-      const gate = c?.gateJobId ? r.jobs.jobs.get(c.gateJobId) : null;
-      if (c && gate?.result?.passed) {
-        if (ji.verificationKind !== 'answer_only' && c.review?.value.verdict === 'approve') add(key, 'publish_item', { candidateId: c.id });
-        else if (ji.verificationKind === 'answer_only' && c.solver) {
-          try { const proof = this.answerProof(key, this.paths(key).matchRoot); add(key, proof.supported ? 'publish_item' : 'resolve_answer', { candidateId: c.id }); }
-          catch (e) { add(key, 'resolve_answer', { candidateId: c.id }, { code: e.code, hint: e.detail }); }
-        }
-      }
+      if (c && !freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id });
     }
-    for (const u of r.ungatedResults()) {
-      if (items[u.key]?.candidate && items[u.key].candidate.fixResultFile === u.fixResultFile) continue;
-      const row = rows.find(x => x.key === u.key);
-      add(u.key, 'candidate_preflight', { fixResultFile: u.fixResultFile }, lastCallOf(row, items[u.key]) ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
+    for (const u of fresh) {
+      const row = rows.find(x => x.key === u.key), last = lastCallOf(row);
+      const pending = items[u.key]?.evidenceHandoff?.state === 'pending';
+      add(u.key, 'publish_item', { fixResultFile: u.fixResultFile, ...(pending && last ? { lastChance: { reason: lastChanceReason(row) } } : {}) },
+        last ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
     }
     // Ưu tiên tuyệt đối cho PI để đua điểm thời gian; ưu tiên answer_only và task cận deadline kế tiếp.
     const isPI = a => typeOf(a.key) === 'PI';
@@ -480,13 +359,11 @@ export class Workflow {
     const urgency = a => {
       if (isPI(a)) {
         if (a.action === 'submit_work' || a.action === 'publish_item') return -3000;
-        if (a.action === 'run_gate' || a.action === 'candidate_preflight') return -2500;
         if (a.action === 'prepare_item' || a.action === 'spawn_worker') return -2000;
         return -1500;
       }
       if (isAnswer(a)) {
         if (a.action === 'submit_work' || a.action === 'publish_item') return -1400;
-        if (a.action === 'run_gate' || a.action === 'candidate_preflight') return -1200;
         if (a.action === 'prepare_item' || a.action === 'spawn_worker') return -1000;
         return -800;
       }

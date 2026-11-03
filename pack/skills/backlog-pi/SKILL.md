@@ -59,7 +59,7 @@ Check the item description, `<materials>`, and `template.json`:
    - Include all log snapshots and the derivation script in `evidenceFiles`.
    - Validate against `challenge/<ID>-submit.schema.json`.
 5. **Checkpoint & Publish**:
-   - Checkpoint candidate immediately. Gate passes answer validation; publish and submit!
+   - Checkpoint candidate and hand off immediately: root publishes it as is.
 
 ---
 
@@ -79,12 +79,12 @@ Check the item description, `<materials>`, and `template.json`:
    - Run `test_one`: reproduction test now PASSES.
    - Run related tests of the touched module to confirm zero regressions.
 5. **Checkpoint & Publish**:
-   - Record reproduction before/after in `verification`, checkpoint candidate, run gate, and publish!
+   - Record reproduction before/after in `verification`, checkpoint candidate and hand off: root publishes it at once, nothing re-checks it.
 
 ---
 
 ## Anti-Patterns to Avoid
 - **Mental Math Trap**: Parsing 50+ lines of raw JSON in agent context leads to skipped records, hallucinated IDs, and failure of exact grader checks. Always use a deterministic script.
 - **Form Confusion**: Attempting to compile and run tests for an Answer-Only incident wastes 5–10 minutes and can cause the Game Master to close the item before submission.
-- **Premature Guessing**: Changing code before writing a failing reproduction test causes gate failure with `not_reproduced`.
+- **Premature Guessing**: Changing code before writing a failing reproduction test leaves the fix unproven; nothing after your handoff catches it.
 - **Subsequent Release Confusion**: Never attribute root cause to a later monitoring or metric release that merely detected the problem.

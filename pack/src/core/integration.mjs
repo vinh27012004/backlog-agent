@@ -1,5 +1,5 @@
 // Kế hoạch tích hợp bền: nhận diện cherry-pick đã commit nhưng chưa kịp lưu checkpoint.
-import { changedFiles } from '../gate/gate.mjs';
+import { changedFiles } from '../match/answers.mjs';
 import { git, revParse } from './git.mjs';
 import { fail, oneLine } from './util.mjs';
 
@@ -10,7 +10,6 @@ export async function integrateCandidate(rt, key, message) {
   const files = await changedFiles(wt.worktreeRoot, 'HEAD');
   const outside = files.filter(f => !f.path.startsWith(`${folder}/`));
   if (outside.length) fail('PATH_NOT_ALLOWED', outside.map(f => f.path).join(', '));
-  await rt.requireGate(key, wt.worktreeRoot);
   if (ji.integratePlan && files.length) fail('INTEGRATION_PENDING', 'finish the frozen integration before changing the candidate');
   if (files.length) {
     await git(['add', '--', folder], { cwd: wt.worktreeRoot });
@@ -56,8 +55,7 @@ export async function integrateCandidate(rt, key, message) {
   }
   const headRevision = await revParse(checkoutRoot), count = plan.commits.length, mainBefore = plan.mainBefore;
   ji.integratedRevision = headRevision; ji.integratedWorktreeHead = head; delete ji.integratePlan;
-  const { fixedNow, sync } = rt.recordBaselineFix(key); j.save();
+  j.save();
   return { integrated: true, headRevision, commits: count, baseChanged: mainBefore !== ji.worktreeBase,
-    ...(fixedNow.length ? { baselineFixed: fixedNow, syncWorktrees: sync } : {}),
-    hint: `${mainBefore !== ji.worktreeBase ? 'Main moved: run_gate where=main before push. ' : ''}Run commit_and_push or resume publish_item.${sync.length ? ` Sync yielded worktrees ${sync.join(', ')} after publishing the baseline fix.` : ''}` };
+    hint: 'Run commit_and_push or resume publish_item.' };
 }

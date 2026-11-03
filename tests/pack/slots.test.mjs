@@ -58,40 +58,39 @@ test('root tool results carry the notice; match_state, proxied calls and errors 
   assert.deepEqual(root.structuredContent.notice.newItems, ['TASK-01']);
   assert.equal(JSON.parse(root.content[0].text).state, 'done');
   assert.equal((await callTool(rt, tool('match_state'), {}, {})).structuredContent.notice, undefined);
-  assert.equal((await callTool(rt, tool('run_gate'), {}, {}, { activity: false })).structuredContent.notice, undefined);
+  assert.equal((await callTool(rt, tool('read_item'), {}, {}, { activity: false })).structuredContent.notice, undefined);
   rt.itemNotice = () => { throw new Error('boom'); };
   assert.equal((await callTool(rt, tool('job_status'), {}, {})).isError, false, 'a broken notice never breaks the tool');
 });
 
-// 803P85ZA: cr01_fix2 ghi CR-01-fixer-2.json lúc root đang submit item khác; root không spawn verifier, CR-01 không nộp.
-test('the newest fix-result with no gate after it is reported once as FIX_RESULT and in every notice', async () => {
+// 803P85ZA: cr01_fix2 ghi CR-01-fixer-2.json lúc root đang submit item khác; CR-01 không nộp.
+test('the newest fix-result not yet a candidate is reported once as FIX_RESULT and in every notice', async () => {
   const rt = runtime([row('CR-01', 'started'), row('BUG-01', 'started'), row('TASK-02', 'started'), row('BUG-02', 'submitted')]);
-  const teamWork = tempDir('mtm-ungated-');
+  const teamWork = tempDir('mtm-results-');
   rt.session.paths = { teamWork };
   rt.session.descriptor = { matchId: 'M1' };
   const results = join(teamWork, 'results');
   mkdirSync(results);
-  for (const f of ['CR-01-fixer-1.json', 'CR-01-fixer-2.json', 'CR-01-verifier-1.json', 'BUG-01-fixer-1.json', 'TASK-02-fixer-1.json', 'BUG-02-fixer-1.json']) {
+  for (const f of ['CR-01-fixer-1.json', 'CR-01-fixer-2.json', 'BUG-01-fixer-1.json', 'TASK-02-fixer-1.json', 'BUG-02-fixer-1.json']) {
     writeFileSync(join(results, f), '{}');
   }
-  const later = new Date(Date.now() + 60_000).toISOString();
   rt.journalObj = { data: { items: {
-    'CR-01': { startedAt: 'x', proxiedGates: { 'CR-01-fixer-1.json': 'job-9-run_gate' } },
-    'BUG-01': { startedAt: 'x', proxiedGates: { 'BUG-01-fixer-1.json': 'job-3-run_gate' } },
-    'TASK-02': { startedAt: 'x', jobs: [{ id: 'job-5-run_gate', kind: 'run_gate', startedAt: later }] },   // root gated it itself
+    'CR-01': { startedAt: 'x', candidate: { fixResultFile: join(results, 'CR-01-fixer-1.json') } },
+    'BUG-01': { startedAt: 'x', candidate: { fixResultFile: join(results, 'BUG-01-fixer-1.json') } },
+    'TASK-02': { startedAt: 'x', candidate: { fixResultFile: join(results, 'TASK-02-fixer-1.json') } },
     'BUG-02': { startedAt: 'x', endedAt: 'y' } } } };
   const fileOf = key => join(results, `${key}-fixer-2.json`);
-  assert.deepEqual(rt.ungatedResults(), [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
+  assert.deepEqual(rt.newResults(), [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
   const notice = rt.itemNotice();
-  assert.deepEqual(notice.ungated, [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
+  assert.deepEqual(notice.newResults, [{ key: 'CR-01', fixResultFile: fileOf('CR-01') }]);
   assert.equal(notice.newItems, undefined, 'no item waiting to start');
   const tool = { name: 'submit_work', handler: () => ({ status: 'SUBMITTED' }) };
-  assert.deepEqual((await callTool(rt, tool, {}, {})).structuredContent.notice.ungated.map(r => r.key), ['CR-01']);
-  rt.warnUngated();
-  rt.warnUngated();
+  assert.deepEqual((await callTool(rt, tool, {}, {})).structuredContent.notice.newResults.map(r => r.key), ['CR-01']);
+  rt.warnNewResults();
+  rt.warnNewResults();
   assert.deepEqual(rt.events.since(0).filter(e => e.type === 'FIX_RESULT').map(e => e.key), ['CR-01']);
-  rt.journalObj.data.items['CR-01'].proxiedGates['CR-01-fixer-2.json'] = 'job-12-run_gate';
-  assert.deepEqual(rt.ungatedResults(), []);
+  rt.journalObj.data.items['CR-01'].candidate = { fixResultFile: fileOf('CR-01') };
+  assert.deepEqual(rt.newResults(), []);
   assert.equal(rt.itemNotice(), null);
 });
 

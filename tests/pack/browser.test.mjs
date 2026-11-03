@@ -1,12 +1,12 @@
-// capture_evidence: Edge headless qua CDP trên một app giả ở localhost (đăng nhập → form → chụp).
+// capture_evidence: Edge headless qua Playwright trên một app giả ở localhost (đăng nhập → form → chụp).
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
 import { captureEvidence, evidencePath, findBrowser } from '../../pack/src/env/browser.mjs';
-import { install, McpClient, sh, tempDir } from './support.mjs';
+import { ensurePlaywright, install, McpClient, sh, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
 
@@ -21,7 +21,7 @@ f.addEventListener('submit', async e => { e.preventDefault();
   if (r.ok) location.href = '/dashboard'; else document.body.insertAdjacentHTML('beforeend', '<p>Invalid</p>'); });
 </script>`);
 const DASHBOARD = page('<h1>Dashboard</h1><a href="/invoices/new">New invoice</a>');
-// Lớp phủ che nút (giống sidebar đè nội dung): click thường phải báo ELEMENT_OBSCURED.
+// Lớp phủ che nút (giống sidebar đè nội dung): click bấm xuyên lớp che và bước ghi obscuredBy.
 const COVERED = page(`<button id="hidden" style="position:absolute;left:20px;top:20px">Save</button>
 <nav style="position:fixed;left:0;top:0;width:300px;height:100%;background:#222;color:#fff">Sidebar</nav><div id="out"></div>
 <script>hidden.addEventListener('mousedown', () => out.textContent = 'saved');</script>`);
@@ -60,6 +60,7 @@ function app() {
 }
 
 const browser = findBrowser();
+if (browser) ensurePlaywright();
 
 test('download preserves authenticated HTTP/Blob bytes and reports a download timeout', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-download-'), 'BUN'), bytes = Buffer.from('\ufeffname,value\r\n"Saigon,\nLtd",2\r\n');
@@ -116,15 +117,16 @@ test('capture_evidence logs in, fills a form and saves a screenshot', { skip: !b
   }
 });
 
-test('capture_evidence reports covered elements and can force the click', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+// 428c517 (02/11): bị che thì luôn bấm xuyên, không đợi force (sidebar của BUG-01 đè tab của mọi item khác).
+test('capture_evidence clicks through a covering element and reports the cover', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
   const { server, url } = await app();
   try {
-    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [
-      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save', timeoutMs: 800 }] }), /ELEMENT_OBSCURED.*Sidebar/);
+    const t0 = Date.now();
     const res = await captureEvidence({ teamWorkspace: tw, steps: [
-      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save', timeoutMs: 800, force: true }, { action: 'assertText', text: 'saved' }] });
+      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save' }, { action: 'assertText', text: 'saved' }] });
     assert.match(res.steps.find(s => s.forced).obscuredBy, /Sidebar/);
+    assert.ok(Date.now() - t0 < 8000, 'a covered click does not wait the full timeout');
   } finally {
     server.close();
   }
@@ -154,15 +156,19 @@ test('capture_evidence force clicks through a cover with real input; selector an
   }
 });
 
-test('capture_evidence rejects Playwright selectors and reports the page on a failed step', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+// Practice #5 (BC3JL6ZC): fixer viết selector Playwright; từ 03/11 engine là Playwright nên cú pháp đó chạy được.
+test('capture_evidence accepts Playwright selectors and reports the page on a failed step', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
-  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "[role=tab]:has-text('Invoices')" }] }),
-    e => e.code === 'INVALID_SELECTOR' && /selector, text/.test(e.message));
-  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "button >> nth=0" }] }), /INVALID_SELECTOR/);
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: 'http://127.0.0.1:1/' }, { action: 'click' }] }),
+    e => e.code === 'INVALID_ARGUMENT' && /needs a selector or a text/.test(e.message));
   const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
+    const ok = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'click', selector: "[role=tab]:has-text('Invoices')" }, { action: 'waitFor', selector: 'text=New invoice', timeoutMs: 2000 },
+      { action: 'click', selector: 'button >> nth=0' }] });
+    assert.match(ok.visibleText, /New invoice/);
     const t0 = Date.now();
     await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'click', selector: 'button[' }] }),
       e => e.code === 'INVALID_SELECTOR' && e.details.failedStep === 2);
@@ -225,11 +231,37 @@ test('capture_evidence browserProfile keeps the login cookie across calls', { sk
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
     await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/login` }] });
-    const res = await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] });
-    assert.match(res.visibleText, /Accounting/);
+    assert.ok(existsSync(join(tw, 'team-sdlc-pack', 'local', 'browser', 'solova-admin.json')));
+    // CR-01 ở 3OCNFC54 chụp bốn kịch bản song song: cùng profile không khoá nhau.
+    const all = await Promise.all([1, 2, 3].map(() =>
+      captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] })));
+    for (const res of all) assert.match(res.visibleText, /Accounting/);
+    const fresh = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `${url}/accounting` }] });
+    assert.match(fresh.visibleText, /Please sign in/);
   } finally {
     server.close();
   }
+});
+
+test('a visible element that never becomes clickable reports why; a closed port fails at goto', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page('<button disabled>Record payment</button>')); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `http://127.0.0.1:${server.address().port}/` },
+      { action: 'click', text: 'Record payment', timeoutMs: 800 }] }), e => {
+      assert.equal(e.code, 'ELEMENT_NOT_ACTIONABLE');
+      assert.match(e.message, /not enabled/);
+      assert.equal(e.details.failedStep, 2);
+      return true;
+    });
+  } finally { server.close(); }
+  const closed = createServer();
+  await new Promise(r => closed.listen(0, '127.0.0.1', r));
+  const port = closed.address().port;
+  await new Promise(r => closed.close(r));
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `http://127.0.0.1:${port}/` }] }),
+    e => e.code === 'NAVIGATION_FAILED' && /ERR_CONNECTION_REFUSED/.test(e.message) && e.details.failedStep === 1);
 });
 
 // Thư mục trận giả có app node với seed đọc ADMIN_* (mặc định admin/secret, như prisma/seed.ts của Solova).

@@ -1,5 +1,5 @@
-// Yêu cầu của cả đề (HIET12OA, ZVUYZ41V) và company facts lưu ra file (TOKXKPBV L54): fixer, reviewer và người chấm
-// sau trận đọc được cùng một nguồn.
+// Yêu cầu của cả đề (HIET12OA, ZVUYZ41V) và company facts lưu ra file (TOKXKPBV L54): fixer và người chấm sau trận đọc
+// được cùng một nguồn.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,31 +30,6 @@ test('item requirements come from the page description', () => {
   writeFileSync(join(teamWork, 'items', 'CR-01', 'page.json'), JSON.stringify({ descriptionMd:
     '## Acceptance criteria\n1. The file conforms to Solova\'s invoice export standard.\n2. `pnpm test` and `pnpm typecheck` pass.\n' }));
   assert.deepEqual(rt.itemRequirements('CR-01').map(r => r.id), ['AC-1', 'AC-2']);
-});
-
-test('answer-only item: record_verification refuses an answer the independent solver disputes until it is checked', () => {
-  const { rt, teamWork } = runtime();
-  const matchRoot = rt.session.paths.matchRoot;
-  const item = join(teamWork, 'items', 'TASK-01');
-  mkdirSync(item, { recursive: true });
-  writeFileSync(join(item, 'template.json'), JSON.stringify({ schemaVersion: 1, backlogId: 'TASK-01', status: 'NOT_STARTED', evidenceFiles: [], position: '' }));
-  mkdirSync(join(matchRoot, 'answers', 'TASK-01'), { recursive: true });
-  writeFileSync(join(matchRoot, 'answers', 'TASK-01', 'submit.json'), JSON.stringify({ schemaVersion: 1, backlogId: 'TASK-01', status: 'DONE', evidenceFiles: [], position: '98304' }));
-  assert.equal(rt.solverAgreement('TASK-01', matchRoot), null, 'no solver yet: nothing to compare');
-  const results = join(teamWork, 'results');
-  mkdirSync(results, { recursive: true });
-  const solver = n => writeFileSync(join(results, `TASK-01-solver-${n}.json`), JSON.stringify({ hypothesis: 'independent answer', verdict: 'supported',
-    evidence: [], fix_location: null, next_check: null, answer_values: [{ field: 'position', value: n === 1 ? '131072' : '98304' }] }));
-  solver(1);
-  const disputed = rt.solverAgreement('TASK-01', matchRoot);
-  assert.equal(disputed.state, 'disagree');
-  assert.match(disputed.solverFile, /TASK-01-solver-1\.json$/);
-  rt.jobs.jobs.set('job-1', { kind: 'run_gate', key: 'TASK-01', state: 'done', result: { where: 'main', passed: true } });
-  assert.throws(() => rt.recordVerification({ backlogItemKey: 'TASK-01', gateJobId: 'job-1' }), /ANSWER_DISPUTED.*position "98304" vs "131072"/);
-  // Checker đã bác giá trị của solver: ghi được (đếm theo submit.json không có testResults, gate main pass).
-  assert.equal(rt.recordVerification({ backlogItemKey: 'TASK-01', gateJobId: 'job-1', disputeChecked: true }).status, 'RUNNING');
-  solver(2);
-  assert.equal(rt.solverAgreement('TASK-01', matchRoot).state, 'agree', 'the latest solver run counts');
 });
 
 test('company_call with backlogItemKey saves each result next to the item materials', async () => {

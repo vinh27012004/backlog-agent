@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const argv = process.argv.slice(2);
 const tw = resolve(argv[argv.indexOf('--team-workspace') + 1] ?? '.');
@@ -46,6 +47,13 @@ try {
   check('codegraph', version === want.version && declared,
     !res ? 'not installed: rerun install without --no-codegraph' : `${version ?? 'no version'}${declared ? '' : ', missing from .codex/config.toml'}`);
 } catch (error) { check('codegraph', false, error.message); }
+// capture_evidence (05 §5.24): playwright-core đúng phiên bản mở được Edge/Chrome đã cài. Edge tự cập nhật lên bản mà
+// playwright-core đã ghim chưa điều khiển được thì báo ở đây, trước trận.
+try {
+  const { browserSmoke } = await import(pathToFileURL(join(runtime, 'src', 'env', 'browser.mjs')).href);
+  const res = await browserSmoke();
+  check('playwright', res.text === 'ok', `${res.browser} ${res.version}`);
+} catch (error) { check('playwright', false, `${error.code ?? ''} ${error.message}`.trim()); }
 const major = Number(process.versions.node.split('.')[0]);
 check('node >= 20', major >= 20, process.versions.node);
 

@@ -25,7 +25,7 @@ Codex nên **chỉ dùng lúc phát triển**, không bao giờ nằm trong pack
 | `http.mjs` | Redirect sang origin lạ bị chặn; cookie jar; giới hạn kích thước; header `Date` → skew; `networkActivity` không có query |
 | `match-page.mjs` | Parse fixture HTML/JSON thật (sau Spike S2); trang lệch định danh; không thấy Match UUID |
 | `git.mjs` | Push không có `--force`; ref đích đúng; path commit ngoài `<folder>/` bị chặn; xác minh `ls-remote` |
-| `gate.mjs`, `profile.mjs`, `log-condenser.mjs` | Port case từ `tests/test_gate.py` và phần profile/logs trong `tests/test_agents.py`. Bản đã dựng: `gate.test.mjs`, `logs.test.mjs`, `testreport.test.mjs` (định dạng JSON thật của vitest 3.2, JUnit pytest/maven), `gate-runs.test.mjs` (runner giả ghi JSON kiểu vitest, repo git tạm, probe thật: test flaky, test biến mất, `weak_test`, fail-before) |
+| `answers.mjs`, `testreport.mjs` | `answers.test.mjs` (submit.json theo schema/template, evidence MVS và evidence mô tả đòi, yêu cầu của đề), `testreport.test.mjs` (định dạng JSON thật của vitest 3.2, JUnit pytest/maven). Gate và các test của nó (`gate.test.mjs`, `gate-runs.test.mjs`, `logs.test.mjs`) bỏ 03/11 |
 | `scheduler.mjs` | PI trước; slack của deadline; bỏ item không kịp; ngưỡng cuối trận |
 | `redact.mjs` | Secret không bao giờ xuất hiện trong kết quả tool, lỗi, log |
 
@@ -74,7 +74,7 @@ Kịch bản bắt buộc pass:
 5. `ALREADY_SUBMITTED` không có journal → `COMPLETED` + summary, không ghi `SUBMITTED`.
 6. Cookie hết hạn giữa trận → đăng nhập lại tự động.
 7. Item đóng khi đang làm → `FAILED`; không nộp.
-8. Gate fail → retry với `failKind` → pass.
+8. Fixer bàn giao → `publish_item` nộp nguyên kết quả (gate bỏ 03/11).
 9. Trận 40 phút với poll 15 s và ~15 item → log < 230 KB.
 10. Ghi log thất bại tạm thời (file bị khoá) → hàng đợi → ghi đúng thứ tự.
 

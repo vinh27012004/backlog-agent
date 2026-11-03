@@ -40,7 +40,7 @@ Do not introduce a new framework, library or architectural layer unless the task
   has UI tests.
 
 ## 4. Test data isolation & hygiene
-To prevent flaky failures and broken regression (`test_all` gate failure):
+To prevent flaky failures and broken regression (`test_all` failure):
 - Never overwrite or hardcode IDs of shared seed data. Use isolated identifiers (e.g. `test_task_<ID>_...`).
 - Always clean up created records or wrap DB tests in transactional rollbacks/teardown.
 

@@ -31,7 +31,7 @@ export function readState(teamWorkspace, key) {
 
 // Bản build production gần nhất của một thư mục app: snapshot source/môi trường lúc build và dấu của thư mục build
 // (.next/BUILD_ID của Next.js). Start lại cùng snapshot thì chỉ start (NBDB5U0O: BUG-02 build hai lần đúng một source,
-// ~35 s mỗi lần); gate cùng snapshot coi bước build đã pass (tools.mjs, runGate). Ai build thư mục đó (app, gate) thì ghi.
+// ~35 s mỗi lần). App build thư mục đó thì ghi.
 const buildsDir = teamWorkspace => join(teamWorkspace, 'team-sdlc-pack', 'local', 'builds');
 const buildFile = (teamWorkspace, root) => join(buildsDir(teamWorkspace),
   `${digest(process.platform === 'win32' ? resolve(root).toLowerCase() : resolve(root)).slice(0, 24)}.json`);

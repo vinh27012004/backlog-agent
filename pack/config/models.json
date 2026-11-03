@@ -22,9 +22,6 @@
     }
   ],
   "roles": {
-    "reviewer": "strong",
-    "piHypothesis": "strong",
-    "verifier": "small",
     "evidence": "small"
   }
 }
