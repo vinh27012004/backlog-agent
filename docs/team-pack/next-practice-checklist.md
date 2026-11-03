@@ -20,9 +20,14 @@ khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục 
 > - [ ] Không item nào đổi `vitest.config.*` hay file setup test (`git diff <seed> -- '*config*'` trên commit nộp).
 > - [ ] Root: số lần `next_actions` và `job_status` (J56ZZWSS: 32 và 12 trên 105 lượt).
 > - [ ] Số ảnh có `unsettled` và số lần chụp lại cùng kịch bản (J56ZZWSS: 9/27 ảnh unsettled).
-> - [ ] BUG-01 TC-01 (dev): class Tailwind mới có ra trong CSS của `pnpm dev` chạy ở worktree không. J56ZZWSS: build
->       production có `.md:ms-sidebar`, bản dev trong `.team-work/wt/BUG-01` thì không (kể cả `@source inline`), worker
->       mất ~10 phút rồi chuyển sang rule CSS thường. Chưa rõ nguyên nhân.
+> - [ ] UI fix cần bản dev dùng class logical có breakpoint (`md:ms-*`, `md:ps-*`, `md:start-*`): fixer dùng rule CSS
+>       thường hoặc class vật lý ngay, không gỡ lỗi Tailwind. J56ZZWSS: build production có `.md:ms-sidebar`, bản dev
+>       thì không (kể cả `@source inline`), worker mất ~10 phút rồi chuyển sang rule CSS thường.
+>       Nguyên nhân (kiểm chứng 03/11, tái hiện ở cả checkout chính, không do worktree): Tailwind v4 sinh
+>       `.md\:ms-x { @media (...) { margin-inline-start } }`; `next dev --turbo` đưa CSS qua Lightning CSS 1.32 với
+>       browserslist mặc định của Next (Chrome 64, Safari 12), nó hạ thuộc tính logical thành `margin-left` + `:lang()`
+>       và với `@media` lồng trong rule thì bỏ mất khai báo, còn lại `@media { }` rỗng. `md:ml-*` và rule thường
+>       `@media (...) { .x { margin-inline-start } }` không bị. `next build` (webpack) không qua bước này.
 
 ## Trước trận
 
