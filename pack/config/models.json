@@ -20,8 +20,5 @@
       "model": "gpt-6-astra",
       "effort": "high"
     }
-  ],
-  "roles": {
-    "evidence": "small"
-  }
+  ]
 }

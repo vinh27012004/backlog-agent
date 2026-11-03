@@ -64,8 +64,7 @@ test('immutable handoffs: a handed-off result never changes and later edits make
 test('preflight only reports missing evidence/scenarios/requirements and forbids sync during worker writes', async () => {
   const f = fixture(); f.rt.itemEvidence = () => [{ file: 'export.csv', beforeFix: false }];
   const p = await f.preflight(f.result(1, fix({ status: 'partial', requirements: [{ id: 'AC-1', status: 'not_met', evidence: 'Need final screenshot' }], verification: [{ check: 'TC-1', command: null, result: 'not_run', note: 'Download CSV' }] })));
-  assert.equal(p.ready, true, 'nothing blocks the publish'); assert.ok(p.warnings.some(w => w.includes('export.csv')));
-  for (const id of ['AC-1', 'TC-1']) assert.ok(f.ji.candidate.repair.todo.some(t => t.id === id));
+  assert.equal(f.ji.candidate.state, 'ready', 'nothing blocks the publish'); assert.ok(p.warnings.some(w => w.includes('export.csv')));
   assert.deepEqual(f.rt.workflow.actions().nextActions.map(a => a.action), ['publish_item']);
   f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: 'native-1' }); await assert.rejects(f.rt.worktree({ action: 'sync', backlogItemKey: f.key }), /WORKER_BUSY/);
   f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'ready_for_evidence' }); assert.equal((await f.rt.worktree({ action: 'sync', backlogItemKey: f.key })).synced, false);
@@ -82,8 +81,7 @@ test('preflight distinguishes required scenario outcomes from diagnostic failure
     { check: 'TC-1', command: null, result: 'pass', note: 'observed' },
     { check: 'diagnostic-before', command: null, result: 'fail', note: 'observed on original code; not a required MVS scenario' }
   ] }));
-  const p = await f.preflight(file); assert.equal(p.ready, true);
-  assert.ok(f.ji.candidate.repair.todo.some(t => t.id === 'diagnostic-before'), 'retain the observation');
+  const p = await f.preflight(file); assert.equal(f.ji.candidate.id, p.candidateId); assert.equal(f.ji.candidate.state, 'ready');
 });
 
 test('publish replays an identical intent after restart/lost response without duplicate receipt', async () => {
@@ -120,7 +118,7 @@ test('source index refresh uses the yielded worktree after sync', async () => {
   const synced = await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
   assert.equal(synced.synced, true);
   assert.equal(synced.codegraph.freshness, 'unknown', 'optional index failure must not break sync');
-  assert.equal((await f.preflight(f.result(1))).ready, true);
+  assert.ok((await f.preflight(f.result(1))).candidateId);
   assert.deepEqual(calls, [{ key: f.key, matchRoot: f.wt.matchRoot, workerState: 'yielded' }]);
 });
 
@@ -186,12 +184,9 @@ test('a slot is held only while an item still needs its worker, so a new item st
   Object.assign(f.rt.journal.item('CR-02'), { checkpoint: 'resume', candidate: undefined });
   f.rt.journal.item('BUG-04').candidate.state = 'stale';
   assert.equal(f.rt.freeSlots(), 0); assert.deepEqual(prepares(), []);
-  // Bàn giao chỉ có code chờ worker evidence: nhả slot.
-  f.rt.journal.item('BUG-04').candidate.state = 'repair';
-  assert.equal(f.rt.freeSlots(), 1);
 });
 
-test('in the last minutes the worker is stopped and the candidate published first, under the last-chance rule when evidence is missing', async () => {
+test('in the last minutes the worker is stopped and the candidate published first', async () => {
   const f = fixture(), file = f.result(1); await f.preflight(file);
   const rows = minutesLeft => [{ key: f.key, type: 'BUG', status: 'OPEN', local: 'started', minutesLeft },
     { key: 'CR-09', type: 'CR', status: 'OPEN', local: 'todo', minutesLeft: 30 }];
@@ -199,13 +194,9 @@ test('in the last minutes the worker is stopped and the candidate published firs
   f.rt.itemRows = () => rows(30);
   assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === f.key).lastCall, undefined);
   f.rt.itemRows = () => rows(5);
-  let next = f.rt.workflow.actions().nextActions;
+  const next = f.rt.workflow.actions().nextActions;
   assert.deepEqual([next[0].key, next[0].action, next[0].lastCall], [f.key, 'publish_item', true], 'publish first, ahead of the new item');
-  assert.equal(next[0].arguments.lastChance, undefined, 'a complete candidate needs no last-chance reason');
-  f.ji.candidate.state = 'repair';
-  next = f.rt.workflow.actions().nextActions;
-  assert.deepEqual([next[0].action, next[0].arguments.candidateId], ['publish_item', f.ji.candidate.id]);
-  assert.match(next[0].arguments.lastChance.reason, /5 min left/);
+  assert.deepEqual([next[0].arguments.candidateId, next[0].arguments.lastChance], [f.ji.candidate.id, undefined]);
   f.ji.workerState = 'writing';
   assert.equal(f.rt.workflow.actions().nextActions[0].action, 'stop_worker');
 });
@@ -239,35 +230,30 @@ test('an answer-only item publishes after main moved since its worktree was crea
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
 });
 
-// CR/hard chạy tier strong (sol chậm ~2,5 lần mỗi lượt): worker strong làm code + test, evidence giao worker model nhanh.
-test('a strong-tier item hands its evidence to a fast worker after a code-and-tests candidate', async () => {
-  const plan = tier => ({ fixer: [{ model: tier === 'strong' ? 'gpt-6.1-sol' : 'gpt-6.1-terra', reasoning_effort: 'medium', tier }],
-    evidence: { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' } });
-  const prepared = async (f, tier) => {
-    f.rt.startWork = async () => ({ triage: { models: plan(tier) }, materialsDir: 'materials', timeBox: {} });
-    f.rt.worktree = async () => ({ ...f.wt, setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });
-    f.rt.itemMvs = () => '## TC-1\nThe value is correct.';
-    const j = await f.rt.workflow.prepare({ backlogItemKey: f.key }); await f.rt.jobs.jobs.get(j.jobId).promise;
-    return f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId)).result;
-  };
-  const f = fixture('CR-01');
-  assert.deepEqual((await prepared(f, 'strong')).evidenceHandoff?.model, 'gpt-6.1-terra');
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01' });
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
-  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }] }));
-  const notRun = [{ check: 'TC-1', command: null, result: 'not_run', note: 'final evidence: evidence worker' }];
-  const coder = f.result(1, fix({ status: 'partial', verification: notRun, requirements: [{ id: 'AC-1', status: 'not_met', evidence: 'needs final evidence' }] }));
-  const p = await f.preflight(coder);
-  assert.equal(p.ready, false);
-  const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
-  assert.deepEqual([next.action, next.model, next.priorFixResultFile], ['spawn_evidence_worker', 'gpt-6.1-terra', coder]);
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01_evidence' });
-  assert.deepEqual([f.ji.evidenceHandoff.state, f.ji.evidenceHandoff.thread], ['done', '/root/cr01_evidence']);
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
-  await f.preflight(f.result(2, fix({ status: 'partial', verification: notRun })));
-  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === f.key).action, 'publish_item', 'the evidence worker result is published as is');
-  const g = fixture('CR-02');
-  assert.equal((await prepared(g, 'small')).evidenceHandoff, null, 'a small-tier worker captures its own evidence');
+// J56ZZWSS: BUG-02 sửa vitest.config.ts (TASK-02 nộp sau mất TC-04) và bàn giao bản 2 sai enum status (RESULT_INVALID
+// qua root); mỗi worker tự viết script kiểm schema. Helper kiểm ở candidate và giữ worker lại cho tới khi sửa xong.
+test('worker_checkpoint candidate keeps the worker writing until the fix-result, submit.json and test config are valid', async () => {
+  const f = fixture('BUG-01', false, { 'src/vitest.config.ts': 'export default {};\n', 'src/tests/a.test.js': 'test 1\n' });
+  const checkpoint = args => f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
+  const args = { backlogItemKey: f.key, phase: 'candidate' };
+  f.ji.workerState = 'writing';
+  let res = await checkpoint(args);
+  assert.equal(res.handedOff, false); assert.match(res.problems[0], /BUG-01-fixer-1\.json first/); assert.equal(f.ji.workerState, 'writing');
+  f.result(1, { status: 'DONE' });
+  writeFileSync(join(f.wt.matchRoot, 'src', 'vitest.config.ts'), 'export default { esbuild: { jsx: "automatic" } };\n');
+  writeFileSync(join(f.dir, 'submit.json'), '{"status":');
+  res = await checkpoint(args);
+  assert.equal(res.handedOff, false); assert.equal(f.ji.workerState, 'writing');
+  for (const re of [/BUG-01-fixer-1\.json: RESULT_INVALID/, /not valid JSON/, /test configuration changed: src\/vitest\.config\.ts/]) {
+    assert.ok(res.problems.some(p => re.test(p)), `${re} in ${JSON.stringify(res.problems)}`);
+  }
+  sh('git', ['checkout', '--', 'M1/src/vitest.config.ts'], f.wt.worktreeRoot);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'a.test.js'), 'test 2\n');
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: [] }] }));
+  f.result(2);
+  res = await checkpoint(args);
+  assert.equal(res.handedOff, true, JSON.stringify(res)); assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
+  assert.ok(res.warnings.some(w => /existing tests changed: src\/tests\/a\.test\.js/.test(w)), 'a changed existing test is only reported');
 });
 
 // Worker code + test, chụp evidence rồi nộp; helper không gate, không đòi review, không trả todo (03/11).
@@ -289,8 +275,8 @@ test('after code, tests and evidence the fix-result is published as is, with no 
   assert.equal(res.writesAllowed, true, JSON.stringify(res)); assert.equal(res.preGateJobId, undefined, 'no pre-gate');
   // Thiếu evidence bắt buộc: chỉ báo lại, vẫn nộp.
   f.rt.itemEvidence = () => [{ file: 'shot.png', beforeFix: false }];
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
   const file = f.result(1);
+  assert.equal((await checkpoint({ backlogItemKey: f.key, phase: 'candidate' })).handedOff, true);
   const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
   assert.deepEqual([next.action, next.arguments.fixResultFile], ['publish_item', file]);
   const done = await publishDone(f, next.arguments);
@@ -307,39 +293,10 @@ test('after code, tests and evidence the fix-result is published as is, with no 
 test('an answer-only item is published without an independent solver', async () => {
   const f = fixture('TASK-01', true), bodies = submitted(f);
   const p = await f.preflight(f.result(1));
-  assert.equal(p.ready, true);
   const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
   assert.deepEqual([next.action, next.arguments.candidateId], ['publish_item', p.candidateId]);
   const done = await publishDone(f, next.arguments);
   assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done)); assert.equal(bodies[0].answer.position, '2');
-});
-
-test('a strong-tier code-only handoff waits for the evidence worker, whose result is published', async () => {
-  const f = fixture('CR-01'); submitted(f);
-  f.rt.startWork = async () => ({ triage: { models: { fixer: [{ model: 'gpt-6.1-sol', reasoning_effort: 'medium', tier: 'strong' }],
-    evidence: { model: 'gpt-6.1-terra', reasoning_effort: 'medium', tier: 'small' } } }, materialsDir: 'materials', timeBox: {} });
-  const worktree = f.rt.worktree.bind(f.rt);
-  f.rt.worktree = async a => a.action === 'create' ? { ...f.wt, setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id } : worktree(a);
-  f.rt.itemMvs = () => '## TC-1\nThe value is correct.';
-  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key }); await f.rt.jobs.jobs.get(j.jobId).promise;
-  const prepared = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId)).result;
-  assert.equal(prepared.evidenceHandoff?.model, 'gpt-6.1-terra');
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01' });
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
-  const notRun = [{ check: 'TC-1', command: null, result: 'not_run', note: 'final evidence: evidence worker' }];
-  const coder = f.result(1, fix({ status: 'partial', verification: notRun, requirements: [{ id: 'AC-1', status: 'not_met', evidence: 'needs final evidence' }] }));
-  const offered = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
-  assert.deepEqual([offered.action, offered.arguments.fixResultFile], ['publish_item', coder]);
-  const pending = await f.rt.workflow.publish(offered.arguments);
-  assert.deepEqual([pending.state, pending.candidateId], ['evidence_pending', f.ji.candidate.id]);
-  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === f.key).action, 'spawn_evidence_worker');
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/cr01_evidence' });
-  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === f.key), [], 'nothing while the evidence worker writes');
-  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
-  const evidence = f.result(2);
-  const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
-  assert.deepEqual([next.action, next.arguments.fixResultFile], ['publish_item', evidence]);
-  const done = await publishDone(f, next.arguments); assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done));
 });
 
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {

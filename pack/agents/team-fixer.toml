@@ -14,7 +14,7 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    - Form A (report-only, source changes out of scope): DO NOT build/test/run app or edit code. Derive all answers deterministically from logs and company facts using a targeted script in answers/<ID>/evidence/.
    - Form B (code hotfix): apply minimal fix with reproduction test.
    TASK: read .agents/skills/backlog-task/SKILL.md. Classify immediately:
-   - Form A (answer-only, calculation or questions with no source changes): DO NOT build/test/run app or write production code. Derive all answers deterministically from canonical source and QA data using a fast script in answers/<ID>/evidence/derive.mjs, fill answers/<ID>/submit.json, validate schema, and hand off immediately (< 3 minutes).
+   - Form A (answer-only, calculation or questions with no source changes): DO NOT build/test/run app or write production code. Derive all answers deterministically from canonical source and QA data using a fast script in answers/<ID>/evidence/derive.mjs, fill answers/<ID>/submit.json and hand off immediately (< 3 minutes).
    - Form B (feature/endpoint): copy nearest existing project pattern, implement minimal service + tests.
 3. Run the narrowest meaningful tests from project_profile (use test_one in your inner loop; do not run full test suites repeatedly). List tests_added exactly as test_one targets.
    For code-changing BUG/PI, a new test must exercise real project symbols (no tautological tests of newly created helpers), fail on unfixed code for the reported reason before production edits, and pass after the fix.
@@ -27,6 +27,11 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    ready_for_evidence run project_profile typecheck and build once, then the full test suite once (project_profile
    test). A failing test that is not in <baseline_failures> is a regression you caused: fix it first. Never delete,
    skip or weaken a test to make it pass.
+   Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini/conftest.py,
+   tsconfig used by tests, package.json test scripts): graders compare them with the issued version on every later
+   commit. When a new test needs another transform or environment, adapt the test file itself (for example import
+   React or a per-file pragma) instead.
+   A UI fix is done when the page looks right in the app mode the MVS names (dev or production), not only in a test.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
    Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:
    start the app again and collect final evidence now, no message to root. Otherwise stop all writes, message root
@@ -39,24 +44,15 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    met/not_met/not_applicable with the test, file:line or artifact supporting it. Any not_met means no DONE.
    verification.result means the named expectation was met; a successful fail-before proof is pass even when
    its command intentionally exits nonzero on unfixed code (explain that in note).
-6. Release app_data lock, stop your app, call worker_checkpoint candidate, then atomically write the strict
-   contracts/fix-result.schema.json result at results_path and return it. You may write this result outside the
-   worktree in .team-work/results/. Never overwrite a handed-off version.
+6. Release app_data lock, stop your app, atomically write the strict contracts/fix-result.schema.json result at
+   results_path (outside the worktree in .team-work/results/; never overwrite a handed-off version), then call
+   worker_checkpoint candidate. It validates the fix-result and submit.json for you (do not write your own schema
+   validator) and checks test configuration. handedOff:false lists problems: fix them (a fix-result problem needs
+   the next numbered result path) and call candidate again. handedOff:true: return the result path.
 
-A followup from root (missing fix-result, invalid result, sync before recapture) asks for one narrow thing: do only
-that, keep source unchanged unless it says otherwise, call worker_checkpoint resume before writing, write the next
-numbered result path and checkpoint candidate again. A new result version does not require a new worker thread.
-
-Evidence handoff (brief has <evidence_handoff>): you write code and tests only. Capture before-fix evidence the item
-requires first, as usual; once the fix and its focused tests pass, do not capture final evidence. Fill the submit.json
-fields you know, write the fix-result with status partial, every MVS scenario not_run with note "final evidence:
-evidence worker" and evidence-dependent requirements not_met, checkpoint candidate and return. A faster worker
-captures the evidence.
-Evidence continuation (brief has <evidence_continuation>): another worker wrote the code; keep its source unchanged
-unless a scenario proves it wrong (then tell root). Read its fix-result (priorFixResultFile) and the evidence playbook,
-call worker_checkpoint ready_for_evidence, capture every scenario, complete
-submit.json, and write the next result version: carry over the prior fields, update verification, requirements and
-status from what you observed.
+A followup from root (sync before recapture, a publish error) asks for one narrow thing: do only that, keep source
+unchanged unless it says otherwise, call worker_checkpoint resume before writing, write the next numbered result path
+and checkpoint candidate again. A new result version does not require a new worker thread.
 
 Evidence: use capture_evidence's full scenario flow, stable browserProfile and context (scenario, matchRoot,
 backlogItemKey, appMode and phase). Use download for actual downloaded bytes; never fabricate a CSV from serializers.

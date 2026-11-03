@@ -14,6 +14,7 @@ import { detectProfile } from './environment.mjs';
 import { recordEvidence } from './evidence.mjs';
 
 const MAX_TOTAL_MS = 50_000;
+const SETTLE_MS = 12_000;
 // pack/ trong repo, team-sdlc-pack/runtime/ khi đã cài: playwright/ nằm cạnh nó (repo/playwright, team-sdlc-pack/playwright).
 const PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -307,9 +308,12 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     };
     page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text().slice(0, 300)); });
     page.on('pageerror', error => consoleErrors.push(String(error?.message ?? error).slice(0, 300)));
-    // Request đang bay, để screenshot chờ dữ liệu về (WebSocket/EventSource sống mãi nên không tính).
+    // Request đang bay, để screenshot chờ dữ liệu về (WebSocket/EventSource sống mãi nên không tính; ảnh, font, media và
+    // favicon không đổi nội dung chụp: J56ZZWSS TASK-02 chụp lại 2 lần chỉ vì favicon.svg còn treo).
     const inflight = new Map();
-    page.on('request', r => { if (!['eventsource', 'websocket'].includes(r.resourceType())) inflight.set(r, { url: r.url(), at: Date.now() }); });
+    page.on('request', r => {
+      if (!['eventsource', 'websocket', 'image', 'font', 'media'].includes(r.resourceType()) && !/\/favicon[^/]*$/i.test(r.url().split('?')[0])) inflight.set(r, { url: r.url(), at: Date.now() });
+    });
     page.on('requestfinished', r => inflight.delete(r));
     page.on('requestfailed', r => inflight.delete(r));
 
@@ -589,8 +593,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           }
           case 'screenshot': {
             await sleep(Math.min(3000, s.settleMs ?? 400));
-            // idle:false chụp ngay (bằng chứng trạng thái đang tải, vd sau route delayMs).
-            const unsettled = s.idle === false ? null : await settle(6000);
+            // idle:false chụp ngay (bằng chứng trạng thái đang tải, vd sau route delayMs). Chờ tối đa 12 s: app dev biên dịch
+            // route ở lần mở đầu, dashboard J56ZZWSS còn đợi tRPC sau 6 s ở 9/27 lần chụp, mỗi lần worker phải chụp lại.
+            const unsettled = s.idle === false ? null : await settle(SETTLE_MS);
             const png = await page.screenshot({ fullPage: !!s.fullPage, timeout: left(15_000) });
             mkdirSync(dirname(s.path), { recursive: true });
             writeFileSync(s.path, png);
@@ -598,7 +603,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
             shots.push(saved(s.path, 'screenshot'));
             log.push({ step: i + 1, action: 'screenshot', ...(unsettled ? { unsettled,
-              hint: 'still loading after 6 s: waitFor the loaded content, then capture again (idle:false only for loading-state evidence)' } : {}) });
+              hint: `still loading after ${SETTLE_MS / 1000} s: if the screenshot shows the loaded content it is valid; otherwise waitFor that content and capture again (idle:false only for loading-state evidence)` } : {}) });
             break;
           }
           case 'download': {

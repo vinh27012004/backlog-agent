@@ -158,7 +158,6 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     // Model cho spawn lấy trong allowedModels: item easy lần 1 theo tier cheap (6-luna medium), kể cả TASK-01 có deadline.
     assert.deepEqual(work.triage.models.fixer.map(m => `${m.model}/${m.reasoning_effort}`), ['gpt-6-luna/medium', 'gpt-6.1-sol/high', 'gpt-6.1-sol/high']);
     assert.deepEqual(work2.triage.models.fixer.map(m => m.model), ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol']);
-    assert.equal(work2.triage.models.evidence.model, 'gpt-6.1-terra');
     assert.match(work.triage.by, /difficulty:jev/);
     assert.equal(jevCalls.length, 2);
     assert.equal(work2.triage.injection, true, 'regex sees the end of a long item');
@@ -213,7 +212,8 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     mkdirSync(dirname(resultFile), { recursive: true });
     writeFileSync(resultFile, JSON.stringify(validFixResult({ summary: 'greet returns hello world',
       requirements: [{ id: 'AC-1', status: 'met', evidence: 'src/lib.js:1 returns "hello world"' }] })));
-    await client.call('worker_checkpoint', { backlogItemKey: 'TASK-01', phase: 'candidate' });
+    const handed = await client.call('worker_checkpoint', { backlogItemKey: 'TASK-01', phase: 'candidate' });
+    assert.equal(handed.handedOff, true, JSON.stringify(handed));
     // root_cause_confirmed đọc file kết quả của fixer trong .team-work/results/ thay cho root; thiếu root_cause thì luật
     // code trả false và không hỏi Jev.
     const callsBefore = jevCalls.length;

@@ -10,12 +10,12 @@ Helper Node.js dùng built-in, giữ credential/API/git/journal/progress/jobs; c
 MTM Player -> team_orchestrator
                |-> team_runtime: prepare -> publish
                |                 journal / events / progress / evidence manifest
-               |-> mỗi item: một team_fixer, worktree riêng (tier strong: thêm worker evidence)
+               |-> mỗi item: một team_fixer, worktree riêng
 ```
 
 Root giao việc, lookup Company Tools và thực hiện thao tác agent native. Helper trả nextActions có thứ tự.
-Worker sửa code, chạy test, chụp evidence và ghi fix-result; helper nộp nguyên kết quả đó, kiểm answer/evidence chỉ
-ra cảnh báo. 03/11 bỏ team_reviewer, team_pi_hypothesis, team_verifier và gate cho đơn giản (bản cũ ở git).
+Worker sửa code, chạy test, chụp evidence và ghi fix-result; helper kiểm fix-result, submit.json và cấu hình test ở
+checkpoint candidate, rồi nộp nguyên kết quả đó, kiểm answer/evidence chỉ ra cảnh báo. 03/11 bỏ team_reviewer, team_pi_hypothesis, team_verifier và gate cho đơn giản (bản cũ ở git).
 
 ## Quyết định thiết kế
 

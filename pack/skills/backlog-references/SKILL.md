@@ -23,6 +23,9 @@ file and result ID/section (when present), the implementing file:line, and the a
 hypotheses.evidence or requirements.evidence fields. Open the cited source; do not turn a search snippet into a rule.
 Preserve stack, project style and tests. No unrelated refactor, deleted/skipped/weakened assertions or bypassed failures.
 Only the designated baseline owner may correct a stale test, citing intended behaviour through test_change.
+Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini, conftest.py, test
+scripts): every later commit carries it and graders compare it with the issued version. Fit new tests to the existing
+config; worker_checkpoint candidate refuses a handoff that changed one.
 Never change protected exam-info.json or env-require files.
 
 # Handoffs

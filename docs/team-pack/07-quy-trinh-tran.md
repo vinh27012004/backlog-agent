@@ -6,7 +6,7 @@ Cập nhật 03/11/2026; hợp đồng chi tiết ở [13](13-workflow-toi-uu.md
 Giữ mục tiêu PREPARE khoảng 7 phút, hard budget helper 8 phút và hợp đồng Player.
 GAME ưu tiên PI, deadline ít slack, shared baseline/layout, điểm rồi BUG > CR > TASK.
 Tối đa năm item code thường còn cần worker (config/runtime.json, đổi ngay bằng team-sdlc-pack/local/runtime.json);
-item đã bàn giao candidate, chỉ chờ worker evidence hay publish, nhả slot.
+item đã bàn giao candidate, chỉ chờ publish, nhả slot.
 PI và answer_only có thể bắt đầu ngay. Sau restart vẫn làm hết `next_actions`, kể cả `prepare_item`.
 Dưới bốn phút không mở item thường mới; sáu phút cuối của item thì `next_actions` đưa lên đầu: dừng worker rồi
 publish candidate đang có (thiếu evidence thì theo luật cơ hội cuối).
@@ -18,20 +18,23 @@ Configure frame, prepare_checkout, setup_environment và login_match song song; 
 report_ready rồi kết thúc lượt PREPARE. Không thêm coding-agent CLI hoặc đưa credential cho worker.
 
 ## 3. GAME
-Configure frame GAME, login_match, refresh_match, company_tools, next_actions.
+Configure frame GAME, login_match, refresh_match, company_tools, rồi vòng wait_for_update (trả cả nextActions; không gọi
+thêm next_actions) xen wait_agent khi có worker đang chạy.
 prepare_item trả materials/worktree/profile/timeBox/models, root lookup facts liên quan rồi brief worker.
 Root chỉ dùng cơ chế agent native, helper không tự spawn.
 
 ## 4. Handoff
 Mỗi item một `team_fixer` (03/11/2026 bỏ verified mode cùng reviewer, solver, verifier và gate). Worker code, chạy
 typecheck, build và cả bộ test một lần (test fail không có trong baseline là regression của nó), ready_for_evidence
-(helper sync rồi mở ghi lại), chụp evidence, ghi fix-result, checkpoint candidate. Root gọi ngay
+(helper sync rồi mở ghi lại), chụp evidence, ghi fix-result rồi checkpoint candidate (helper kiểm fix-result,
+submit.json và cấu hình test; có lỗi thì worker sửa và ghi bản kế, khỏi vòng RESULT_INVALID qua root). Root gọi ngay
 `publish_item {fixResultFile}`: helper ghi candidate, ghi BACKLOG_TESTS từ testResults của submit.json, integrate,
 push, submit. Lỗi answer/evidence helper tìm thấy chỉ thành `warnings`/`answerWarnings`, không chặn.
 
-Item MVS mà fixer tier strong: fixer chỉ làm code và test, bàn giao candidate partial; `publish_item` trên kết quả đó trả
-`evidence_pending` và next_actions đưa spawn_evidence_worker (worker model nhanh chụp evidence); kết quả của worker
-evidence được nộp.
+Không còn worker evidence riêng cho item tier strong (bỏ sau J56ZZWSS, 03/11): cả ba lần chuyển giao ở trận đó chậm hơn
+để một fixer tự làm (spawn terra lỗi capacity, worker mới đọc lại từ đầu, BUG-01 worker evidence vẫn phải sửa code vì
+bản sửa chỉ đúng ở build production). Fixer không sửa cấu hình test: J56ZZWSS BUG-02 thêm `esbuild` vào
+`vitest.config.ts`, TASK-02 nộp sau mang theo nên mất TASK-02-TC-04.
 
 Lý do bỏ verified: trận 3OCNFC54 sau evidence còn ~2–3 phút reviewer mỗi item, BUG-01 lặp 5 vòng evidence ↔ preflight
 (~10 phút). Đổi lại: không ai kiểm nội dung evidence sau worker (J5H1NBX4 CR-01 reviewer từng bắt lỗi bigint và control

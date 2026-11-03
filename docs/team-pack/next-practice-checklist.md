@@ -10,6 +10,19 @@ khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục 
 > pre-gate, reviewer, solver hay checker giả thuyết không còn áp dụng; thay vào đó kiểm: mỗi item đúng một fixer (thêm
 > một worker evidence khi tier strong), fixer chạy cả bộ test trước evidence, `publish_item` nộp ngay sau bàn giao, và
 > `/judge-practice` có bao nhiêu item nộp sai mà trước đây reviewer/gate có thể bắt.
+>
+> **Sau J56ZZWSS (03/11):** bỏ worker evidence riêng của tier strong; `worker_checkpoint candidate` kiểm fix-result,
+> submit.json và cấu hình test; root chỉ vòng `wait_agent` → `wait_for_update`; `prepare_item`/`publish_item` chờ job
+> 25 s; `capture_evidence` chờ trang yên tới 12 s và bỏ qua favicon/ảnh. Kiểm ở trận sau:
+> - [ ] Mỗi item đúng một `team_fixer`; không còn `spawn_evidence_worker`, `evidence_pending`.
+> - [ ] Có lần `handedOff:false` nào không, worker sửa trong một lượt; không còn `RESULT_INVALID` ở `publish_item`;
+>       worker không tự viết script kiểm schema (tìm `jsonschema`, `Test-Json`, `ajv` trong transcript fixer).
+> - [ ] Không item nào đổi `vitest.config.*` hay file setup test (`git diff <seed> -- '*config*'` trên commit nộp).
+> - [ ] Root: số lần `next_actions` và `job_status` (J56ZZWSS: 32 và 12 trên 105 lượt).
+> - [ ] Số ảnh có `unsettled` và số lần chụp lại cùng kịch bản (J56ZZWSS: 9/27 ảnh unsettled).
+> - [ ] BUG-01 TC-01 (dev): class Tailwind mới có ra trong CSS của `pnpm dev` chạy ở worktree không. J56ZZWSS: build
+>       production có `.md:ms-sidebar`, bản dev trong `.team-work/wt/BUG-01` thì không (kể cả `@source inline`), worker
+>       mất ~10 phút rồi chuyển sang rule CSS thường. Chưa rõ nguyên nhân.
 
 ## Trước trận
 

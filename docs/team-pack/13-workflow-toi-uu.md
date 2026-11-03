@@ -1,15 +1,16 @@
 # 13 · Workflow candidate
 
-Triển khai 31/10/2026; 03/11 rút còn một luồng (bỏ gate, reviewer, solver, verifier, pre-gate và vòng sửa).
+Triển khai 31/10/2026; 03/11 rút còn một luồng (bỏ gate, reviewer, solver, verifier, pre-gate và vòng sửa), rồi sau
+J56ZZWSS bỏ cả worker evidence riêng của item tier strong: một fixer làm từ code tới evidence.
 
 ## API và trách nhiệm
 
 | Tool | Hành vi |
 |---|---|
-| prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief |
-| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); resume mở lại; root đăng ký threadId |
-| next_actions | Hàng đợi có tham số và waitMs theo release/deadline: prepare_item, spawn_worker, sync_before_evidence, spawn_evidence_worker, publish_item, submit_work, stop_worker |
-| publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent |
+| prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief; chờ job tới 25 s nên thường trả kết quả luôn |
+| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); candidate (sau khi ghi fix-result) kiểm fix-result mới nhất, submit.json và cấu hình test, có lỗi thì giữ worker ghi tiếp (`handedOff:false`); resume mở lại; root đăng ký threadId |
+| next_actions | Hàng đợi có tham số và waitMs theo release/deadline: prepare_item, spawn_worker, sync_before_evidence, refresh_candidate, publish_item, submit_work, stop_worker. wait_for_update trả cùng danh sách nên root chỉ vòng wait_agent → wait_for_update |
+| publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent; chờ job tới 25 s (thường 10–15 s là xong) |
 
 Mỗi item một team_fixer. Root thực hiện native agent operations và Company Tools lookup; helper không thêm agent CLI.
 Proxy của worker chỉ có read_item, job_status, worktree status và worker_checkpoint, không Company Tools/publish.
@@ -22,10 +23,11 @@ quả, source/environment và answer tree; sửa gì sau bàn giao thì CANDIDAT
 
 Khi ghi candidate, helper kiểm (`match/answers.mjs`, `env/evidence.mjs`) và chỉ báo lại, không chặn: submit.json theo
 template/schema, mỗi requirement đúng một entry, PASS scenario có verification.check bằng scenario ID và evidence MVS
-đòi, evidence mô tả item đòi, evidence cũ so với source/environment. Chặn duy nhất: bàn giao chỉ có code của item
-tier strong (evidenceHandoff) chờ worker evidence.
+đòi, evidence mô tả item đòi, evidence cũ so với source/environment. Không gì chặn ở bước này: lỗi mà worker luôn tự sửa
+được (fix-result sai schema, submit.json hỏng hay sai schema/template, đổi cấu hình test) đã bị giữ lại ở
+worker_checkpoint candidate. File test có sẵn bị sửa chỉ là cảnh báo (đề cho sửa test mâu thuẫn, kèm giải thích).
 
-Snapshot loại answers/; environment hash env files, marker dependency, runtime/commands và biến build/test liên quan,
+Snapshot loại answers/ và challenge/ (file BTC phát, không chạy trong app); environment hash env files, marker dependency, runtime/commands và biến build/test liên quan,
 không xuất secret. Hậu tố database theo trận/item và virtualStoreDir không tính, nên checkout chính và worktree cùng
 source có cùng fingerprint; app dùng lại bản build cùng snapshot (05 §5.23).
 

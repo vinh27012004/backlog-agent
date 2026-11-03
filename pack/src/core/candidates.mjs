@@ -72,19 +72,9 @@ export function environmentFingerprint(matchRoot, profile, epoch = 0) {
       'JAVA_HOME', 'MAVEN_OPTS', 'DOTNET_ROOT', 'GOFLAGS', 'DATABASE_URL', 'TEST_DATABASE_URL'].map(k => [k, process.env[k] ?? null])) });
 }
 
+// challenge/ là file BTC phát (MVS, seed, script kiểm), không chạy trong app: worker chép chúng vào worktree sau khi
+// start app không làm app cũ đi (J56ZZWSS CR-01: EVIDENCE_STALE_APP chỉ vì challenge/CR-01-*.md, phải start lại app).
 export async function sourceSnapshot(checkoutRoot, folder, profile, epoch = 0) {
-  return { source: await contentTree(checkoutRoot, folder, [`${folder}/answers`]),
+  return { source: await contentTree(checkoutRoot, folder, [`${folder}/answers`, `${folder}/challenge`]),
     environment: environmentFingerprint(join(checkoutRoot, folder), profile, epoch) };
-}
-
-// Việc còn lại của một bàn giao chỉ có code (evidenceHandoff): worker evidence nhận danh sách này trong brief.
-export function repairPlan({ fixer, answerProblems = [], evidenceProblems = [] }) {
-  const todo = [];
-  const add = (id, action, source) => { if (action && !todo.some(t => t.id === id && t.action === action)) todo.push({ id, action, source }); };
-  for (const r of fixer?.requirements ?? []) if (r.status === 'not_met') add(r.id, r.evidence, 'fixer');
-  if (fixer && fixer.status !== 'fixed') add('worker-status', `${fixer.status}: ${fixer.summary}`, 'fixer');
-  for (const v of fixer?.verification ?? []) if (v.result !== 'pass') add(v.check, v.note ?? `Complete ${v.check}`, 'fixer');
-  answerProblems.forEach((p, i) => add(`answer-${i + 1}`, p, 'answer'));
-  evidenceProblems.forEach((p, i) => add(`evidence-${i + 1}`, p, 'evidence'));
-  return { todo };
 }

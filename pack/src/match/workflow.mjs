@@ -2,8 +2,8 @@
 // evidence; fix-result nó bàn giao được nộp nguyên như vậy, kiểm answer/evidence chỉ ra cảnh báo.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { answerCheck, requirementsCheck } from './answers.mjs';
-import { digest, repairPlan, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
+import { answerCheck, changedFiles, requirementsCheck } from './answers.mjs';
+import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
@@ -25,6 +25,12 @@ const textDigest = file => {
 };
 const isKey = k => typeof k === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(k);
 const typeOf = key => String(key).split('-')[0].toUpperCase();
+// Cấu hình/setup test: BTC chấm "existing tests" trên commit nộp và so cả các file này với bản phát (J56ZZWSS: BUG-02
+// thêm esbuild jsx vào vitest.config.ts cho test mới của nó, TASK-02 nộp sau mang theo thay đổi đó và mất TC-04).
+const TEST_CONFIG = /(^|\/)((vitest|jest|playwright|cypress|karma|mocha)\.(config|setup|workspace)\.[cm]?[jt]s|vitest\.workspace\.json|jest\.config\.json|\.mocharc\.[a-z]+|setupTests\.[jt]sx?|pytest\.ini|conftest\.py|tox\.ini|phpunit\.xml(\.dist)?|karma\.conf\.js)$/i;
+const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|Tests?\.(java|cs)$/;
+// Lỗi bàn giao mà worker luôn tự sửa được; còn lại (evidence thiếu, PASS chưa đủ chứng cứ…) chỉ báo lại.
+const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid JSON|submit\.json lacks template key|submit\.json status is still)/;
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
 // (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
@@ -71,7 +77,8 @@ export class Workflow {
     ji.metrics = [...(ji.metrics ?? []), { phase, at: new Date().toISOString(), ms: Date.now() - since, ...detail }].slice(-100);
     this.rt.journal.save();
   }
-  async prepare({ backlogItemKey: key, waitSeconds = 0, force = false }) {
+  // Chờ mặc định 25 s như publish: thường xong trong 20–30 s, root khỏi gọi job_status riêng.
+  async prepare({ backlogItemKey: key, waitSeconds = 25, force = false }) {
     const ji = this.item(key), r = this.rt;
     let job = r.jobs.jobs.get(ji.prepareJobId);
     if (!job || job.state === 'failed') {
@@ -92,18 +99,9 @@ export class Workflow {
         ji.workerState = 'writing';
         ji.workStartedAt = Date.now();
         ji.prepared = started;
-        // CR/hard chạy tier strong (sol chậm ~2,5 lần mỗi lượt so với terra, NBDB5U0O/PXWV53VC): worker đó làm code và
-        // test, phần evidence giao cho một worker model nhanh. Giữ quyết định cũ khi prepare chạy lại sau restart.
-        const first = started.triage?.models?.fixer?.[0], fast = started.triage?.models?.evidence;
-        if (ji.evidenceHandoff === undefined) {
-          ji.evidenceHandoff = ji.verificationKind === 'mvs' && typeOf(key) !== 'PI' && ['strong', 'top'].includes(first?.tier)
-            && fast?.model && fast.model !== first.model ? { state: 'pending', model: fast.model, reasoning_effort: fast.reasoning_effort, tier: fast.tier } : null;
-        }
         this.metric(key, 'prepare', since);
         const profile = r.detectProfile({ path: worktree.matchRoot });
-        const handoff = ji.evidenceHandoff?.state === 'pending' ? { model: ji.evidenceHandoff.model, reasoning_effort: ji.evidenceHandoff.reasoning_effort,
-          brief: 'Brief the worker with <evidence_handoff>: code and tests only, then a partial candidate; next_actions spawn_evidence_worker gives the evidence worker.' } : null;
-        return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, evidenceHandoff: handoff,
+        return { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started,
           worktree, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), resultsDir: join(r.session.paths.teamWork, 'results'),
           knowledgeHints: ji.signals?.kb ?? null,
@@ -115,6 +113,44 @@ export class Workflow {
     }
     return r.settleJob(job.id, Math.min(45, Math.max(0, waitSeconds)) * 1000);
   }
+  // Fix-result mới nhất của item (chưa có thì null).
+  latestResult(key) {
+    const next = this.nextResultFile(key), n = Number(next.match(/-fixer-(\d+)\.json$/)[1]);
+    return n > 1 ? next.replace(/-fixer-\d+\.json$/, `-fixer-${n - 1}.json`) : null;
+  }
+  // Kiểm trước khi worker nhả quyền ghi: những lỗi nó luôn tự sửa được (fix-result sai schema, submit.json hỏng/sai
+  // schema, đổi cấu hình test) thì giữ worker lại để sửa, thay cho script kiểm schema tự viết của từng worker
+  // (J56ZZWSS: 4–8 lời gọi mỗi worker) và vòng RESULT_INVALID qua root (BUG-02 bản 2 sai enum status).
+  async handoffCheck(key) {
+    const r = this.rt, ji = this.item(key), problems = [], warnings = [];
+    const file = this.latestResult(key);
+    if (!file || ji.candidate?.fixResultFile === file) problems.push(`write your fix-result to ${this.nextResultFile(key)} first`);
+    else {
+      try { this.artifact(file); } catch (e) { problems.push(`${basename(file)}: ${e.message}; write the next numbered fix-result`); }
+    }
+    const paths = this.paths(key);
+    const answer = answerCheck(paths.matchRoot, key, r.itemTemplate(key), r.itemSchema(key), r.itemMvs(key), r.itemEvidence(key));
+    for (const p of answer.problems) (BLOCKING_ANSWER.test(p) ? problems : warnings).push(p);
+    warnings.push(...answer.warnings);
+    if (r.liveWorktree(key) && ji.worktreeBase) {
+      const changed = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []);
+      const folder = `${r.session.descriptor.matchId}/`;
+      const own = changed.filter(f => f.path.startsWith(folder) && f.status !== 'A').map(f => f.path.slice(folder.length));
+      const config = own.filter(p => TEST_CONFIG.test(p));
+      if (config.length) problems.push(`test configuration changed: ${config.join(', ')}; restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>) and make your test work with the existing config`);
+      const tests = own.filter(p => TEST_FILE.test(p) && !config.includes(p));
+      if (tests.length) warnings.push(`existing tests changed: ${tests.join(', ')}; allowed only when the item permits fixing a test that contradicts intended behaviour, explained in engineeringRecord`);
+    }
+    return { problems, warnings };
+  }
+  async candidateCheckpoint(args) {
+    const { problems, warnings } = await this.handoffCheck(args.backlogItemKey);
+    if (problems.length) {
+      return { key: args.backlogItemKey, phase: 'candidate', handedOff: false, writesAllowed: true, problems, warnings,
+        hint: 'Not handed off: fix these (a fix-result problem needs the next numbered fix-result), then call worker_checkpoint candidate again.' };
+    }
+    return { ...this.checkpoint(args), handedOff: true, warnings };
+  }
   checkpoint({ backlogItemKey: key, phase, threadId = null }) {
     const ji = this.item(key);
     if (!['ready_for_evidence', 'candidate', 'resume'].includes(phase)) fail('INVALID_ARGUMENT', 'checkpoint phase');
@@ -123,10 +159,6 @@ export class Workflow {
       ji.workerState = 'writing';
       ji.workStartedAt = Date.now();
       if (threadId) ji.workerThread = threadId;
-      // Lần mở ghi đầu cho bàn giao chỉ có code: worker evidence đã nhận việc.
-      if (ji.evidenceHandoff?.state === 'pending' && ji.candidate?.state === 'repair') {
-        ji.evidenceHandoff = { ...ji.evidenceHandoff, state: 'done', thread: threadId ?? ji.workerThread ?? null };
-      }
     } else {
       if (ji.workStartedAt) this.metric(key, ji.workerPhase ?? 'code_test', ji.workStartedAt);
       ji.workerState = 'yielded';
@@ -163,8 +195,7 @@ export class Workflow {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and message root once.` };
     }
   }
-  // Ghi candidate từ fix-result vừa bàn giao. Kiểm answer, evidence và yêu cầu chỉ thành cảnh báo; chỉ bàn giao chỉ có
-  // code (evidenceHandoff) mới chờ worker evidence.
+  // Ghi candidate từ fix-result vừa bàn giao. Kiểm answer, evidence và yêu cầu chỉ thành cảnh báo.
   async preflight({ backlogItemKey: key, fixResultFile }) {
     const since = Date.now(), r = this.rt, ji = this.item(key);
     if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must checkpoint candidate before publish');
@@ -207,18 +238,14 @@ export class Workflow {
       return moved.every(p => nonRuntime(p) && fromMain.includes(p) && !own.includes(p));
     };
     const evidence = await evidenceProblems(r.session.paths.teamWork, key, paths.matchRoot, snapshot, { unchangedForItem });
-    const repair = repairPlan({ fixer: artifact.value, answerProblems: [...answer.problems, ...req.problems], evidenceProblems: evidence });
-    // Chỉ chờ khi worker tier strong mới bàn giao code (partial) để worker evidence chụp; còn lại nộp như đã có.
-    const blocked = ji.evidenceHandoff?.state === 'pending' && artifact.value.status !== 'fixed';
     const candidate = old?.id === id ? old : { id, fixResultFile, fixResultHash: artifact.hash, snapshot, answerTree,
       createdAt: new Date().toISOString() };
-    candidate.repair = repair;
-    candidate.state = blocked ? 'repair' : 'ready';
+    candidate.state = 'ready';
     ji.candidate = candidate;
     ji.artifacts[basename(fixResultFile)] = artifact.hash;
     ji.workerState = 'yielded';
     this.metric(key, 'handoff', since, { candidateId: id });
-    return { candidateId: id, ready: !blocked, verificationKind: ji.verificationKind ?? 'acceptance',
+    return { candidateId: id, verificationKind: ji.verificationKind ?? 'acceptance',
       warnings: [...answer.problems, ...req.problems, ...evidence, ...answer.warnings, ...req.warnings] };
   }
   async assertCandidate(key, { main = false } = {}) {
@@ -231,22 +258,19 @@ export class Workflow {
     if (!main && (tree !== c.answerTree || !equal(await this.snapshot(key), c.snapshot))) fail('CANDIDATE_STALE', 'candidate changed; the worker writes and hands off the next numbered result');
     return c;
   }
-  async publish({ backlogItemKey: key, candidateId, fixResultFile = null, message = 'work', lastChance = null, waitSeconds = 0 }) {
+  // Mặc định chờ job tới 25 s (publish thường xong trong 10–15 s): root khỏi gọi thêm job_status mỗi item; dưới mức
+  // exec của root tự nhường sau ~30 s.
+  async publish({ backlogItemKey: key, candidateId, fixResultFile = null, message = 'work', lastChance = null, waitSeconds = 25 }) {
     const r = this.rt, ji = this.item(key);
     if (ji.receipt) return { state: 'done', result: { status: 'SUBMITTED', receiptId: ji.receipt.id, replay: true } };
     let job = r.jobs.jobs.get(ji.publishJobId);
     if (job?.state === 'running') return r.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
     if (this.publishOwner) fail('PUBLISH_BUSY', `publish ${this.publishOwner} first`);
-    // Root đưa fix-result vừa bàn giao, helper ghi candidate rồi nộp trong cùng lời gọi. Bàn giao chỉ có code thì dừng
-    // ở đây: next_actions đưa spawn_evidence_worker.
+    // Root đưa fix-result vừa bàn giao, helper ghi candidate rồi nộp trong cùng lời gọi.
     let warnings = [];
     if (fixResultFile && !candidateId) {
       const same = ji.candidate?.fixResultFile === fixResultFile && ji.candidate.state !== 'stale';
-      const pre = same ? { candidateId: ji.candidate.id, ready: ji.candidate.state !== 'repair', warnings: [] } : await this.preflight({ backlogItemKey: key, fixResultFile });
-      if (!pre.ready && !lastChance) {
-        return { state: 'evidence_pending', candidateId: pre.candidateId, warnings: pre.warnings,
-          next: 'Code-only handoff recorded: do spawn_evidence_worker from next_actions; publish its result.' };
-      }
+      const pre = same ? { candidateId: ji.candidate.id, warnings: [] } : await this.preflight({ backlogItemKey: key, fixResultFile });
       candidateId = pre.candidateId;
       warnings = pre.warnings;
     }
@@ -260,7 +284,6 @@ export class Workflow {
           step('submit'); return await r.submitWork({ backlogItemKey: key, gitRevision: ji.publishedRevision, lastChance });
         }
         const c = await this.assertCandidate(key);
-        if (c.state === 'repair' && !lastChance) fail('EVIDENCE_PENDING', 'code-only handoff: spawn_evidence_worker from next_actions captures the evidence first');
         step('verification'); r.recordVerification(key);
         if (!ji.integratedRevision || ji.integratedCandidateId !== c.id) {
           // Main đổi ở file khác thì integrate luôn; chỉ khi cả hai cùng sửa một file mới phải sync và làm lại evidence
@@ -313,7 +336,6 @@ export class Workflow {
     let free = r.freeSlots(rows);
     const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
     const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
-    const lastChanceReason = row => `${Math.floor(row.minutesLeft)} min left: final evidence not captured; unverified scenarios stay FAIL/NOT_RUN`;
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
@@ -329,29 +351,18 @@ export class Workflow {
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };
         if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
         if (c && c.state !== 'stale') {
-          if (!freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id, ...(c.state === 'repair' ? { lastChance: { reason: lastChanceReason(row) } } : {}) }, extra);
+          if (!freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id }, extra);
           continue;
         }
       }
       if (ji.prepared && !ji.workerThread && !c) { add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId }); continue; }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
-      if (c?.state === 'repair') {
-        // Worker evidence đang ghi, hay đã có fix-result mới (vòng bên dưới đưa publish_item).
-        if (ji.workerState === 'writing' || freshKeys.has(key) || ji.evidenceHandoff?.state !== 'pending') continue;
-        // Worker tier strong đã bàn giao code + test: evidence do worker model nhanh làm tiếp (prepare: evidenceHandoff).
-        const h = ji.evidenceHandoff;
-        add(key, 'spawn_evidence_worker', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null, repair: c.repair,
-          nextFixResultFile: this.nextResultFile(key), model: h.model, reasoning_effort: h.reasoning_effort, priorFixResultFile: c.fixResultFile });
-        continue;
-      }
       if (c && !freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id });
     }
     for (const u of fresh) {
-      const row = rows.find(x => x.key === u.key), last = lastCallOf(row);
-      const pending = items[u.key]?.evidenceHandoff?.state === 'pending';
-      add(u.key, 'publish_item', { fixResultFile: u.fixResultFile, ...(pending && last ? { lastChance: { reason: lastChanceReason(row) } } : {}) },
-        last ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
+      const row = rows.find(x => x.key === u.key);
+      add(u.key, 'publish_item', { fixResultFile: u.fixResultFile }, lastCallOf(row) ? { lastCall: true, minutesLeft: row.minutesLeft } : {});
     }
     // Ưu tiên tuyệt đối cho PI để đua điểm thời gian; ưu tiên answer_only và task cận deadline kế tiếp.
     const isPI = a => typeOf(a.key) === 'PI';

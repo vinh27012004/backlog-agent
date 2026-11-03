@@ -399,7 +399,7 @@ số item giữ slot dưới `maxItemsInFlight` (`config/runtime.json`, 5 từ 0
 
 Giữ slot (`holdsSlot`, dùng chung cho `notice` và `next_actions`): item code (không PI, không answer_only) đã Start
 Work, chưa kết thúc, và còn cần worker: chưa bàn giao candidate (đang chuẩn bị, đang ghi, dừng chờ sync trước evidence,
-worker mất sau restart), worker đang ghi lại, hoặc candidate `stale`. Item đã bàn giao chỉ chờ worker evidence,
+worker mất sau restart), worker đang ghi lại, hoặc candidate `stale`. Item đã bàn giao chỉ chờ
 publish hay item khác thì nhả slot (NBDB5U0O: CR-03 ra 17:02 khi CR-01, CR-02, BUG-04 chỉ chờ BUG-01, không được bắt
 đầu tới hết trận).
 

@@ -29,9 +29,5 @@ export function modelPlan({ type, modelTier, deadline, allowed, cfg = loadModels
   const first = ['cheap', 'small', 'strong'].includes(modelTier) ? modelTier : 'small';
   const tiers = Array.from({ length: attempts }, (_, i) => (i > 0 ? 'strong' : first));
   if (deadline || type === 'PI') tiers[attempts - 1] = 'top';
-  return {
-    fixer: tiers.map(t => pickModel(t, allowed, cfg)),
-    // Worker chụp evidence sau khi worker tier strong bàn giao code + test (workflow.mjs, evidenceHandoff).
-    evidence: pickModel(cfg.roles.evidence ?? 'small', allowed, cfg),
-  };
+  return { fixer: tiers.map(t => pickModel(t, allowed, cfg)) };
 }

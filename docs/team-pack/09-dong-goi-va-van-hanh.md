@@ -76,7 +76,7 @@ Sau khi cài: `args = ["D:/mtm/T01/team-sdlc-pack/runtime/bin/runtime-server.mjs
 - **Không** đặt `model`, `model_reasoning_effort`, `sandbox_mode`, `approval_policy`: Player đặt các giá trị
   này cho thread.
 - `[agents] max_concurrent_threads_per_session = 16` (tên cũ `max_threads`): mặc định của Codex chỉ cho 3
-  subagent chạy cùng lúc (ZVUYZ41V, L48). Từ 03/11 mỗi item chỉ một fixer (tier strong thêm một worker evidence);
+  subagent chạy cùng lúc (ZVUYZ41V, L48). Từ 03/11 mỗi item chỉ một fixer;
   BTC không giới hạn, khoá không nhận "không giới hạn" nên đặt 16 (29/10, sau TOKXKPBV). Còn cân nhắc: cấu hình approval cho tool MCP (Spike S3). **Giữ web search bật** (Q11, 26/10); nếu Spike S1 cho thấy nó đang tắt mặc định thì
   bật trong `config/codex.toml`.
 - `command = "node"` cần Node ≥ 20 trên PATH của tiến trình Codex. Checker kiểm điều này.

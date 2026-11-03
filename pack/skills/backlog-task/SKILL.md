@@ -12,7 +12,8 @@ Check the item description immediately upon opening:
   - **DO NOT modify application source code**.
   - **Write a targeted 10-20 line calculation script** in `answers/<ID>/evidence/derive.mjs` (or `.ts`) that imports or computes directly from the canonical source / QA test data.
   - Fill `answers/<ID>/submit.json` with the exact computed values, ensuring correct string/integer types matching `challenge/<ID>-submit.schema.json`.
-  - Checkpoint candidate and hand off within 2�3 minutes!
+  - A canonical commit the item names but the clone lacks (the issued history is squashed) is not a blocker: use the issued source, say so in the summary and keep status DONE when the answer is derived.
+  - Write the fix-result, checkpoint candidate (it validates submit.json) and hand off within 2-3 minutes!
 - **Form B: Code Feature / Endpoint TASK**:
   - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
 
