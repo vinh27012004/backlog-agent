@@ -422,7 +422,7 @@ export class Workflow {
         if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
         if (c && c.state !== 'stale') {
           if (ji.verificationKind === 'answer_only') {
-            add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: ${Math.floor(row.minutesLeft)} min left: deadline approaching, submitting answer immediately } }, extra);
+            add(key, 'publish_item', { candidateId: c.id, lastChance: { reason: `${Math.floor(row.minutesLeft)} min left: deadline approaching, submitting answer immediately` } }, extra);
             continue;
           }
           const gate = c.gateJobId ? r.jobs.jobs.get(c.gateJobId) : null;
