@@ -859,6 +859,7 @@ export class Runtime {
     const ji = j.item(key);
     if (action === 'status') {
       return { ...wt, exists: this.liveWorktree(key), baseRevision: ji.worktreeBase ?? null,
+        issuedRevision: j.data.initialRevision ?? null,
         mainHead: await revParse(checkoutRoot), setupJob: ji.worktreeSetupJob ?? null };
     }
     if (action === 'create') {
@@ -894,7 +895,10 @@ export class Runtime {
         logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
       ji.worktreeSetupJob = job.id;
       j.save();
-      return { ...wt, baseRevision: ji.worktreeBase, answerFile: join(wtAnswer, 'submit.json'), evidenceDir: join(wtAnswer, 'evidence'),
+      // issuedRevision: bản BTC phát lúc clone. Worktree tạo sau khi item khác đã lên main mang theo test đã sửa của
+      // item đó (J56ZZWSS: TASK-02 ghi "No tests changed" trong khi commit nộp có cascade.test.ts của BUG-02).
+      return { ...wt, baseRevision: ji.worktreeBase, issuedRevision: j.data.initialRevision ?? null,
+        answerFile: join(wtAnswer, 'submit.json'), evidenceDir: join(wtAnswer, 'evidence'),
         setupJobId: job.id, codegraph: codegraph.skipped ?? (codegraph.code === 0 ? 'indexed' : 'failed'),
         codegraphFreshness: codegraph.freshness ?? 'unknown',
         hint: 'Wait for setupJobId (job_status) before building or testing in the worktree.' };

@@ -39,6 +39,10 @@ in `evidenceFiles`; a missing file scores the whole item 0.
   call `status` again). Every other scenario uses the default production mode; switch with `app start` again
   (Practice NO5X6J0K: BUG-01-TC-01 needed the dev app, the tool only ran production, the scenario went `NOT_RUN`
   and the item lost 67 of 200 points).
+- Group scenarios by mode and switch once: the dev server overwrites the production build, so every production
+  start after a dev run rebuilds. Capture every production scenario first, including those that only need "app
+  running" (a mobile viewport, for example), then start dev and capture the dev scenarios last (Practice J56ZZWSS:
+  BUG-01 started the app 11 times across dev and production).
 - Never run `pnpm dev`, `next start` or `taskkill` yourself (Practice TOKXKPBV: BUG-01's fixer started the dev
   server 4 times, killed processes by port and lost 6 minutes to a dev server that served stale CSS).
 - Changed code since the last start: `app start` again; it stops the old app and rebuilds. Pass `build: false` only

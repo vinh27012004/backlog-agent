@@ -26,6 +26,13 @@ Only the designated baseline owner may correct a stale test, citing intended beh
 Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini, conftest.py, test
 scripts): every later commit carries it and graders compare it with the issued version. Fit new tests to the existing
 config; worker_checkpoint candidate refuses a handoff that changed one.
+Your worktree also carries test changes other items already put on main (a baseline owner's corrected test), and
+graders compare test files at your commit with the issued version. Before any note or record claims tests were
+unchanged, and whenever the item says grading reads the original tests, run
+`git diff --stat <issuedRevision> HEAD -- <test dirs and test config>` (issuedRevision from the brief's worktree or
+`worktree status`). Name each changed test file and the item that changed it, and keep your own result honest: never
+write "no tests changed" when that diff is not empty (Practice J56ZZWSS: TASK-02-TC-04 said so while its commit
+carried BUG-02's test edits).
 Never change protected exam-info.json or env-require files.
 
 # Handoffs

@@ -280,7 +280,10 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     assert.match(readFileSync(join(wt2.matchRoot, 'src', 'lib.js'), 'utf8'), /"hi"/);
     assert.match(readFileSync(join(wt2.matchRoot, 'src', 'bye.js'), 'utf8'), /bye/);
     assert.equal(JSON.parse(readFileSync(wt2.answerFile, 'utf8')).status, 'DRAFT');
-    assert.equal((await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).baseRevision, pushed.revision);
+    const wtStatus = await client.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' });
+    assert.equal(wtStatus.baseRevision, pushed.revision);
+    assert.equal(wtStatus.issuedRevision, checkout.revision, 'issued revision stays the clone, not the synced base');
+    assert.equal(wt2.issuedRevision, checkout.revision);
     sh('git', ['reset', '-q', '--hard', 'HEAD~1'], mainCheckout, env);   // cùng cấu hình git với helper (không autocrlf của hệ thống)
     // Main thêm đúng file mà item cũng tạo (chưa track): báo xung đột trước khi đụng vào worktree.
     writeFileSync(join(mainCheckout, MATCH, 'src', 'bye.js'), 'module.exports = "main bye";\n');

@@ -292,7 +292,9 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   chép template thành `<wt>/<folder>/answers/<ID>/submit.json` (nếu chưa có), tạo `evidence/`. Nếu stack
   cần cài lại dependency cho worktree (vd `node_modules`), bắt đầu job cài; từ 02/11 job cài chạy cùng lúc với index
   codegraph của worktree (như `setup_environment` của checkout chính), index vẫn xong trước khi trả về. Xoá bản ghi
-  build cũ của thư mục app (§5.23). **Output**: `{worktreeRoot, matchRoot, baseRevision, setupJobId?}`.
+  build cũ của thư mục app (§5.23). **Output**: `{worktreeRoot, matchRoot, baseRevision, issuedRevision, setupJobId?}`.
+  `issuedRevision` (cả ở `status`) là revision lúc clone (`journal.initialRevision`): worker so file test với bản BTC phát,
+  vì worktree tạo sau mang theo test item khác đã sửa trên main (J56ZZWSS, TASK-02-TC-04).
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
   `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
   `{integrated, headRevision, baseChanged, hint}`. Không còn hard gate (bỏ 03/11): `publish_item` vẫn kiểm main chứa
