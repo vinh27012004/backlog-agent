@@ -663,6 +663,10 @@ export class Runtime {
     return answerOnlyText(raw?.descriptionMd ?? raw?.description ?? '');
   }
 
+  // TASK chỉ trả lời: đề không đổi source, template không có testResults (không chạy test nào).
+  answerOnlyTask(key) {
+    return typeOf(key) === 'TASK' && this.answerOnlyItem(key) && !Array.isArray(this.itemTemplate(key)?.testResults);
+  }
   // PI dạng báo cáo sự cố (Form A): "Out of scope: Changing the application source", chỉ nộp answers/<ID>/.
   reportOnlyPI(key) {
     return typeOf(key) === 'PI' && this.answerOnlyItem(key);
@@ -959,8 +963,23 @@ export class Runtime {
       const job = this.jobs.start('worktree_setup', async () => ({ ok: true, skipped: 'report-only PI', steps: [] }), { key });
       return { job, codegraph: { skipped: 'report-only PI' } };
     }
-    const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
-      mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
+    // TASK chỉ trả lời (Form A: không build, không test, không chạy app): bỏ install/generate/migrate/seed, vẫn index
+    // codegraph để fixer tra source. EIOR38SI: TASK-03/04 chờ setup 71–80 s mà không dùng tới bước nào.
+    if (this.answerOnlyTask(key)) {
+      const job = this.jobs.start('worktree_setup', async () => ({ ok: true, skipped: 'answer-only TASK', steps: [] }), { key });
+      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
+        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
+      return { job, codegraph };
+    }
+    // Cài lỗi (mạng, file bị khoá) thì job tự chạy lại một lần: từ khi fixer được spawn trước khi setup xong, không còn
+    // prepare_item hỏng để root thử lại.
+    const job = this.jobs.start('worktree_setup', async job => {
+      const opts = { wtMatchRoot: wt.matchRoot, mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') };
+      const first = await prepareWorktreeEnv(job, opts);
+      if (first.ok) return first;
+      job.progress.push(`retry after: ${String(first.failure ?? '').split(/\r?\n/).pop()}`);
+      return { ...await prepareWorktreeEnv(job, opts), retriedAfter: first.failure ?? null };
+    }, { key });
     const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
       logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
     return { job, codegraph };
@@ -1029,6 +1048,9 @@ export class Runtime {
       if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must call worker_checkpoint ready_for_evidence/candidate and yield all writes before sync');
       if (this.workflow.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before sync');
       if (ji.submitIntent && !ji.receipt) fail('SUBMISSION_PENDING', 'replay the pending submission before changing the worktree');
+      // Fixer được spawn khi setup đầu còn chạy: reset của sync hay một lần cài lại không chen vào giữa lần cài đó.
+      const setupRunning = this.jobs.jobs.get(ji.worktreeSetupJob);
+      if (setupRunning?.state === 'running') await setupRunning.promise.catch(() => {});
       const cwd = wt.worktreeRoot;
       const mainHead = await revParse(checkoutRoot);
       const head = await revParse(cwd);

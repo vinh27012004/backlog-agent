@@ -545,6 +545,88 @@ test('a report-only PI is prepared without dependency setup, with every service 
   assert.doesNotMatch(brief, /<skills>|<profile>/, 'the playbook replaces the skill files');
 });
 
+// EIOR38SI: helper thấy → fixer bắt đầu trung bình 1m24s, trong đó install/generate/migrate/seed 45–105 s. Fixer được
+// spawn ngay khi worktree, index và brief có, rồi tự chờ job setup trước lần build/test/app đầu tiên.
+test('prepare hands the item to a worker while dependency setup still runs, and the brief says to wait for that job', async () => {
+  const f = fixture('CR-01');
+  Object.assign(f.ji, { workerState: undefined });
+  let release;
+  const setup = f.rt.jobs.start('worktree_setup', () => new Promise(r => { release = r; }), { key: f.key });
+  f.rt.startWork = async () => ({ type: 'CR', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), timeBox: {} });
+  f.rt.worktree = async () => ({ ...f.wt, setupJobId: setup.id });
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  assert.equal(setup.state, 'running', 'prepare did not wait for install/generate/migrate/seed');
+  assert.deepEqual(done.result.setup, { jobId: setup.id, state: 'running', skipped: null });
+  assert.ok(f.ji.spawn?.task_name, 'spawn arguments are ready for root');
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  assert.match(brief, /<environment>\nDependency setup .* still running as job /);
+  assert.ok(brief.includes(`job_status {jobId: "${setup.id}", waitSeconds: 110}`), brief);
+  release({ ok: true });
+  await setup.promise;
+});
+
+test('a prepare whose prewarmed setup already failed still reports SETUP_FAILED', async () => {
+  const f = fixture('CR-01');
+  const setup = f.rt.jobs.start('worktree_setup', async () => ({ ok: false, failure: 'pnpm install exited 1' }), { key: f.key });
+  await setup.promise;
+  f.rt.startWork = async () => ({ type: 'CR', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), timeBox: {} });
+  f.rt.worktree = async () => ({ ...f.wt, setupJobId: setup.id });
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'failed');
+  assert.match(done.error.message, /pnpm install exited 1/);
+});
+
+// EIOR38SI: TASK-03/04 (Form A, không build/test/app) chờ setup 71–80 s mà không dùng bước nào.
+test('an answer-only TASK gets a worktree without dependency setup and a brief that says not to install or build', async () => {
+  const f = fixture('TASK-03', true, { 'src/package.json': '{"name":"app","scripts":{"test":"vitest run"}}\n' });
+  mkdirSync(join(f.rt.session.paths.matchRoot, 'src', 'node_modules', 'typescript'), { recursive: true });   // checkout chính đã cài
+  Object.assign(f.ji, { workerState: undefined, verificationKind: undefined });
+  f.rt.startWork = async () => ({ type: 'TASK', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), timeBox: {} });
+  assert.equal(f.rt.answerOnlyTask(f.key), true);
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  assert.equal(done.result.verificationKind, 'answer_only');
+  assert.equal(f.rt.jobs.view(f.rt.jobs.jobs.get(done.result.worktree.setupJobId)).result.skipped, 'answer-only TASK', 'no install, generate, migrate or seed');
+  assert.equal(existsSync(join(f.wt.matchRoot, 'src', '.env')), false);
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  assert.match(brief, /<environment>\nNo dependencies, database or app were set up in this worktree \(answer-only TASK\)/);
+  assert.ok(brief.includes(`createRequire(${JSON.stringify(join(f.rt.session.paths.matchRoot, 'src', 'package.json'))})`),
+    `project packages load from the installed main checkout: ${brief}`);
+  assert.match(brief, /<skills>/, 'unlike a report-only PI, the TASK keeps its skill files');
+});
+
+test('a TASK that changes code or carries test results is not answer-only for setup', () => {
+  const f = fixture('TASK-02');
+  assert.equal(f.rt.answerOnlyTask(f.key), false);
+  const g = fixture('TASK-01', true);
+  writeFileSync(join(g.rt.session.paths.teamWork, 'items', g.key, 'template.json'), JSON.stringify({ status: 'NOT_STARTED', testResults: [] }));
+  assert.equal(g.rt.answerOnlyTask(g.key), false, 'a template with testResults runs tests');
+  assert.equal(fixture('PI-01', true).rt.answerOnlyTask('PI-01'), false);
+});
+
+test('sync waits for a setup job that is still running before it resets the worktree', async () => {
+  const f = fixture();
+  let release, order = [];
+  const setup = f.rt.jobs.start('worktree_setup', () => new Promise(r => { release = r; }), { key: f.key });
+  f.ji.worktreeSetupJob = setup.id;
+  writeFileSync(join(f.rt.session.paths.matchRoot, 'src', 'helper.js'), 'export const helper = true;\n');
+  sh('git', ['add', 'M1/src/helper.js'], f.checkout); sh('git', ['commit', '-q', '-m', 'shared helper'], f.checkout);
+  f.rt.refreshCodegraph = async () => ({ name: 'codegraph', skipped: 'test' });
+  const syncing = f.rt.worktree({ action: 'sync', backlogItemKey: f.key }).then(r => { order.push('synced'); return r; });
+  await new Promise(r => setTimeout(r, 50));
+  assert.deepEqual(order, [], 'sync is held while setup writes the worktree');
+  order.push('setup done'); release({ ok: true });
+  assert.equal((await syncing).synced, true);
+  assert.deepEqual(order, ['setup done', 'synced']);
+});
+
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {
   const f = fixture(), shot = join(f.dir, 'evidence', 'final.png'); writeFileSync(shot, 'png');
   const head = sh('git', ['rev-parse', 'HEAD'], f.wt.worktreeRoot), snapshot = await f.rt.workflow.snapshot(f.key);

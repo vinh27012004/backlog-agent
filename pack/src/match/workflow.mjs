@@ -75,6 +75,28 @@ export function itemSkills(type, stack) {
     stackNotes: `.agents/skills/stack-notes/${STACK_NOTES.includes(s) ? s : 'unknown'}.md` };
 }
 
+// Khối <environment> của brief: trạng thái job setup của worktree lúc prepare xong (fixer được spawn không chờ nó).
+// TASK chỉ trả lời không có node_modules trong worktree; derive.mjs của TASK-04 (CA3WKX60, EIOR38SI) nạp typescript của
+// dự án để transpile source: nạp từ checkout chính (setup_environment đã cài), không cài gì thêm.
+export function environmentText(setup, mainAppRoot = null) {
+  if (!setup?.jobId) return null;
+  if (setup.skipped) {
+    return [`No dependencies, database or app were set up in this worktree (${setup.skipped}). Answer from the source, the`,
+      'materials and company data with plain node scripts. Do not install, build, test or start the app.',
+      ...(mainAppRoot ? ['A script that needs a project package (typescript to transpile a source file, for example) loads it from the',
+        `main checkout, which is installed: createRequire(${JSON.stringify(join(mainAppRoot, 'package.json'))}). Read the item's source`,
+        'from this worktree; never write, install or run anything in the main checkout.'] : [])].join('\n');
+  }
+  if (setup.state === 'done') return `Dependency setup (install, generate, migrate, seed of this item's database) is done: job ${setup.jobId}.`;
+  return [`Dependency setup (install, generate, migrate, seed of this item's own database) is still running as job ${setup.jobId}.`,
+    'Read this brief, the skills and the code now; the setup usually needs 30-90 s more. Before your first build,',
+    'typecheck, test, migration, seed, script that imports a project package, or app start, call',
+    `job_status {jobId: "${setup.jobId}", waitSeconds: 110} (start that exec with // @exec: {"yield_time_ms": 120000})`,
+    'and repeat while state is running. state done with result.ok true: go on. state failed or result.ok false (it',
+    'already retried once): call worker_checkpoint blocked with the failure text. Never install, generate or migrate',
+    'yourself while the job runs: it writes the same node_modules and database.'].join('\n');
+}
+
 export class Workflow {
   constructor(runtime) { this.rt = runtime; this.publishOwner = null; }
   item(key) {
@@ -122,10 +144,11 @@ export class Workflow {
         // Dữ liệu công ty lấy song song với dựng worktree (C): test data của item, chuẩn nội bộ theo đề.
         const facts = r.prefetchCompany(key).catch(() => []);
         const worktree = await r.worktree({ action: 'create', backlogItemKey: key });
+        // Không chờ install/generate/migrate/seed: fixer đọc brief, skill và code trong lúc đó, và chờ job setup (khối
+        // <environment> của brief) trước lần build/test/app đầu tiên. EIOR38SI: helper thấy → fixer bắt đầu trung bình
+        // 1m24s, setup chiếm 45–105 s. Job setup đã hỏng sẵn (worktree dựng trước giờ) thì vẫn báo như cũ.
         const setup = await r.jobs.settle(worktree.setupJobId, 0);
-        if (setup?.state === 'running') await r.jobs.jobs.get(worktree.setupJobId).promise;
-        const done = r.jobs.view(r.jobs.jobs.get(worktree.setupJobId));
-        if (done.state === 'failed' || done.result?.ok === false) fail('SETUP_FAILED', done.error?.message ?? done.result?.failure ?? 'worktree setup failed');
+        if (setup?.state === 'failed' || setup?.result?.ok === false) fail('SETUP_FAILED', setup.error?.message ?? setup.result?.failure ?? 'worktree setup failed');
         const template = r.itemTemplate(key);
         ji.verificationKind = r.answerOnlyItem(key) && !Array.isArray(template?.testResults) ? 'answer_only'
           : r.itemMvs(key) ? 'mvs' : 'acceptance';
@@ -142,7 +165,7 @@ export class Workflow {
           for (const f of companyFacts) if (existsSync(f.savedTo)) copyFileSync(f.savedTo, join(worktree.evidenceDir, basename(f.savedTo)));
         }
         const out = { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, reportOnly,
-          worktree, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
+          worktree, setup: setup ? { jobId: setup.jobId, state: setup.state, skipped: setup.result?.skipped ?? null } : null, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), companyFacts, resultsDir: join(r.session.paths.teamWork, 'results'),
           knowledgeHints: ji.signals?.kb ?? null,
           fixResultFile: this.nextResultFile(key),
@@ -219,6 +242,12 @@ export class Workflow {
       message: `You are the team_fixer for ${key}. Your complete brief is ${out.briefFile}: read it first, then follow your instructions. `
         + `Hand off to ${out.fixResultFile} by ${out.timeBox?.returnBy ?? 'return_by'} UTC.` };
   }
+  // Thư mục app của checkout chính có node_modules (null khi chưa cài hay không nhận ra stack).
+  mainAppRoot() {
+    const matchRoot = this.rt.session.paths?.matchRoot;
+    const root = matchRoot ? detectProfile(matchRoot).root : null;
+    return root && existsSync(join(root, 'node_modules')) ? root : null;
+  }
   // B: brief cho worker, đủ những gì root từng chép tay vào lời spawn.
   writeBrief(key, s) {
     const r = this.rt, raw = s.item ?? {}, wt = s.worktree ?? {}, tb = s.timeBox ?? {};
@@ -234,6 +263,7 @@ export class Workflow {
         ...(wt.issuedRevision ? [`issuedRevision: ${wt.issuedRevision}`] : []), ...(wt.baseRevision ? [`baseRevision: ${wt.baseRevision}`] : []),
         `results_path: ${s.fixResultFile}`].join('\n')),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
+      ...(s.reportOnly ? [] : block('environment', environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null))),
       ...(s.reportOnly ? [] : block('skills', [s.skills?.item, s.skills?.stackNotes].filter(Boolean).join('\n'))),
       ...(s.reportOnly ? [] : block('profile', s.profile ?? null)),
       ...block('materials', [`dir: ${s.materialsDir ?? r.itemDir(key)}`, ...['template.json', 'mvs.json', 'requirements.json', 'start.json'].map(files).filter(Boolean),

@@ -125,7 +125,7 @@ lời gọi trả tối đa 20 dòng và không có limit/offset, viết derive.
 giao → root gọi publish_item 10 s, publish 8 s. Sửa:
 - `reportOnlyPI(key)` (PI và `answerOnlyText`): `createWorktree` chỉ tạo worktree git, job worktree_setup trả ngay
   `skipped: 'report-only PI'`, không index codegraph. Áp dụng cả cho worktree dựng sẵn trước START_GAME. TASK chỉ trả
-  lời vẫn cài như cũ (derive.mjs của TASK có thể import source của dự án).
+  lời: từ 04/11 (sau EIOR38SI) cũng bỏ setup, xem mục "Spawn fixer không chờ setup".
 - `prefetchCompany` của PI (khi search_logs có tham số `service`) gọi thêm `harvestLogs`: lấy tên service từ lời gọi
   không lọc, từ danh sách service trong KB ("service name exactly as it appears in logs: web, api, …") và từ tên có gạch
   nối trong đề/KB (tối đa 24), gọi song song `{service, query: ''}`, lưu service có dòng (`saveFact`, như company_lookup),
@@ -177,6 +177,27 @@ test gốc vẫn hỏng ở mọi commit sau đó. Sửa:
 - Item bắt đầu sau khi bản sửa lên main nhận `baselineFailures.fixedOnMain`; không giao chủ mới khi bản sửa đang chờ.
 - `worker_checkpoint candidate` chặn (không còn chỉ cảnh báo) mọi thay đổi ở file test BTC phát (`issued tests
   changed`); file test mới của item vẫn được.
+
+## Spawn fixer không chờ setup, TASK chỉ trả lời không cài gì (04/11, sau EIOR38SI)
+
+EIOR38SI: helper thấy → fixer bắt đầu trung bình 1m24s. Ngoài đợt đầu (36 s chờ root xử lý START_GAME), phần lớn là
+prepare chờ job worktree_setup: install 25–46 s (link 360 package dù "downloaded 0"; chậm hơn khi 3 item ra cùng phút),
+prisma generate 6–18 s, migrate 6–12 s, seed 5–11 s, chạy nối tiếp; prepare tổng 54–105 s, rồi root spawn thêm 4–25 s.
+Phút đầu fixer chỉ đọc brief, skill và code, chưa cần dependency. TASK-03/04 (Form A, không build/test/app) chờ setup
+71–80 s mà không dùng bước nào. Sửa:
+- `prepare` không chờ job setup nữa: xong khi có worktree, index codegraph, dữ liệu công ty và brief; kết quả mang
+  `setup {jobId, state, skipped}`. Job setup đã hỏng sẵn (worktree dựng trước giờ) thì vẫn `SETUP_FAILED` như cũ.
+- Brief có khối `<environment>`: setup đang chạy thì ghi job id và bảo fixer gọi `job_status {jobId, waitSeconds: 110}`
+  trước lần build/typecheck/test/migrate/seed/app đầu tiên, lặp khi còn running; failed thì `worker_checkpoint blocked`;
+  không tự install/generate/migrate khi job đang chạy. `team-fixer.toml` nhắc khối này.
+- Job setup tự chạy lại một lần khi lỗi (`retriedAfter`): không còn prepare_item hỏng để root thử lại.
+- `worktree sync` chờ job setup đang chạy của item trước khi reset worktree hay cài lại.
+- `answerOnlyTask(key)` (TASK, `answerOnlyText`, template không có `testResults`): `createWorktree` không install,
+  generate, migrate, seed (job trả `skipped: 'answer-only TASK'`), vẫn index codegraph. Brief nói không cài, build, test
+  hay chạy app, và chỉ `createRequire("<app của checkout chính>/package.json")` để nạp package dự án (derive.mjs của
+  TASK-04 nạp typescript để transpile source) khi checkout chính đã có node_modules.
+- Ước tính: BUG/CR từ helper thấy tới fixer bắt đầu còn khoảng 25–40 s (git worktree, codegraph, brief, một lượt spawn
+  của root); TASK chỉ trả lời khoảng 20–30 s. Đo lại bằng bench sau trận kế ("· helper thấy → thợ bắt đầu").
 
 ## Evidence và recovery
 
