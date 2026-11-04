@@ -71,6 +71,8 @@ const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{
 // Đề / MVS đòi chạy cả bộ test hiện có (Practice #6: BUG-02-TC-04 "pnpm test exits 0 with no failed test").
 const NEEDS_SUITE = /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test\b|existing tests?\b|test suite|full suite|all tests|\bmvn\b[^\n"]*\btest\b|gradlew?\b[^\n"]*\btest\b|\bpytest\b|\bgo test\b|\bdotnet test\b|phpunit/i;
 const typeOf = key => String(key).split('-')[0].toUpperCase();
+// Nhịp poll đọc từ runtime.json (ms), ngoài 50–10 000 thì dùng mặc định.
+const pollMs = (value, fallback) => { const n = Number(value); return Number.isFinite(n) && n >= 50 && n <= 10_000 ? n : fallback; };
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const str = description => ({ type: 'string', description });
@@ -80,7 +82,8 @@ const bool = description => ({ type: 'boolean', description });
 // Mốc ra đề ghi trong README của thư mục trận (Practice HIET12OA: "Game Master releases briefs at minutes 0, 14 and 29").
 export function parseReleaseMinutes(text) {
   const s = String(text ?? '');
-  const m = s.match(/\b(?:releases?|reveals?|publish(?:es)?|opens?)\b[^.\n]{0,60}?\bat minutes?\s+(\d+(?:\s*(?:,|and|&)\s*\d+)*)/i)
+  // Bộ 10 item (CA3WKX60): "ten backlog items released in four waves (minutes 0, 8, 12 and 20)", không có "at".
+  const m = s.match(/\b(?:releas(?:e|es|ed)|reveal(?:s|ed)?|publish(?:es|ed)?|opens?)\b[^.\n]{0,60}?\b(?:at\s+)?minutes?\s+(\d+(?:\s*(?:,|and|&)\s*\d+)*)/i)
     ?? s.match(/(?:đề|item|brief)[^.\n]{0,40}?(?:mở|ra|hiện)[^.\n]{0,20}?phút\s+(\d+(?:\s*(?:,|và)\s*\d+)*)/i);
   if (!m) return null;
   const minutes = [...new Set([...m[1].matchAll(/\d+/g)].map(x => Number(x[0])).filter(n => n < 600))].sort((a, b) => a - b);
@@ -113,6 +116,8 @@ export class Runtime {
     this.gm = new GameMaster({ session: this.session, http: this.http, progress: () => this.progress });
     this.company = new CompanyTools({ session: this.session, http: this.http });
     this.poller = null;
+    this.preGame = null;          // poll trước START_GAME (startPreGameWatch)
+    this.prewarming = new Map();  // key → promise dựng sẵn worktree trước START_GAME
     this.closingWarned = new Set();
     this.resultWarned = new Set();
     this.configuredAt = 0;
@@ -483,9 +488,11 @@ export class Runtime {
     if (!revision) fail('NOT_READY', 'no prepared revision');
     const d = this.session.descriptor;
     const event = { type: 'ENVIRONMENT_READY', requestId: d.requestId, repository: { ...d.repository }, revision, build: 'PASS', matchLogin: 'PASS' };
-    if (st.environmentReady === JSON.stringify([event.requestId, event.repository, event.revision])) return { written: false, revision, already: true };
+    if (st.environmentReady === JSON.stringify([event.requestId, event.repository, event.revision])) {
+      return { written: false, revision, already: true, preGameWatch: this.startPreGameWatch() };
+    }
     this.progress.write(event);
-    return { written: true, revision, next: 'End the PREPARE turn now with a one-line summary.' };
+    return { written: true, revision, preGameWatch: this.startPreGameWatch(), next: 'End the PREPARE turn now with a one-line summary.' };
   }
 
   // ------------------------------------------------------------------ trong trận
@@ -509,7 +516,8 @@ export class Runtime {
       const old = before.get(item.key);
       // releasedAtServer: giờ ra đề theo đồng hồ server (updatedAt của bản đầu), để bench đo từ lúc đề ra chứ không từ
       // lúc helper thấy (đợt đầu BTZNI69E: 41 s khởi động root nằm giữa hai mốc này).
-      if (game) { const ji = this.journal?.item(item.key); if (ji && !ji.discoveredAt) { ji.discoveredAt = new Date().toISOString(); if ((item.revisionNo ?? 1) <= 1 && item.raw?.updatedAt) ji.releasedAtServer = item.raw.updatedAt; if (Number.isFinite(item.raw?.revealedElapsedSec)) ji.revealedElapsedSec = item.raw.revealedElapsedSec; this.journal.save(); } }
+      // seenAt: lần đầu helper thấy đề, kể cả trước START_GAME (notePreGame); discoveredAt: lúc ghi DISCOVERED trong GAME.
+      if (game) { const ji = this.journal?.item(item.key); if (ji && !ji.discoveredAt) { ji.discoveredAt = new Date().toISOString(); ji.seenAt ??= ji.discoveredAt; if ((item.revisionNo ?? 1) <= 1 && item.raw?.updatedAt) ji.releasedAtServer ??= item.raw.updatedAt; if (Number.isFinite(item.raw?.revealedElapsedSec)) ji.revealedElapsedSec ??= item.raw.revealedElapsedSec; this.journal.save(); } }
       if (!old) this.events.push('ITEM_NEW', { key: item.key, itemType: item.type, title: item.title, minutesLeft: this.gm.itemMinutesLeft(item), points: item.points });
       else {
         if (old.status !== item.status) this.events.push(item.status === 'CLOSED' ? 'ITEM_CLOSED' : 'ITEM_STATUS', { key: item.key, status: item.status });
@@ -899,6 +907,35 @@ export class Runtime {
     return existsSync(join(this.wtPaths(key).worktreeRoot, '.git'));
   }
 
+  // Tạo worktree của item (git), rồi cài dependency (job) chạy cùng lúc với index codegraph, như setup_environment của
+  // checkout chính (index chỉ đọc source, vài giây). Index vẫn xong trước khi trả về: fixer gọi codegraph lên worktree
+  // chưa index thì bị bảo thôi dùng cả phiên. Không đụng Game Master nên chạy được cả trước START_GAME (prewarmWorktree).
+  async createWorktree(key) {
+    const { checkoutRoot, matchRoot, teamWork } = this.session.paths;
+    const wt = this.wtPaths(key);
+    const ji = this.journal.item(key);
+    if (!this.liveWorktree(key)) {
+      if (existsSync(wt.worktreeRoot)) {
+        rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
+      }
+      let base = await revParse(checkoutRoot);
+      if (this.answerOnlyItem(key) && this.journal?.data?.initialRevision) {
+        base = this.journal.data.initialRevision;
+      }
+      // node_modules của pnpm vượt 260 ký tự dưới .team-work/wt/<ID>/: không có longpaths thì git status/diff hỏng.
+      if (process.platform === 'win32') await git(['config', 'core.longpaths', 'true'], { cwd: checkoutRoot, allowFail: true });
+      await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
+      await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
+      forgetBuild(this.teamWorkspace, detectProfile(wt.matchRoot).root);   // worktree mới chưa có bản build nào
+      ji.worktreeBase = base;
+    }
+    const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
+      mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
+    const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
+      logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
+    return { job, codegraph };
+  }
+
   async worktree({ action, backlogItemKey: key, message }) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -912,21 +949,12 @@ export class Runtime {
         mainHead: await revParse(checkoutRoot), setupJob: ji.worktreeSetupJob ?? null };
     }
     if (action === 'create') {
-      if (!this.liveWorktree(key)) {
-        if (existsSync(wt.worktreeRoot)) {
-          rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
-        }
-        let base = await revParse(checkoutRoot);
-        if (this.answerOnlyItem(key) && this.journal?.data?.initialRevision) {
-          base = this.journal.data.initialRevision;
-        }
-        // node_modules của pnpm vượt 260 ký tự dưới .team-work/wt/<ID>/: không có longpaths thì git status/diff hỏng.
-        if (process.platform === 'win32') await git(['config', 'core.longpaths', 'true'], { cwd: checkoutRoot, allowFail: true });
-        await git(['branch', '-f', wt.branch, base], { cwd: checkoutRoot });
-        await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
-        forgetBuild(this.teamWorkspace, detectProfile(wt.matchRoot).root);   // worktree mới chưa có bản build nào
-        ji.worktreeBase = base;
-      }
+      // Worktree dựng sẵn trước START_GAME (prewarmWorktree): dùng lại job setup và index của nó thay vì chạy lại.
+      const warm = await this.prewarming.get(key)?.catch(() => null);
+      let job = warm && this.liveWorktree(key) ? this.jobs.jobs.get(warm.jobId) : null;
+      if (job?.state === 'failed') job = null;
+      let codegraph = job ? warm.codegraph : null;
+      if (!job) ({ job, codegraph } = await this.createWorktree(key));
       // Template của Start Work → answers/<ID>/submit.json trong worktree (nếu chưa có).
       const template = join(this.itemDir(key), 'template.json');
       const wtAnswer = join(wt.matchRoot, 'answers', key);
@@ -935,13 +963,6 @@ export class Runtime {
         const value = JSON.parse(readFileSync(template, 'utf8'));
         if (value && typeof value === 'object') writeFileSync(join(wtAnswer, 'submit.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8');
       }
-      // Cài dependency (job) chạy cùng lúc với index codegraph, như setup_environment của checkout chính (index chỉ đọc
-      // source, vài giây). Index vẫn xong trước khi trả về: fixer gọi codegraph lên worktree chưa index thì bị bảo thôi
-      // dùng cả phiên.
-      const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
-        mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
-      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
-        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
       ji.worktreeSetupJob = job.id;
       j.save();
       // issuedRevision: bản BTC phát lúc clone. Worktree tạo sau khi item khác đã lên main mang theo test đã sửa của
@@ -1487,9 +1508,20 @@ export class Runtime {
   }
 
   // ------------------------------------------------------------------ poller nền (05 §6)
+  // Trong cửa sổ quanh mốc ra đề thì poll releasePollMs; trước cửa sổ thì hẹn đúng lúc cửa sổ mở.
   pollDelay(base) {
+    if (this.releaseWindow()) return pollMs(this.runtimeConfig().releasePollMs, 250);
     const at = Date.parse(this.releases()?.next?.at);
-    return Number.isFinite(at) && at > Date.now() ? Math.min(base, Math.max(250, at - Date.now() + 250)) : base;
+    return Number.isFinite(at) && at > Date.now() ? Math.min(base, Math.max(50, at - Date.now() - 1000)) : base;
+  }
+
+  // Server cho đề hiện khoảng 1 s sau mốc phút trong README (CA3WKX60: revealedElapsedSec 481, 721, 1201) và feed có
+  // thể chưa báo: từ 1 s trước tới 20 s sau mỗi mốc, poller đọc thẳng trang trận (không ghi log) thay vì hỏi feed
+  // (CA3WKX60 đợt phút 20: helper thấy đề muộn 4,3 s so với đợt phút 12).
+  releaseWindow() {
+    const minutes = this.releases()?.minutes;
+    const elapsed = this.gm.elapsedSec();
+    return Boolean(minutes && elapsed !== null && minutes.some(m => elapsed >= m * 60 - 1 && elapsed <= m * 60 + 20));
   }
 
   startPoller() {
@@ -1499,8 +1531,9 @@ export class Runtime {
       const view = this.gm.view;
       if (!view || TERMINAL.has(view.status)) return;
       try {
-        if (await this.gm.feedChanged()) {
-          const next = await this.gm.fetchMatch({ optional: true });
+        const fast = this.releaseWindow();
+        if (fast || await this.gm.feedChanged()) {
+          const next = await this.gm.fetchMatch({ optional: true, log: !fast });
           this.absorb(next);
         }
         this.warnClosing();
@@ -1516,6 +1549,73 @@ export class Runtime {
     };
     this.poller = setTimeout(tick, this.pollDelay(1_000));
     this.poller.unref?.();
+  }
+
+  // Sau ENVIRONMENT_READY, trước START_GAME: helper đọc trang trận mỗi preGamePollMs (không ghi log). Đề hiện thì ghi
+  // seenAt và dựng sẵn worktree, nhưng không Start Work và không ghi DISCOVERED: lúc chuẩn bị không bắt đầu backlog
+  // (03 §2.1), API key chỉ có trong frame START_GAME. CA3WKX60: đề ra 08:24:42, root đọc skill rồi mới gọi
+  // configure_session lúc 08:25:14; prepare (worktree, install, generate, codegraph) thêm 33–36 s mới spawn được fixer.
+  // Tắt: "preGameWatch": false; không dựng sẵn worktree: "prewarmWorktrees": false (local/runtime.json).
+  startPreGameWatch() {
+    if (this.preGame) return true;
+    if (this.runtimeConfig().preGameWatch === false || this.session.phase !== 'PREPARE' || !this.journal) return false;
+    const tick = async () => {
+      this.preGame = null;
+      if (this.session.phase !== 'PREPARE') return;   // GAME: poller của refreshMatch làm tiếp
+      try {
+        const view = await this.gm.fetchMatch({ optional: true, log: false });
+        if (TERMINAL.has(view.status)) return;
+        this.notePreGame(view);
+        this.preGameError = null;
+      } catch (error) {
+        this.preGameError = oneLine(`${error.code ?? 'ERROR'}: ${error.message ?? error}`, 160);
+      }
+      if (this.session.phase !== 'PREPARE') return;
+      this.preGame = setTimeout(tick, pollMs(this.runtimeConfig().preGamePollMs, 500));
+      this.preGame.unref?.();
+    };
+    this.preGame = setTimeout(tick, 0);
+    this.preGame.unref?.();
+    return true;
+  }
+
+  notePreGame(view) {
+    const j = this.journal;
+    if (!j) return;
+    const cfg = this.runtimeConfig();
+    let changed = false;
+    for (const item of view.items) {
+      if (!isKey(item.key) || item.status === 'CLOSED') continue;
+      const ji = j.item(item.key);
+      if (!ji.seenAt) {
+        ji.seenAt = new Date().toISOString();
+        if ((item.revisionNo ?? 1) <= 1 && item.raw?.updatedAt) ji.releasedAtServer = item.raw.updatedAt;
+        if (Number.isFinite(item.raw?.revealedElapsedSec)) ji.revealedElapsedSec = item.raw.revealedElapsedSec;
+        const dir = this.itemDir(item.key);
+        mkdirSync(dir, { recursive: true });
+        writeFileAtomic(join(dir, 'page.json'), `${JSON.stringify(item.raw, null, 2)}\n`);
+        changed = true;
+      }
+      if (cfg.prewarmWorktrees !== false && !this.prewarming.has(item.key) && this.prewarming.size < cfg.maxItemsInFlight
+        && !this.liveWorktree(item.key)) this.prewarmWorktree(item.key);
+    }
+    if (changed) j.save();
+  }
+
+  prewarmWorktree(key) {
+    const ji = this.journal.item(key);
+    const run = (async () => {
+      const at = new Date().toISOString();
+      const { job, codegraph } = await this.createWorktree(key);
+      ji.prewarm = { at, jobId: job.id };
+      this.journal.save();
+      return { jobId: job.id, codegraph };
+    })();
+    run.catch(error => {
+      ji.prewarm = { failed: oneLine(`${error.code ?? 'ERROR'}: ${error.message ?? error}`, 200) };
+      this.journal.save();
+    });
+    this.prewarming.set(key, run);
   }
 
   warnClosing() {

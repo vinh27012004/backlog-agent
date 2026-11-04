@@ -1,5 +1,9 @@
 {
   "maxItemsInFlight": 5,
   "autoPrepare": true,
-  "bootOnConfigure": true
+  "bootOnConfigure": true,
+  "preGameWatch": true,
+  "prewarmWorktrees": true,
+  "preGamePollMs": 500,
+  "releasePollMs": 250
 }

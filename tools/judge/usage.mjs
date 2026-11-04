@@ -197,6 +197,8 @@ export function credits(tokens, model, serviceTier = 'default') {
 const dec = (n, d = 1) => n.toFixed(d).replace('.', ',');
 const tok = n => (n >= 1e6 ? `${dec(n / 1e6)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
 const pct = (a, b) => (b ? `${dec((100 * a) / b)}%` : '—');
+// Dưới 10 s ghi theo ms (đề ra → helper thấy, đích là mức ms).
+const durFine = ms => (Number.isFinite(ms) && Math.abs(ms) < 10_000 ? `${Math.round(ms)} ms` : dur(ms));
 const dur = ms => { if (ms === null || ms === undefined) return '—'; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`; };
 const hhmm = t => (Number.isFinite(t) ? `${new Date(t).toISOString().slice(11, 19)}Z` : '—');
 const cr = n => (n === null ? '—' : dec(n, 2));
@@ -230,7 +232,7 @@ export function releaseTimes(teamWork, journal) {
     const page = readJson(join(teamWork, 'items', key, 'page.json')) ?? {};
     const elapsed = Number.isFinite(ji.revealedElapsedSec) ? ji.revealedElapsedSec : Number.isFinite(page.revealedElapsedSec) ? page.revealedElapsedSec : null;
     const server = Date.parse(ji.releasedAtServer ?? ((page.revisionNo ?? 1) <= 1 ? page.updatedAt : undefined));
-    return { key, elapsed, server: Number.isFinite(server) ? server : null, seen: Date.parse(ji.discoveredAt) };
+    return { key, elapsed, server: Number.isFinite(server) ? server : null, seen: Date.parse(ji.seenAt ?? ji.discoveredAt) };
   });
   const known = rows.filter(x => x.server !== null && x.elapsed !== null);
   const start = known.length ? Math.min(...known.map(x => x.server - x.elapsed * 1000)) : null;
@@ -303,7 +305,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     const start = Date.parse(ji.startedAt);
     const end = Date.parse(ji.endedAt ?? ji.receipt?.receivedAt);
     items[key] = { outcome: ji.outcome ?? (ji.receipt ? 'SUBMITTED' : ji.startedAt ? 'NOT_SUBMITTED' : 'NOT_STARTED'),
-      releasedAt: release.items[key] ?? null, discoveredAt: ji.discoveredAt ?? null,
+      releasedAt: release.items[key] ?? null, discoveredAt: ji.discoveredAt ?? null, seenAt: ji.seenAt ?? ji.discoveredAt ?? null,
       startedAt: ji.startedAt ?? null, endedAt: ji.endedAt ?? ji.receipt?.receivedAt ?? null,
       ms: Number.isFinite(start) && Number.isFinite(end) ? end - start : null, attempts: ji.attempts ?? 0,
       gates: ji.gateHistory?.length ?? gateJobs(key), jobs, phases, dispatchMs: ji.dispatchMs ?? null, fixer: role('team_fixer'), reviewer: role('team_reviewer'),
@@ -373,7 +375,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
       `${(release.skewMs / 1000).toFixed(1).replace('.', ',')} s từ ${release.polled} item poller thấy) tới lúc helper thấy. ` +
       'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint; các hoạt động song song không cộng thành thời gian toàn trận.', '',
     table(['Item', 'Đề ra → thấy', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Publish'], Object.entries(items).map(([key, x]) =>
-      [key, x.releasedAt && x.discoveredAt ? dur(Date.parse(x.discoveredAt) - Date.parse(x.releasedAt)) : '—', dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
+      [key, x.releasedAt && x.seenAt ? durFine(Date.parse(x.seenAt) - Date.parse(x.releasedAt)) : '—', dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
     '', '## Root: lượt gọi model đến sau việc gì', '',
     `Context lớn nhất của root: ${tok(Math.max(0, ...rootThreads.map(t => t.maxContext)))}. Mỗi lượt gọi model được tính cho tool vừa trả kết quả ` +
       '(`message` = tin nhắn của Player hoặc agent khác); `exec` được tách theo tool bên trong.', '',

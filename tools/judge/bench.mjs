@@ -13,6 +13,8 @@ const SUBMITTED = r => r?.outcome === 'SUBMITTED';
 const fin = v => Number.isFinite(v);
 const sum = xs => xs.filter(fin).reduce((a, b) => a + b, 0);
 const mean = xs => { const ok = xs.filter(fin); return ok.length ? sum(ok) / ok.length : null; };
+// Dưới 10 s ghi theo ms (đề ra → helper thấy, đích là mức ms).
+const durFine = ms => (fin(ms) && Math.abs(ms) < 10_000 ? `${Math.round(ms)} ms` : dur(ms));
 const dur = ms => { if (!fin(ms)) return '—'; const s = Math.round(Math.abs(ms) / 1000); return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`; };
 const mtok = n => (fin(n) ? `${(n / 1e6).toFixed(1)}M` : '—');
 const num = d => n => (fin(n) ? n.toFixed(d) : '—');
@@ -53,7 +55,7 @@ const MATCH_METRICS = [
     return ends.length && fin(m.from) ? Math.max(...ends) - m.from : null; }, fmt: dur, better: 'low', time: true },
   { label: 'TB thời gian item đã nộp', get: m => mean(m.items.filter(SUBMITTED).map(r => r.ms)), fmt: dur, better: 'low', time: true },
   { label: 'TB đề ra → thợ bắt đầu', get: m => meanOf(m, 'pickupMs'), fmt: dur, better: 'low', time: true },
-  { label: '· đề ra → helper thấy', get: m => meanOf(m, 'noticeMs'), fmt: dur, better: 'low', time: true },
+  { label: '· đề ra → helper thấy', get: m => meanOf(m, 'noticeMs'), fmt: durFine, better: 'low', time: true },
   { label: '· helper thấy → thợ bắt đầu', get: m => meanOf(m, 'seenPickupMs'), fmt: dur, better: 'low', time: true },
   { label: 'TB code/test', get: m => mean(m.items.filter(SUBMITTED).map(r => r.codeMs)), fmt: dur, better: 'low', time: true },
   { label: 'TB evidence', get: m => mean(m.items.filter(SUBMITTED).map(r => r.evidenceMs)), fmt: dur, better: 'low', time: true },
@@ -78,7 +80,7 @@ function delta(now, then, { fmt, better, time }) {
   const pct = then ? (d / Math.abs(then)) * 100 : null;
   const sign = d > 0 ? '+' : '−';
   const mark = pct !== null && Math.abs(pct) < 5 ? '' : (better === 'low' ? d < 0 : d > 0) ? ' ✓' : ' ✗';
-  const value = time ? dur(d) : fmt(Math.abs(d));
+  const value = time ? (fmt === durFine ? durFine(Math.abs(d)) : dur(d)) : fmt(Math.abs(d));
   return `${sign}${value}${pct === null ? '' : ` (${sign}${Math.abs(pct).toFixed(0)}%)`}${mark}`;
 }
 

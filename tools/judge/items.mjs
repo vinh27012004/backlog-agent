@@ -86,7 +86,7 @@ export function itemFlags(r) {
 
 function pickup(u, fixers) {
   const released = Date.parse(u.releasedAt);
-  const seen = Date.parse(u.discoveredAt ?? '') || (u.startedAt && Number.isFinite(u.dispatchMs) ? Date.parse(u.startedAt) - u.dispatchMs : NaN);
+  const seen = Date.parse(u.seenAt ?? u.discoveredAt ?? '') || (u.startedAt && Number.isFinite(u.dispatchMs) ? Date.parse(u.startedAt) - u.dispatchMs : NaN);
   const worker = fixers.length ? Math.min(...fixers.map(t => t.start ?? Infinity)) : NaN;
   const span = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? b - a : null);
   return { noticeMs: span(released, seen), pickupMs: span(released, worker), seenPickupMs: span(seen, worker) };

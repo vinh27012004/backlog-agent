@@ -9,6 +9,9 @@ const near = (iso, ms, slack = 5_000) => assert.ok(Math.abs(Date.parse(iso) - ms
 test('release minutes come from the match README', () => {
   assert.deepEqual(parseReleaseMinutes('Duration: 40 minutes. Keep exam-info.json unchanged. Answers begin empty; Game Master releases '
     + 'briefs at minutes 0, 14 and 29 and supplies submission templates when each backlog starts.'), [0, 14, 29]);
+  // Bộ 10 item (CA3WKX60) không có "at": trước đây trả null, poller không biết mốc ra đề.
+  assert.deepEqual(parseReleaseMinutes('Duration: 40 minutes, ten backlog items released in four waves (minutes 0, 8, 12 and 20). '
+    + 'Some items have their own short deadline from their release; Game Master closes them when it passes.'), [0, 8, 12, 20]);
   assert.deepEqual(parseReleaseMinutes('trận 40 phút; đề mở ở phút 0, 14, 29'), [0, 14, 29]);
   assert.equal(parseReleaseMinutes('Duration: 40 minutes. Submit source changes and answers.'), null);
   assert.equal(parseReleaseMinutes(undefined), null);

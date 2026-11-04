@@ -92,6 +92,30 @@ chạy nối đuôi (BUG-01 chờ 30 s); worktree xong rồi root còn job_statu
   `page.json`. Bench có "TB đề ra → thợ bắt đầu" (từ giờ ra), "· đề ra → helper thấy", "· helper thấy → thợ bắt đầu"
   và cột "Đề ra → thợ" theo item. Trận không còn checkout chỉ có đoạn helper thấy → thợ.
 
+## Thấy đề sớm: poll trước START_GAME, worktree dựng sẵn, poll nhanh quanh mốc ra đề (04/11, sau CA3WKX60)
+
+Timeline CA3WKX60, đợt đầu: report_ready 08:24:31, đề ra 08:24:42, root nhận START_GAME, đọc skill orchestrator rồi mới
+gọi configure_session lúc 08:25:14; helper thấy đề 38 s sau giờ ra, prepare thêm 33–36 s (install khoảng 20 s, prisma
+generate 14 s, codegraph 12 s, migrate + seed 7 s), root spawn sau khoảng 6 s nữa. Đợt phút 20 helper thấy muộn 4,3 s:
+README bộ 10 item viết "released in four waves (minutes 0, 8, 12 and 20)", `parseReleaseMinutes` đòi chữ "at" nên
+poller không biết mốc nào, chỉ hỏi feed mỗi giây. Server cho đề hiện khoảng 1 s sau mốc phút (`revealedElapsedSec`
+481, 721, 1201). Sửa:
+- `report_ready` bật `startPreGameWatch`: trong phase PREPARE helper đọc trang trận mỗi `preGamePollMs` (500). Đề hiện
+  thì ghi `ji.seenAt`, `releasedAtServer`, `revealedElapsedSec`, `page.json` và dựng sẵn worktree (`prewarmWorktree`:
+  git, job worktree_setup, index codegraph; tối đa maxItemsInFlight item). Không Start Work, không DISCOVERED (03 §2.1;
+  API key chỉ có trong frame START_GAME). Sang GAME thì vòng này dừng, poller của refreshMatch làm tiếp.
+- `worktree create` (trong prepare_item) chờ worktree dựng sẵn và dùng lại job setup cùng kết quả codegraph của nó;
+  job hỏng hay worktree mất thì dựng lại như cũ. Phần git + setup + index tách thành `createWorktree`.
+- Poller GAME: từ 1 s trước tới 20 s sau mỗi mốc ra đề (`releaseWindow`) đọc thẳng trang trận mỗi `releasePollMs` (250)
+  thay vì hỏi feed; ngoài cửa sổ hẹn tick đúng lúc cửa sổ mở. `parseReleaseMinutes` nhận cả "released ... (minutes …)".
+- Poll nhanh dùng `fetchMatch({ log: false })`: như feed, chỉ networkActivity, không GAME_MASTER_API (hai dòng khoảng
+  600 byte mỗi lần, trần log 230 KB).
+- Tắt: `"preGameWatch": false`, `"prewarmWorktrees": false`; chỉnh nhịp `preGamePollMs`, `releasePollMs` (50–10 000 ms).
+  Nhanh hơn `pollActiveMs` 2000 của UI: theo dõi 429 hay cảnh báo của BTC.
+- Đo: `usage.mjs` và `items.mjs` lấy giờ thấy từ `seenAt` (trước đây `discoveredAt`, lúc ghi DISCOVERED); "đề ra → helper
+  thấy" dưới 10 s ghi theo ms. Đích: đợt đầu dưới 1 s; helper thấy → thợ bắt đầu chỉ còn Start Work, brief và một lượt
+  spawn của root (khoảng 6–10 s; root phải gọi spawn_agent nên không xuống mức ms).
+
 ## Evidence và recovery
 
 download nằm cùng capture_evidence/profile/login; listener trước click, chờ completed HTTP/Blob localhost, tối đa 5MB,
