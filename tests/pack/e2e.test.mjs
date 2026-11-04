@@ -114,6 +114,12 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
     const game = await client.call('configure_session', { frame: start.followup.message });
     assert.equal(game.phase, 'GAME');
     assert.ok(game.submissionPolicy.canonicalSubmitFile.endsWith('answers/<BACKLOG-ID>/submit.json'));
+    // configure_session GAME tự login, đọc backlog và bật poller: root đi thẳng vào wait_for_update (BTZNI69E: hai lượt
+    // login_match/refresh_match khoảng 10 s trước khi helper thấy đợt đầu).
+    assert.equal(game.boot.ok, true);
+    assert.deepEqual(game.boot.items.map(i => i.key).sort(), ['TASK-01', 'TASK-02']);
+    assert.match(game.next[0], /^wait_for_update/);
+    assert.equal((await client.call('configure_session', { frame: start.followup.message })).boot, undefined, 'boots once');
     const refreshed = await client.call('refresh_match');
     assert.equal(refreshed.items.length, 2);
     assert.equal(refreshed.items.find(i => i.key === 'TASK-01').minutesLeft, 20);

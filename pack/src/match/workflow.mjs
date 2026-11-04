@@ -436,7 +436,11 @@ export class Workflow {
     const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
-      if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') continue;
+      // Đang prepare (Start Work chưa xong nên item vẫn todo): vẫn giữ slot, kẻo lượt tự prepare sau nhận quá maxItemsInFlight.
+      if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') {
+        if (row.local === 'todo' && row.type !== 'PI' && !r.answerOnlyItem(key)) free--;
+        continue;
+      }
       if (row.local === 'todo' && (row.type === 'PI' || row.minutesLeft === null || row.minutesLeft >= 4) && (row.type === 'PI' || r.answerOnlyItem(key) || free > 0)) {
         add(key, 'prepare_item'); if (row.type !== 'PI' && !r.answerOnlyItem(key)) free--; continue;
       }

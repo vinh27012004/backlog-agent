@@ -84,6 +84,14 @@ export function itemFlags(r) {
   return out;
 }
 
+function pickup(u, fixers) {
+  const released = Date.parse(u.releasedAt);
+  const seen = Date.parse(u.discoveredAt ?? '') || (u.startedAt && Number.isFinite(u.dispatchMs) ? Date.parse(u.startedAt) - u.dispatchMs : NaN);
+  const worker = fixers.length ? Math.min(...fixers.map(t => t.start ?? Infinity)) : NaN;
+  const span = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? b - a : null);
+  return { noticeMs: span(released, seen), pickupMs: span(released, worker), seenPickupMs: span(seen, worker) };
+}
+
 export function matchSummary(bundle) {
   const usage = readJson(join(bundle, '_usage', 'usage.json'));
   if (!usage) return null;
@@ -109,9 +117,9 @@ export function matchSummary(bundle) {
       gates: u.gates ?? 0, gateMs: u.jobs?.run_gate?.ms ?? null, credits: own.reduce((a, t) => a + (t.credits ?? 0), 0), activity: activity[key] ?? null,
       inputTokens: own.reduce((a, t) => a + (t.tokens?.input_tokens ?? 0), 0),
       endedAt: u.endedAt ? Date.parse(u.endedAt) : null,
-      // Đề ra (helper thấy) → thread fixer đầu tiên bắt đầu: tốc độ bắt item.
-      pickupMs: fixers.length && u.startedAt && Number.isFinite(u.dispatchMs)
-        ? Math.min(...fixers.map(t => t.start ?? Infinity)) - (Date.parse(u.startedAt) - u.dispatchMs) : null,
+      // Tốc độ bắt item: đề ra (usage.mjs releaseTimes, giờ máy) → helper thấy → thread fixer đầu tiên bắt đầu. Trận
+      // không còn checkout lúc chạy usage (chưa có releasedAt) chỉ có đoạn helper thấy → thợ bắt đầu.
+      ...pickup(u, fixers),
       judge: s?.judged ? (s.judge ? 'pass' : `fail ${s.highFails.map(h => h.id).join(',')}`) : '—',
       gateVsJudge: s?.gateVsJudge ?? 'n/a', reviewerVsJudge: s?.reviewerVsJudge ?? 'n/a' };
     return { ...row, flags: itemFlags(row) };

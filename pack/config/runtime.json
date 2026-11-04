@@ -1,4 +1,5 @@
 {
   "maxItemsInFlight": 5,
-  "autoPrepare": true
+  "autoPrepare": true,
+  "bootOnConfigure": true
 }

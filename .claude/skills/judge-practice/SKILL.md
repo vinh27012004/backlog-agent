@@ -24,7 +24,8 @@ description: Re-judge every item of a finished MTM practice match against a fixe
    same item across matches, and one row per item with time per phase, fixer model and turns, evidence captures and
    failures, credits and "Cần xem" flags for tuning. Then run `node tools/judge/bench.mjs`: it groups the matches by
    item set (for example the 10-item set) and writes `runs/judge/_items/bench.md`, the newest match of each set
-   against the previous one of the same set and the best earlier one, per match and per item, with Δ marked ✓/✗.
+   against the previous one of the same set and the best earlier one, per match and per item, with Δ marked ✓/✗. Pickup time is measured from the release (server time corrected by the
+   clock skew usage.mjs estimates), split into release → helper sees it → worker starts.
 7. Report to the user in Vietnamese, briefly: each false green (gate or reviewer passed, judge found an `H` failure)
    with the criterion, the location and which gate check or reviewer rule would have caught it; each false red; the
    totals; then the token and time picture (share per role, the most expensive items, root's biggest triggers, when

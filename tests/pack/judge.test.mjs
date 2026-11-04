@@ -7,7 +7,7 @@ import { buildBench } from '../../tools/judge/bench.mjs';
 import { collectMatch } from '../../tools/judge/collect.mjs';
 import { buildReport } from '../../tools/judge/items.mjs';
 import { scoreMatch } from '../../tools/judge/score.mjs';
-import { usageMatch } from '../../tools/judge/usage.mjs';
+import { releaseTimes, usageMatch } from '../../tools/judge/usage.mjs';
 import { sh, tempDir } from './support.mjs';
 
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
@@ -233,4 +233,25 @@ test('the bench groups matches by item set and compares the newest with the prev
   assert.match(md, /## Bộ 5 item: B3 so với B2/);
   assert.match(md, /\*\*Trận mới chưa chấm judge\*\*/);
   assert.equal(buildBench(runs, { match: 'B2', vs: 'B1' }).pairs[0].prev, 'B1');
+});
+
+// Bench đo từ lúc đề ra: giờ server của bản đầu trừ độ lệch đồng hồ, ước lượng từ các item poller thấy (BTZNI69E: đợt
+// đầu ra 04:08:08 giờ server, helper 04:08:49 mới thấy vì root đang khởi động; server nhanh hơn máy khoảng 2,7 s).
+test('release times come from the server clock, corrected by the skew the poller saw', () => {
+  const teamWork = join(tempDir('mtm-release-'), '.team-work');
+  const page = (key, raw) => { mkdirSync(join(teamWork, 'items', key), { recursive: true }); writeFileSync(join(teamWork, 'items', key, 'page.json'), JSON.stringify(raw)); };
+  page('BUG-01', { revisionNo: 1, revealedElapsedSec: 0, updatedAt: '2026-11-04T04:08:08.298Z' });
+  page('BUG-03', { revisionNo: 1, revealedElapsedSec: 481, updatedAt: '2026-11-04T04:16:09.678Z' });
+  page('CR-01', { revisionNo: 2, revealedElapsedSec: 481, updatedAt: '2026-11-04T04:30:00.000Z' });
+  const journal = { items: {
+    'BUG-01': { discoveredAt: '2026-11-04T04:08:49.984Z' },
+    'BUG-03': { discoveredAt: '2026-11-04T04:16:07.010Z' },
+    'CR-01': { discoveredAt: '2026-11-04T04:16:07.016Z' },
+    'TASK-04': { discoveredAt: '2026-11-04T04:28:07.626Z', releasedAtServer: '2026-11-04T04:28:09.176Z', revealedElapsedSec: 1200 } } };
+  const r = releaseTimes(teamWork, journal);
+  assert.equal(r.skewMs, 2668, 'BUG-03: 04:16:09.678 server, seen 04:16:07.010');
+  assert.equal(r.items['BUG-01'], '2026-11-04T04:08:05.630Z');
+  // Bản sửa đổi đổi updatedAt: lấy giờ bắt đầu trận (04:08:08.298) + revealedElapsedSec 481 s − độ lệch.
+  assert.equal(r.items['CR-01'], '2026-11-04T04:16:06.630Z');
+  assert.equal(r.items['TASK-04'], '2026-11-04T04:28:06.508Z');
 });

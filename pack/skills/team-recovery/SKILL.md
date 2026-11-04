@@ -8,7 +8,7 @@ Configure the RESUME frame verbatim, report ORCHESTRATOR_RESTARTED (helper suppl
 Do not reclone, erase journal, discard work or assume old native threads/jobs survive.
 PREPARE follows game-preparation while skipping completed stages.
 
-GAME: login_match, refresh_match, next_actions.
+GAME: configure_session boots the match itself (`boot`); without `boot.ok`, call login_match and refresh_match. Then next_actions.
 - Pending submitIntent without receipt: replay submit_work with the original revision before changing candidate.
 - Published candidate: publish_item resumes its checkpoint. Receipt already present means no second POST.
 - Missing RAM jobs: a handed-off fix-result is published again with publish_item; the candidate stays in the journal.

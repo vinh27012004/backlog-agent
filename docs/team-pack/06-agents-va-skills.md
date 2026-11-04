@@ -53,4 +53,4 @@ Giới hạn native thread: chờ capacity rồi thử lại.
 journal.metrics: prepare, code_test, evidence, handoff, publish; jobs: worktree_setup/publish_item/drop_databases.
 usage.mjs xuất bảng giai đoạn, token/credit/thread. Hoạt động song song không cộng thành thời gian toàn trận.
 items.mjs gom mọi trận đã chấm thành bảng so sánh theo trận và từng item (runs/judge/_items/items.md, items.csv).
-bench.mjs nhóm trận theo bộ đề và so trận mới nhất với trận liền trước cùng bộ, theo trận và từng item (runs/judge/_items/bench.md).
+bench.mjs nhóm trận theo bộ đề và so trận mới nhất với trận liền trước cùng bộ, theo trận và từng item (runs/judge/_items/bench.md); thời gian bắt item đo từ giờ ra đề (giờ server trừ độ lệch đồng hồ, usage.mjs releaseTimes).

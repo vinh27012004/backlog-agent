@@ -220,6 +220,32 @@ function selectTranscripts({ files, ids, teamWorkspace, window }) {
   return metas.filter(({ meta }) => roots.has(meta.id) || roots.has(meta.session_id)).map(({ file }) => file);
 }
 
+// Giờ ra đề theo đồng hồ máy của đội, để đo "đề ra → thợ bắt đầu" từ lúc đề ra chứ không từ lúc helper thấy (đợt đầu
+// BTZNI69E: 41 s root khởi động nằm giữa hai mốc). Server ghi updatedAt của bản đầu: journal releasedAtServer (từ
+// 04/11); trận cũ đọc page.json khi revisionNo ≤ 1, không thì giờ bắt đầu trận + revealedElapsedSec. Đồng hồ server lệch
+// máy đội (BTZNI69E: khoảng 2,7 s, khớp lúc Player thấy IN_PROGRESS): ước lượng bằng các item poller thấy (hỏi mỗi
+// giây, sau đợt đầu), lấy max(giờ server − giờ thấy); sai số tối đa khoảng một nhịp poller. Không có đợt sau: lệch 0.
+export function releaseTimes(teamWork, journal) {
+  const rows = Object.entries(journal.items ?? {}).map(([key, ji]) => {
+    const page = readJson(join(teamWork, 'items', key, 'page.json')) ?? {};
+    const elapsed = Number.isFinite(ji.revealedElapsedSec) ? ji.revealedElapsedSec : Number.isFinite(page.revealedElapsedSec) ? page.revealedElapsedSec : null;
+    const server = Date.parse(ji.releasedAtServer ?? ((page.revisionNo ?? 1) <= 1 ? page.updatedAt : undefined));
+    return { key, elapsed, server: Number.isFinite(server) ? server : null, seen: Date.parse(ji.discoveredAt) };
+  });
+  const known = rows.filter(x => x.server !== null && x.elapsed !== null);
+  const start = known.length ? Math.min(...known.map(x => x.server - x.elapsed * 1000)) : null;
+  for (const x of rows) if (x.server === null && start !== null && x.elapsed !== null) x.server = start + x.elapsed * 1000;
+  const seen = rows.filter(x => x.server !== null && Number.isFinite(x.seen));
+  const first = seen.length ? Math.min(...seen.map(x => x.seen)) : null;
+  const polled = seen.filter(x => x.seen - first > 10_000);
+  let skewMs = polled.length ? Math.max(...polled.map(x => x.server - x.seen)) : 0;
+  if (!Number.isFinite(skewMs) || Math.abs(skewMs) > 120_000) skewMs = 0;
+  // Đề không thể được thấy trước khi ra: chặn trên bằng giờ thấy.
+  const items = Object.fromEntries(rows.filter(x => x.server !== null)
+    .map(x => [x.key, new Date(Math.min(x.server - skewMs, Number.isFinite(x.seen) ? x.seen : Infinity)).toISOString()]));
+  return { skewMs, polled: polled.length, items };
+}
+
 export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, out = null, copy = true } = {}) {
   const teamWork = join(checkoutRoot, '.team-work');
   const journal = readJson(join(teamWork, 'journal.json'));
@@ -259,6 +285,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
   const logs = existsSync(join(teamWork, 'logs')) ? readdirSync(join(teamWork, 'logs')) : [];
   const gateJobs = key => new Set(logs.filter(f => f.startsWith(`${key}-gate-`)).map(f => f.match(/-(job-\d+)-/)?.[1]).filter(Boolean)).size;
 
+  const release = releaseTimes(teamWork, journal);
   const items = {};
   for (const key of [...new Set([...keys, ...threads.map(t => t.item).filter(Boolean)])].sort()) {
     const ji = journal.items?.[key] ?? {};
@@ -276,6 +303,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     const start = Date.parse(ji.startedAt);
     const end = Date.parse(ji.endedAt ?? ji.receipt?.receivedAt);
     items[key] = { outcome: ji.outcome ?? (ji.receipt ? 'SUBMITTED' : ji.startedAt ? 'NOT_SUBMITTED' : 'NOT_STARTED'),
+      releasedAt: release.items[key] ?? null, discoveredAt: ji.discoveredAt ?? null,
       startedAt: ji.startedAt ?? null, endedAt: ji.endedAt ?? ji.receipt?.receivedAt ?? null,
       ms: Number.isFinite(start) && Number.isFinite(end) ? end - start : null, attempts: ji.attempts ?? 0,
       gates: ji.gateHistory?.length ?? gateJobs(key), jobs, phases, dispatchMs: ji.dispatchMs ?? null, fixer: role('team_fixer'), reviewer: role('team_reviewer'),
@@ -341,9 +369,11 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     'Ô fixer/reviewer/PI: số thread · lượt gọi model · input · thời gian chạy. Gate: số lần · tổng thời gian (journal cũ chưa có thời gian job).', '',
     table(['Item', 'Kết quả', 'Bắt đầu → kết thúc', 'Thời gian', 'Fixer', 'Reviewer', 'PI', 'Guardian', 'Gate', 'Chuẩn bị worktree'], itemRows),
     '', '## Thời gian theo giai đoạn', '',
-    'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint; các hoạt động song song không cộng thành thời gian toàn trận.', '',
-    table(['Item', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Publish'], Object.entries(items).map(([key, x]) =>
-      [key, dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
+    'Đề ra → thấy: từ giờ ra đề (đồng hồ server, trừ độ lệch ước lượng ' +
+      `${(release.skewMs / 1000).toFixed(1).replace('.', ',')} s từ ${release.polled} item poller thấy) tới lúc helper thấy. ` +
+      'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint; các hoạt động song song không cộng thành thời gian toàn trận.', '',
+    table(['Item', 'Đề ra → thấy', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Publish'], Object.entries(items).map(([key, x]) =>
+      [key, x.releasedAt && x.discoveredAt ? dur(Date.parse(x.discoveredAt) - Date.parse(x.releasedAt)) : '—', dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
     '', '## Root: lượt gọi model đến sau việc gì', '',
     `Context lớn nhất của root: ${tok(Math.max(0, ...rootThreads.map(t => t.maxContext)))}. Mỗi lượt gọi model được tính cho tool vừa trả kết quả ` +
       '(`message` = tin nhắn của Player hoặc agent khác); `exec` được tách theo tool bên trong.', '',
@@ -359,7 +389,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
   const report = join(target, 'usage.md');
   writeFileSync(report, md);
   const summary = { matchId, sessionsDir: dir, roots: rootThreads.map(t => t.id), transcripts: threads.length, window: { from, to },
-    total, credits: totalCredits, unpriced, quota: { ...quota, limitAt, limitErrors }, byRole, items, rootTriggers, guardian: guardianBy,
+    total, credits: totalCredits, unpriced, quota: { ...quota, limitAt, limitErrors }, byRole, items, release: { skewMs: release.skewMs, polled: release.polled }, rootTriggers, guardian: guardianBy,
     threads: threads.map(({ file, triggers, ...t }) => ({ ...t, file: basename(file) })) };
   writeFileSync(join(target, 'usage.json'), `${JSON.stringify(summary, null, 2)}\n`);
   return { out: target, report, ...summary };

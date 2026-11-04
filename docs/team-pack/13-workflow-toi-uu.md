@@ -75,6 +75,23 @@ root tự tra Company Tools và đọc skill PI trước khi spawn, tự soạn 
   company_call. Số thứ tự file kết quả cấp đồng bộ để lời gọi song song không ghi đè nhau.
 - Kiểm ở trận sau: đề ra → worker bắt đầu (mục tiêu 45–70 s), không còn prepare_item/company_call của root trước spawn.
 
+Đợt đầu còn chậm hơn: BTZNI69E ra BUG-01/BUG-02 lúc 04:08:05.6 (giờ máy), helper thấy 04:08:49 (44 s), thợ bắt đầu
+2m30s/2m44s sau giờ ra. 24 s là root chép frame START vào configure_session (khoảng 1.350 token output; frame có
+apiKeySecret nên chỉ root chuyển được), khoảng 10 s là hai lượt login_match và refresh_match; hai prepare_item cùng exec
+chạy nối đuôi (BUG-01 chờ 30 s); worktree xong rồi root còn job_status, company_call và soạn brief 53–69 s. Sửa:
+- configure_session GAME tự login, đọc backlog (bật poller, gọi autoPrepare ngay không đợi tick đầu) và lấy danh sách
+  Company Tools, trả `boot` {ok, items, companyTools, next}; root đi thẳng vào wait_for_update. Một lần mỗi tiến trình
+  helper; hỏng thì `boot.ok:false`, root gọi login_match/refresh_match như cũ. Tắt bằng `"bootOnConfigure": false`.
+- absorb so view mới với view đã đối chiếu lần trước, không với `gm.view` (login_match cũng fetch, trước đây làm đợt đầu
+  không có ITEM_NEW).
+- Item đang prepare (Start Work chưa xong, vẫn todo) giữ slot trong nextActions, để tick sau không tự prepare quá
+  maxItemsInFlight.
+- Đo: journal ghi `releasedAtServer` (updatedAt của bản đầu) và `revealedElapsedSec` khi helper thấy đề. `usage.mjs`
+  (`releaseTimes`) đổi sang giờ máy bằng độ lệch đồng hồ ước lượng từ các item poller thấy (max giờ server − giờ thấy,
+  sai số khoảng một nhịp poller; BTZNI69E +2,7 s, khớp lúc Player thấy IN_PROGRESS); trận cũ còn checkout đọc
+  `page.json`. Bench có "TB đề ra → thợ bắt đầu" (từ giờ ra), "· đề ra → helper thấy", "· helper thấy → thợ bắt đầu"
+  và cột "Đề ra → thợ" theo item. Trận không còn checkout chỉ có đoạn helper thấy → thợ.
+
 ## Evidence và recovery
 
 download nằm cùng capture_evidence/profile/login; listener trước click, chờ completed HTTP/Blob localhost, tối đa 5MB,

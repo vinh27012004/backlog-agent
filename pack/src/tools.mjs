@@ -183,7 +183,7 @@ export class Runtime {
     return [
       { name: 'configure_session', description: 'Load the machine-provided Player frame (marker line, descriptor JSON line and policy blocks, copied verbatim). Call first in every turn.',
         inputSchema: obj({ frame: str('Exact frame text from the marker line to the end of the last policy block.') }, ['frame']),
-        handler: async a => ({ ...this.configureSession(a), proxy: await this.ensureProxy() }) },
+        handler: async a => { const out = this.configureSession(a); const boot = await this.bootGame(); return { ...out, ...(boot ? { boot, next: boot.next } : {}), proxy: await this.ensureProxy() }; } },
       { name: 'prepare_checkout', description: 'PREPARE: verify Git access, clone the assigned branch into checkoutRoot (or verify an existing checkout) and return the revision. Writes GIT_AUTH and REPOSITORY stages.',
         inputSchema: obj({}), handler: () => this.prepareCheckout() },
       { name: 'setup_environment', description: 'PREPARE: background job. Detects the stack, fills .env from .env.example, installs dependencies, runs migrations/seed and env-require doctor, builds and runs baseline tests. Writes ENVIRONMENT and BUILD stages.',
@@ -416,6 +416,27 @@ export class Runtime {
     return this.jobs.settle(job.id, Math.min(45, waitSeconds) * 1000);
   }
 
+  // GAME: configure_session tự đăng nhập, đọc backlog (bật poller, helper tự prepare) và lấy danh sách Company Tools.
+  // BTZNI69E: đề ra 04:08:05, root mất thêm hai lượt login_match/refresh_match (khoảng 10 s) mới tới lúc helper thấy đề.
+  // Hỏng thì trả lỗi, root gọi login_match/refresh_match như cũ. Tắt bằng "bootOnConfigure": false ở runtime.json.
+  async bootGame() {
+    if (this.session.phase !== 'GAME' || this.gameBooted || this.runtimeConfig().bootOnConfigure === false) return null;
+    try {
+      const login = await this.loginMatch();
+      const [refresh, company] = await Promise.allSettled([this.refreshMatch(), this.companyTools()]);
+      if (refresh.status === 'rejected') throw refresh.reason;
+      this.gameBooted = true;
+      return { ok: true, matchStatus: login.matchStatus, minutesLeft: refresh.value.minutesLeft, items: refresh.value.items,
+        events: refresh.value.events, companyTools: company.status === 'fulfilled' ? company.value.tools.map(t => t.name) : null,
+        next: ['wait_for_update {cursor:-1} (its nextActions; the helper is already preparing new items) → spawn_worker → publish_item',
+          'wait_for_update is the only wait (no wait_agent); never end the turn while the match runs'] };
+    } catch (error) {
+      return { ok: false, error: error.code ?? 'error', message: oneLine(error.message ?? String(error), 300),
+        next: ['login_match', 'refresh_match', 'company_tools', 'wait_for_update (its nextActions) → spawn_worker → publish_item',
+          'wait_for_update is the only wait (no wait_agent); never end the turn while the match runs'] };
+    }
+  }
+
   async loginMatch() {
     this.session.require();
     const prepare = this.session.phase === 'PREPARE';
@@ -473,8 +494,11 @@ export class Runtime {
     return join(this.session.paths.teamWork, 'items', key);
   }
 
-  // So view mới với view cũ, đẩy sự kiện và ghi DISCOVERED cho item mới (chỉ phase GAME).
-  absorb(previous, view) {
+  // So view mới với view đã đối chiếu lần trước (không phải gm.view: login_match cũng fetch, trước đây làm đợt đầu
+  // không có ITEM_NEW), đẩy sự kiện và ghi DISCOVERED cho item mới (chỉ phase GAME).
+  absorb(view) {
+    const previous = this.absorbedView ?? null;
+    this.absorbedView = view;
     const before = new Map((previous?.items ?? []).map(i => [i.key, i]));
     const game = this.session.phase === 'GAME';
     for (const item of view.items) {
@@ -483,7 +507,9 @@ export class Runtime {
       mkdirSync(dir, { recursive: true });
       writeFileAtomic(join(dir, 'page.json'), `${JSON.stringify(item.raw, null, 2)}\n`);
       const old = before.get(item.key);
-      if (game) { const ji = this.journal?.item(item.key); if (ji && !ji.discoveredAt) { ji.discoveredAt = new Date().toISOString(); this.journal.save(); } }
+      // releasedAtServer: giờ ra đề theo đồng hồ server (updatedAt của bản đầu), để bench đo từ lúc đề ra chứ không từ
+      // lúc helper thấy (đợt đầu BTZNI69E: 41 s khởi động root nằm giữa hai mốc này).
+      if (game) { const ji = this.journal?.item(item.key); if (ji && !ji.discoveredAt) { ji.discoveredAt = new Date().toISOString(); if ((item.revisionNo ?? 1) <= 1 && item.raw?.updatedAt) ji.releasedAtServer = item.raw.updatedAt; if (Number.isFinite(item.raw?.revealedElapsedSec)) ji.revealedElapsedSec = item.raw.revealedElapsedSec; this.journal.save(); } }
       if (!old) this.events.push('ITEM_NEW', { key: item.key, itemType: item.type, title: item.title, minutesLeft: this.gm.itemMinutesLeft(item), points: item.points });
       else {
         if (old.status !== item.status) this.events.push(item.status === 'CLOSED' ? 'ITEM_CLOSED' : 'ITEM_STATUS', { key: item.key, status: item.status });
@@ -507,13 +533,14 @@ export class Runtime {
 
   async refreshMatch() {
     this.session.require('GAME');
-    const previous = this.gm.view;
     const first = this.progress.state.gameStart !== 'COMPLETED';
     if (first) this.progress.write({ type: 'GAME_START_STATUS', stage: 'BACKLOG_SYNC', status: 'IN_PROGRESS', summary: 'Synchronizing the backlog.' });
     const view = await this.gm.fetchMatch();
-    this.absorb(previous, view);
+    this.absorb(view);
     if (first) this.progress.write({ type: 'GAME_START_STATUS', stage: 'BACKLOG_SYNC', status: 'COMPLETED', summary: `Retrieved ${view.items.length} backlog items.` });
     this.startPoller();
+    // Không đợi tick đầu của poller: wait_for_update ngay sau đó đã thấy item đang prepare, không còn prepare_item.
+    this.workflow.autoPrepare();
     return { status: view.status, minutesLeft: this.minutesLeft(), items: this.itemRows(), events: view.events.slice(-10) };
   }
 
@@ -1473,9 +1500,8 @@ export class Runtime {
       if (!view || TERMINAL.has(view.status)) return;
       try {
         if (await this.gm.feedChanged()) {
-          const previous = this.gm.view;
           const next = await this.gm.fetchMatch({ optional: true });
-          this.absorb(previous, next);
+          this.absorb(next);
         }
         this.warnClosing();
         this.warnNewResults();

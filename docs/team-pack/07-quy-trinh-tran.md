@@ -18,7 +18,8 @@ Configure frame, prepare_checkout, setup_environment và login_match song song; 
 report_ready rồi kết thúc lượt PREPARE. Không thêm coding-agent CLI hoặc đưa credential cho worker.
 
 ## 3. GAME
-Configure frame GAME, login_match, refresh_match, company_tools, rồi vòng wait_for_update (trả cả nextActions; không gọi
+Configure frame GAME (từ 04/11 configure_session tự login, đọc backlog, bật poller, tự prepare và lấy danh sách Company
+Tools, trả `boot`; hỏng thì root gọi login_match, refresh_match, company_tools), rồi vòng wait_for_update (trả cả nextActions; không gọi
 thêm next_actions). Từ 04/11 đây là lệnh chờ duy nhất của root: không wait_agent; worker báo root qua worker_checkpoint
 (ready_for_evidence, candidate, blocked {question}), không send_message; root nhắn worker bằng followup_task khi
 nextActions bảo (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) hay publish lỗi.

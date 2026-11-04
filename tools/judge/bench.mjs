@@ -42,6 +42,7 @@ const credits = m => (priced(m) && fin(m.credits) ? m.credits : null);
 const submittedCount = m => m.items.filter(SUBMITTED).length;
 const submittedPoints = m => { const done = m.items.filter(SUBMITTED); return done.every(r => fin(r.points)) ? sum(done.map(r => r.points)) : null; };
 const judgedCount = m => m.items.filter(r => r.judge !== '—').length;
+const meanOf = (m, field) => mean(m.items.map(r => r[field]).filter(v => fin(v) && v >= 0));
 const MATCH_METRICS = [
   { label: 'Item nộp', get: m => m.items.filter(SUBMITTED).length, fmt: n => String(n), better: 'high', total: g => g.keys.size },
   { label: 'Điểm đã nộp', get: submittedPoints, fmt: num(0), better: 'high' },
@@ -51,7 +52,9 @@ const MATCH_METRICS = [
   { label: 'Nộp xong item cuối (từ đầu trận)', get: m => { const ends = m.items.filter(SUBMITTED).map(r => r.endedAt).filter(fin);
     return ends.length && fin(m.from) ? Math.max(...ends) - m.from : null; }, fmt: dur, better: 'low', time: true },
   { label: 'TB thời gian item đã nộp', get: m => mean(m.items.filter(SUBMITTED).map(r => r.ms)), fmt: dur, better: 'low', time: true },
-  { label: 'TB đề ra → thợ bắt đầu', get: m => mean(m.items.map(r => r.pickupMs).filter(v => fin(v) && v >= 0)), fmt: dur, better: 'low', time: true },
+  { label: 'TB đề ra → thợ bắt đầu', get: m => meanOf(m, 'pickupMs'), fmt: dur, better: 'low', time: true },
+  { label: '· đề ra → helper thấy', get: m => meanOf(m, 'noticeMs'), fmt: dur, better: 'low', time: true },
+  { label: '· helper thấy → thợ bắt đầu', get: m => meanOf(m, 'seenPickupMs'), fmt: dur, better: 'low', time: true },
   { label: 'TB code/test', get: m => mean(m.items.filter(SUBMITTED).map(r => r.codeMs)), fmt: dur, better: 'low', time: true },
   { label: 'TB evidence', get: m => mean(m.items.filter(SUBMITTED).map(r => r.evidenceMs)), fmt: dur, better: 'low', time: true },
   { label: 'Credit', get: credits, fmt: num(0), better: 'low' },
@@ -118,7 +121,7 @@ export function compareMatches(group, cur, prev) {
     const title = (c ?? p)?.title;
     return [title ? `${key} · ${title.length > 38 ? `${title.slice(0, 37)}…` : title}` : key, (c ?? p)?.points ?? '—',
       arrow(outcomeShort(p), outcomeShort(c)), arrow(judgeShort(p), judgeShort(c)),
-      cell(r => r.ms, dur), itemDelta(p, c), cell(r => r.codeMs, dur), cell(r => r.evidenceMs, dur),
+      cell(r => r.ms, dur), itemDelta(p, c), cell(r => r.pickupMs, dur), cell(r => r.codeMs, dur), cell(r => r.evidenceMs, dur),
       arrow(p?.fixerModels.join(', ') || '—', c?.fixerModels.join(', ') || '—'),
       cell(r => r.fixerCalls, num(0)), cell(r => r.inputTokens, mtok), cell(r => r.credits, num(1)),
       best ? `${dur(best.v)} (${best.id})` : '—', c?.flags.join('; ') || '—'];
@@ -157,7 +160,7 @@ export function buildBench(runsDir, { match = null, vs = null } = {}) {
       '### Theo trận', '',
       table(['Chỉ số', cur.id, prev?.id ?? 'trước', 'Δ', 'Tốt nhất trước đó'], metricRows), '',
       '### Theo item (trước → mới)', '',
-      table(['Item', 'Điểm', 'Kết quả', 'Judge', 'Thời gian', 'Δ thời gian', 'Code/test', 'Evidence', 'Model fixer', 'Lượt fixer', 'Input', 'Credit',
+      table(['Item', 'Điểm', 'Kết quả', 'Judge', 'Thời gian', 'Δ thời gian', 'Đề ra → thợ', 'Code/test', 'Evidence', 'Model fixer', 'Lượt fixer', 'Input', 'Credit',
         'Nhanh nhất trước đó', 'Cần xem (mới)'], itemRows), '',
       '### Lịch sử trong bộ (cũ → mới)', '', historyTable(g), '');
   }

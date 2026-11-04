@@ -164,6 +164,37 @@ test('the helper prepares a new item itself once, prefetches company facts, writ
   assert.match(spawn.message, /brief\.md/);
 });
 
+// Item đang prepare (Start Work chưa xong, vẫn todo) giữ slot: tick sau của poller không tự prepare quá maxItemsInFlight.
+test('an item being prepared holds its slot, so the next automatic prepare waits for a free one', async () => {
+  const f = fixture('BUG-01');
+  localRuntime(f.root, { maxItemsInFlight: 1 });
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
+  f.rt.itemRows = () => ['BUG-01', 'BUG-02'].map(key => ({ key, type: 'BUG', status: 'OPEN', local: 'todo', minutesLeft: 30 }));
+  f.rt.gm.view.items.push({ key: 'BUG-02', title: 'BUG-02', raw: { descriptionMd: '## Acceptance criteria\n1. Correct.' } });
+  f.rt.startWork = () => new Promise(() => {});
+  const first = f.rt.workflow.autoPrepare();
+  assert.equal(first.length, 1);
+  assert.deepEqual(f.rt.workflow.autoPrepare(), [], 'the only slot is taken by the item being prepared');
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.action === 'prepare_item'), []);
+});
+
+// Bench đo từ lúc đề ra (đồng hồ server, updatedAt của bản đầu), không từ lúc helper thấy; view đầu tiên được đối chiếu
+// với "chưa có gì" nên đợt đầu cũng có ITEM_NEW dù login_match đã fetch trước.
+test('discovery keeps the server release time and the first view raises ITEM_NEW', () => {
+  const f = fixture('BUG-01');
+  delete f.ji.discoveredAt;
+  const view = { status: 'IN_PROGRESS', events: [], items: [{ key: 'BUG-01', type: 'BUG', title: 'x', status: 'OPEN', revisionNo: 1,
+    raw: { updatedAt: '2026-11-04T04:08:08.298Z', revealedElapsedSec: 0 } }] };
+  f.rt.gm.view = view;
+  f.rt.absorb(view);
+  assert.equal(f.ji.releasedAtServer, '2026-11-04T04:08:08.298Z');
+  assert.equal(f.ji.revealedElapsedSec, 0);
+  assert.ok(f.ji.discoveredAt);
+  assert.deepEqual(f.rt.events.since(0).map(e => [e.type, e.key]), [['ITEM_NEW', 'BUG-01']]);
+  f.rt.absorb(view);
+  assert.equal(f.rt.events.since(0).length, 1, 'same view, no new event');
+});
+
 // D: tra cứu chỉ đọc không qua guardian, cho cả worker qua proxy; tool không phải tra cứu vẫn phải qua company_call.
 test('company_lookup is a read-only lookup for root and workers and refuses tools that are not lookups', async () => {
   const f = fixture('PI-01');
