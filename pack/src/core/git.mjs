@@ -8,7 +8,7 @@ import { fail } from './util.mjs';
 
 const ALLOWED = new Set(['ls-remote', 'clone', 'fetch', 'rev-parse', 'status', 'diff', 'add', 'commit',
   'push', 'show', 'cat-file', 'config', 'log', 'rebase', 'ls-files', 'remote', 'reset', 'checkout', 'stash',
-  'worktree', 'cherry-pick', 'rev-list', 'branch', 'write-tree', 'clean', 'merge', 'apply', 'grep']);
+  'worktree', 'cherry-pick', 'rev-list', 'branch', 'write-tree', 'clean', 'merge', 'apply', 'grep', 'hash-object', 'ls-tree']);
 
 export async function git(args, { cwd, timeoutMs = 60_000, allowFail = false, env = {} } = {}) {
   const sub = args.find(a => !a.startsWith('-') && a !== '-C');

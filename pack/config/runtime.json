@@ -1,6 +1,7 @@
 {
   "maxItemsInFlight": 5,
   "autoPrepare": true,
+  "autoPublish": true,
   "bootOnConfigure": true,
   "preGameWatch": true,
   "prewarmWorktrees": true,

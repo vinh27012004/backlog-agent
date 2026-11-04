@@ -462,3 +462,14 @@ nên `ready_for_evidence` của subagent cũng tự sync/resume (L90). Test ki�
 đang chờ. Fixture browser kiểm loading/điều hướng đã có repository Git riêng và commit ban đầu, không phụ thuộc repo
 cha của thư mục tạm. Test workflow/database: 33/33 đạt; toàn bộ test browser: 14/14 đạt ngoài sandbox
 (trong sandbox gặp `CDP_TIMEOUT` tại `Page.enable`).
+
+## #17 · 04/11/2026 · tự luyện `EIOR38SI` (pack sau commit `4e920ea` và các sửa chưa commit cùng ngày)
+
+Bản phát có 2 test fail sẵn: `accounting.test.ts` (`deriveInvoiceStatus` dùng `paidMinor > totalMinor`) và
+`cascade.test.ts` (migration `20260702093140_company_delete_cascades_financials` đổi khoá ngoại sang `ON DELETE CASCADE`).
+Helper giao BUG-01 làm chủ baseline. Nguồn: `.team-work/journal.json`, `answers/*/evidence/*.log`, kết quả chấm BUG-02.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L92 | Grader chạy cả bộ test trên commit nộp của **từng** item (BUG-02: 12 test gốc + 19 test mới = 31). BUG-02 (`youFix:false`) nộp DONE lúc 14:20 với TC-04 FAIL; bản sửa của chủ BUG-01 lên main lúc 14:27 | BUG-02-TC-04 0/20 (29 đạt, 2 hỏng), BUG-02 80/100 | **Đã** sửa: chủ sửa baseline trước, báo `worker_checkpoint baseline_fixed`, helper commit lên main; item cần cả bộ test chờ bản sửa khi publish (`BASELINE_PENDING`), sync rồi chạy lại (13 §Test fail sẵn) |
+| L93 | Chủ BUG-01 viết lại assertion của `cascade.test.ts` ("cascades invoices per the owner-requested migration") thay vì thêm migration trả lại RESTRICT; `existing tests changed` chỉ là cảnh báo | Grader khôi phục test gốc: test cascade vẫn hỏng ở commit BUG-01 và mọi commit sau (BUG-03, BUG-04, CR-01..03), cần đối chiếu kết quả chấm các item đó | **Đã** sửa: `worker_checkpoint candidate` chặn mọi thay đổi ở file test BTC phát; `baseline_fixed` từ chối file test |

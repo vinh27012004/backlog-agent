@@ -43,3 +43,19 @@ test('one owner per baseline failure: the first item whose MVS runs the suite, r
   rt.journalObj.item('BUG-02').endedAt = new Date().toISOString();
   assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'CR-01', youFix: true });
 });
+
+// EIOR38SI: chủ báo baseline_fixed rồi helper đưa bản sửa lên main; item bắt đầu sau đó không còn phải chờ ai.
+test('an item started after the owner landed the baseline fix is told the fix is on main; a pending fix keeps its owner', () => {
+  const { rt, item } = runtime();
+  item('BUG-01', '## BUG-01-TC-03\nExpected: `pnpm test` exits 0.');
+  item('CR-01', '## CR-01-TC-04 existing tests\nAll tests pass.');
+  item('TASK-01', '## TASK-01-TC-01\nTrace the reorder position.');
+  assert.equal(rt.baselineBrief('BUG-01').youFix, true);
+  rt.journalObj.data.preparation.baselineFix = { owner: 'BUG-01', state: 'pending', files: [] };
+  rt.journalObj.item('BUG-01').endedAt = new Date().toISOString();
+  assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'BUG-01', youFix: false }, 'a reported fix is not reassigned');
+  rt.journalObj.data.preparation.baselineFix = { owner: 'BUG-01', state: 'landed', revision: 'abc123' };
+  assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'BUG-01', youFix: false, fixedOnMain: 'abc123' });
+  rt.baselineBrief('TASK-01');
+  assert.deepEqual(['BUG-01', 'CR-01', 'TASK-01'].map(k => rt.journalObj.item(k).needsSuite), [true, true, false]);
+});

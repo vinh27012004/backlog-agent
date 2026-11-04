@@ -10,7 +10,7 @@ J56ZZWSS bỏ cả worker evidence riêng của item tier strong: một fixer l�
 | prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief; chờ job tới 25 s nên thường trả kết quả luôn |
 | worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); candidate (sau khi ghi fix-result) kiểm fix-result mới nhất, submit.json và cấu hình test, có lỗi thì giữ worker ghi tiếp (`handedOff:false`); blocked {question} ghi câu hỏi cho root (sự kiện WORKER_BLOCKED, nextActions answer_worker) thay cho send_message; resume mở lại, đóng câu hỏi; root đăng ký threadId |
 | next_actions | Hàng đợi có tham số và waitMs theo release/deadline: prepare_item, spawn_worker, sync_before_evidence, refresh_candidate, publish_item, submit_work, stop_worker. wait_for_update trả cùng danh sách và là lệnh chờ duy nhất của root (từ 04/11, không wait_agent); answer_worker khi worker gọi `worker_checkpoint blocked` |
-| publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent; chờ job tới 25 s (thường 10–15 s là xong) |
+| publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent; chờ job tới 25 s (thường 10–15 s là xong). PI và item chỉ trả lời: helper tự gọi (autoPublish), root chỉ gọi khi lần tự publish hỏng |
 
 Mỗi item một team_fixer. Root thực hiện native agent operations và Company Tools lookup; helper không thêm agent CLI.
 Proxy của worker có read_item, job_status, worktree status, worker_checkpoint và company_lookup (tra cứu chỉ đọc, từ 04/11), không company_call/publish.
@@ -115,6 +115,68 @@ poller không biết mốc nào, chỉ hỏi feed mỗi giây. Server cho đề 
 - Đo: `usage.mjs` và `items.mjs` lấy giờ thấy từ `seenAt` (trước đây `discoveredAt`, lúc ghi DISCOVERED); "đề ra → helper
   thấy" dưới 10 s ghi theo ms. Đích: đợt đầu dưới 1 s; helper thấy → thợ bắt đầu chỉ còn Start Work, brief và một lượt
   spawn của root (khoảng 6–10 s; root phải gọi spawn_agent nên không xuống mức ms).
+
+## PI chỉ báo cáo trong 1–2 phút, helper tự publish PI và item chỉ trả lời (04/11, sau CA3WKX60)
+
+PI-01 của CA3WKX60 (Form A, "Out of scope: Changing the application source") mất 4m02s từ Start Work tới nộp:
+`git worktree add` 8 s, worktree_setup 43 s (install, generate, migrate, seed) và index codegraph mà PI không dùng;
+root spawn 24 s; fixer 2m28s cho 10 lượt (đọc brief + 42K ký tự skill 22 s, tự gọi search_logs từng service 41 s vì mỗi
+lời gọi trả tối đa 20 dòng và không có limit/offset, viết derive.mjs + submit.json 47 s, viết fix-result 27 s); bàn
+giao → root gọi publish_item 10 s, publish 8 s. Sửa:
+- `reportOnlyPI(key)` (PI và `answerOnlyText`): `createWorktree` chỉ tạo worktree git, job worktree_setup trả ngay
+  `skipped: 'report-only PI'`, không index codegraph. Áp dụng cả cho worktree dựng sẵn trước START_GAME. TASK chỉ trả
+  lời vẫn cài như cũ (derive.mjs của TASK có thể import source của dự án).
+- `prefetchCompany` của PI (khi search_logs có tham số `service`) gọi thêm `harvestLogs`: lấy tên service từ lời gọi
+  không lọc, từ danh sách service trong KB ("service name exactly as it appears in logs: web, api, …") và từ tên có gạch
+  nối trong đề/KB (tối đa 24), gọi song song `{service, query: ''}`, lưu service có dòng (`saveFact`, như company_lookup),
+  gộp mọi dòng theo `ts` vào `company/timeline.json` kèm bảng `services` (total, returned, complete). Brief ghi
+  `search_logs (service X: returned/total[ INCOMPLETE])` và `timeline (N entries …)`.
+- prepare chép các file đó vào `answers/<ID>/evidence/` của worktree.
+- Brief có khối `<report_only_pi>` thay mọi skill (không còn `<skills>`, `<profile>`): ba lượt (đọc timeline + KB +
+  template/schema; viết và chạy derive.mjs rồi ghi submit.json; worker_checkpoint candidate), bẫy release sau, khiếu
+  nại không đủ, thanh toán sau sự kiện. `team-fixer.toml`: có khối này thì đó là toàn bộ quy trình.
+- Item chỉ trả lời (`verificationKind: answer_only`, cả PI lẫn TASK): worker_checkpoint candidate mà chưa có fix-result
+  mới thì helper lập `<ID>-fixer-<n>.json` từ submit.json (`writeAnswerResult`: status theo DONE/PARTIAL/BLOCKED,
+  summary các trường phẳng, root_cause từ incidentRecord.rootCause, changed_files trong answers/<ID>/, risks ghi rõ do
+  helper viết), rồi kiểm như thường. Worker vẫn có thể tự viết; submit.json còn lỗi thì chỉ báo lỗi đó.
+- `autoPublish()` cạnh `autoPrepare()` (nhịp poller và đầu wait_for_update): publish_item của PI hay item chỉ trả lời
+  mà worker đã bàn giao (không còn `writing`) được helper tự gọi `publish`, mỗi kết quả bàn giao một lần
+  (`ji.autoPublished` = fixResultFile; publishMark coi candidateId ghi từ chính file đó là cùng một lần). Không gắn vào
+  worker_checkpoint vì tool đó readOnly (không qua guardian) còn publish đụng git và Game Master. Root không thấy
+  publish_item đó (`actions()` lọc, `all: true` cho helper; notice và `state.newResults` dùng `rootResults()`), cũng
+  không thấy publish_item khi job publish đang chạy. Hỏng thì job failed (JOB_DONE) hay lỗi trước job (sự kiện
+  AUTO_PUBLISH_FAILED, `ji.autoPublishError`): publish_item/submit_work hiện cho root như cũ. Code BUG/CR vẫn do root
+  publish. Tắt: `"autoPublish": false`.
+- Ước tính PI-01 sau sửa: Start Work 2 s, prepare ~8 s, root spawn ~20 s, fixer ~35 s (2–3 lượt), publish ~8 s:
+  khoảng 1m15s. Đo lại bằng bench sau trận kế.
+
+## Test fail sẵn: chủ đưa bản sửa lên main trước, item khác chờ khi publish (04/11, sau EIOR38SI)
+
+Bản phát của EIOR38SI có 2 test fail sẵn (`accounting.test.ts` trạng thái PAID, `cascade.test.ts` RESTRICT do migration
+`company_delete_cascades_financials`). Helper giao BUG-01 làm chủ; BUG-02 (`youFix:false`) nộp DONE lúc 14:20 với TC-04
+FAIL, BUG-01 lên main lúc 14:27. Grader chạy cả bộ test **trên commit của từng item** sau khi khôi phục test gốc: commit
+BUG-02 còn 2 test hỏng, mất 20/100. Chủ BUG-01 còn viết lại assertion của `cascade.test.ts` thay vì sửa migration, nên
+test gốc vẫn hỏng ở mọi commit sau đó. Sửa:
+- Chủ (`youFix:true`) sửa baseline **trước** việc của nó, bằng sản phẩm (code, schema, migration, data), rồi gọi
+  `worker_checkpoint baseline_fixed {files}` (đường dẫn trong matchRoot). Helper từ chối test BTC phát, cấu hình test,
+  `answers/`, `.env` và file không đổi; chép đóng băng vào `.team-work/baseline/<ID>/`, ghi
+  `preparation.baselineFix = {owner, state: pending, files}`. `files: []`: không sửa được (`abandoned`), item khác thôi chờ.
+- `autoBaseline()` trong nhịp poller: `landBaseline()` giữ khoá publish (`publishOwner = 'BASELINE'`), chép các file đó
+  vào main và commit riêng `<chủ>: make the tests that fail in the issued code pass (baseline)` (sự kiện
+  BASELINE_LANDED; lỗi thì thử lại, 3 lần thì `failed`). Sau đó `syncHeldItems()` sync worktree đã bàn giao còn thiếu
+  commit đó (`ji.baselineSynced`), candidate cũ thành stale.
+- Item cần cả bộ test (`ji.needsSuite`, cùng regex NEEDS_SUITE với chọn chủ; trừ PI và item chỉ trả lời) mà worktree
+  chưa có bản sửa (`ji.baselineFixIn`, ghi khi create/sync) bị giữ publish (`baselineWait`: `owner` khi chủ còn làm,
+  `sync` khi đã lên main): không có publish_item trong nextActions hay `state.newResults`, `publish_item` trả
+  `BASELINE_PENDING`. Hết giữ khi chủ bàn giao/kết thúc mà không báo, sync hỏng, hay item vào phút cuối (lastCall).
+- Sau sync: nextActions `refresh_candidate {reason: baseline_fix, followup}`; root gửi nguyên `followup`, worker chạy
+  lại cả bộ test và bàn giao bản kế. Worker còn ghi: `worker_checkpoint candidate` tự sync (đợi tới 15 s nếu bản sửa
+  đang chờ commit) và giữ worker lại với yêu cầu chạy lại; `ready_for_evidence` sync mang bản sửa về thì hint nhắc chạy lại.
+- Chủ publish sau: file trùng nội dung với main không tính là "cùng sửa" (không SYNC_REQUIRED, cherry-pick sạch); sync
+  của chủ bỏ qua file chưa track trùng nội dung với file main vừa thêm (migration của chính nó).
+- Item bắt đầu sau khi bản sửa lên main nhận `baselineFailures.fixedOnMain`; không giao chủ mới khi bản sửa đang chờ.
+- `worker_checkpoint candidate` chặn (không còn chỉ cảnh báo) mọi thay đổi ở file test BTC phát (`issued tests
+  changed`); file test mới của item vẫn được.
 
 ## Evidence và recovery
 

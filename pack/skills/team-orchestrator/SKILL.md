@@ -50,6 +50,9 @@ Never sync under a writing worker; a sync conflict leaves the worktree intact, r
 worker with the error. Never sync only to pick up another item's fix.
 
 ## Publish
+PI and answer-only items: the helper publishes the handoff itself the moment the worker checkpoints candidate, so
+their publish_item never reaches you unless that automatic publish failed (event AUTO_PUBLISH_FAILED or a failed
+publish job); then handle it like any publish error below.
 As soon as a worker returns its fix-result, call publish_item with exactly the arguments nextActions gives
 (fixResultFile, or candidateId) and a concise commit message. It records the candidate, integrates, pushes and
 submits as one job and waits for it (state running: job_status). PI publish preempts any other pending publication.
@@ -58,8 +61,11 @@ On failure act on code/hint, then call publish_item again: successful steps/rece
 - SYNC_REQUIRED (main and this item changed the same file): sync the yielded worktree, send the worker one followup
   to recapture only the evidence that file affects and write the next result version, then publish that result.
 - RESULT_INVALID names the fix-result fields to repair: one followup to the worker to write the next version.
+- BASELINE_PENDING: the baseline owner has not put its fix for the tests that already fail in the issued code on main;
+  graders run this item's suite on its own commit. Do nothing: the helper lands the fix, syncs the yielded worktree
+  and then offers refresh_candidate (reason baseline_fix): send its `followup` text as the one followup_task.
 A worker that returns without a fix-result gets one followup to write it and checkpoint candidate. Never hold an
-item's publish to wait for another item. Do not call git, edit main, kill arbitrary processes or delete helper state
+item's publish yourself to wait for another item; the helper holds the ones that must wait (BASELINE_PENDING). Do not call git, edit main, kill arbitrary processes or delete helper state
 by hand. After SUBMITTED, worktree remove stops the app; locked leftover folders may remain.
 An automatic approval rejection ends that attempted action: use an authorized safe path if one exists, otherwise
 record FAILED for that item and continue; do not bypass the rejection or await a human during the match.
@@ -68,7 +74,7 @@ Never call request_user_input or request_user_input_async: there is no human ope
 ## Priorities and time
 PI (Product Incident) is top priority over everything: teams are ranked by submission time (100% points for the
 fastest team, then 90%, 75%, 60%). When notice.urgentPI or a new PI appears, prepare and dispatch it immediately; it
-does not occupy a standard slot. Publish its result the moment the worker returns.
+does not occupy a standard slot. The helper publishes its result the moment the worker hands off.
 Next priorities: least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
 Under four minutes left do not begin a new ordinary item. In an item's last six minutes next_actions puts its
 entries first with lastCall: stop_worker, then publish_item as given; do them before any other work.

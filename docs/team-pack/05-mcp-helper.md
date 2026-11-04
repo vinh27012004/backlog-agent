@@ -273,6 +273,10 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   item đầu tiên có `start.json`/`page.json` đòi chạy cả bộ test (`pnpm test`, "existing tests", `mvn test`…); hai fixer
   cùng sửa một test thì item integrate sau bị `WORKTREE_CONFLICT`. Chủ đã nộp, bỏ hoặc integrate mà test vẫn fail thì
   item kế tiếp có MVS như vậy nhận việc. Root đưa nguyên khối vào brief (`<baseline_failures>`).
+  Từ EIOR38SI (04/11): grader chạy cả bộ test trên commit của **từng** item, nên chủ sửa baseline trước việc của nó và
+  báo `worker_checkpoint baseline_fixed {files}`; helper commit đúng các file đó lên main, item khác cần cả bộ test chờ
+  bản sửa đó khi publish (`BASELINE_PENDING`) rồi sync và chạy lại (13 §Test fail sẵn). Bản sửa đã lên main thì khối
+  có thêm `fixedOnMain` (revision) và không còn chủ mới.
 - `requiredEvidence` = `[{file, beforeFix}]` (bỏ khi rỗng): evidence mà mô tả item đòi ngoài MVS (`itemEvidence`).
   `beforeFix` = câu chứa "before" (vd "before fixing"): fixer chụp trước khi sửa code. Root đưa vào brief
   (`<required_evidence>`).

@@ -28,11 +28,15 @@ Root chỉ dùng cơ chế agent native, helper không tự spawn.
 
 ## 4. Handoff
 Mỗi item một `team_fixer` (03/11/2026 bỏ verified mode cùng reviewer, solver, verifier và gate). Worker code, chạy
-typecheck, build và cả bộ test một lần (test fail không có trong baseline là regression của nó), ready_for_evidence
+typecheck, build và cả bộ test một lần (test fail không có trong baseline là regression của nó; chủ baseline sửa test
+fail sẵn trước rồi báo `baseline_fixed`, item khác chờ bản sửa đó lên main trước khi publish, 13 §Test fail sẵn), ready_for_evidence
 (helper sync rồi mở ghi lại), chụp evidence, ghi fix-result rồi checkpoint candidate (helper kiểm fix-result,
 submit.json và cấu hình test; có lỗi thì worker sửa và ghi bản kế, khỏi vòng RESULT_INVALID qua root). Root gọi ngay
 `publish_item {fixResultFile}`: helper ghi candidate, ghi BACKLOG_TESTS từ testResults của submit.json, integrate,
 push, submit. Lỗi answer/evidence helper tìm thấy chỉ thành `warnings`/`answerWarnings`, không chặn.
+PI và item chỉ trả lời (từ 04/11): helper tự publish ngay khi worker bàn giao (autoPublish, 13 §PI chỉ báo cáo); item
+chỉ trả lời không cần worker viết fix-result, helper lập từ submit.json. Root chỉ gọi publish_item khi lần tự publish
+hỏng.
 
 Không còn worker evidence riêng cho item tier strong (bỏ sau J56ZZWSS, 03/11): cả ba lần chuyển giao ở trận đó chậm hơn
 để một fixer tự làm (spawn terra lỗi capacity, worker mới đọc lại từ đầu, BUG-01 worker evidence vẫn phải sửa code vì
@@ -55,6 +59,9 @@ Attempt tối đa 12 phút, checkpoint phút sáu hoặc ngắn hơn theo deadli
 Chưa xác nhận giả thuyết thì trả partial/hypotheses.
 Root lấy recent_changes và company logs/facts. PI đổi code cần test mới fail trên code chưa sửa (fixer tự kiểm); chỉ
 đổi answers thì không cần. decide root_cause_confirmed là advisory.
+PI chỉ báo cáo (Form A, 04/11): worktree không cài dependency, không index codegraph; helper kéo log mọi service vào
+`company/timeline.json`, chép vào `answers/<ID>/evidence/`, brief có khối `<report_only_pi>` thay skill; fix-result
+không bắt buộc (khi đó không có `hypotheses`, lập luận nằm trong incidentRecord); helper tự publish. Đích 1–2 phút.
 
 ## 8. Answer và evidence
 Giữ template/schema, đúng tên và nội dung evidence MVS. Download lấy bytes trình duyệt, không sinh lại CSV từ source.

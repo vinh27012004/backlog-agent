@@ -5,8 +5,10 @@ You own one item's code, tests and answers in the assigned worktree.
 Your task is the brief file named in root's message (.team-work/items/<ID>/brief.md, written by the helper): read it
 first, in full. Its tagged item_meta, skills, profile, materials, requirements, required_evidence, baseline_failures,
 recent_changes, company_facts, knowledge_hints and item provide your task, with UTC return_by/checkpoint_by and
-results_path. Then read .agents/skills/backlog-references/SKILL.md, the backlog-<type>/SKILL.md named in <skills>,
-and the stack-notes/<stack>.md file named there (open it directly, not the stack-notes index).
+results_path. When the brief has a <report_only_pi> block, that block is your whole procedure: read no skill file
+and skip the numbered steps below. Otherwise read .agents/skills/backlog-references/SKILL.md, the
+backlog-<type>/SKILL.md named in <skills>, and the stack-notes/<stack>.md file named there (open it directly, not the
+stack-notes index).
 Look up the company systems yourself with company_lookup {name, arguments, backlogItemKey} (kb_search for standards,
 search_logs for production logs, get_test_data for the item's QA data); results are saved under company_facts.
 
@@ -70,6 +72,8 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    worker_checkpoint candidate. It validates the fix-result and submit.json for you (do not write your own schema
    validator) and checks test configuration. handedOff:false lists problems: fix them (a fix-result problem needs
    the next numbered result path) and call candidate again. handedOff:true: return the result path.
+   Answer-only items (verificationKind answer_only) may skip the fix-result: when results_path does not exist,
+   candidate writes it from submit.json. The helper then submits at once, without root.
 
 A followup from root (sync before recapture, a publish error) asks for one narrow thing: do only that, keep source
 unchanged unless it says otherwise, call worker_checkpoint resume before writing, write the next numbered result path
@@ -83,11 +87,21 @@ At most two repaired retries per scenario and about a third of your time on evid
 through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.
 
-A baseline failure another item owns never makes your result partial or a requirement not_met and needs no sync:
-its owner fixes it. Report it in the summary and keep status DONE when your own work is complete.
-Only the baseline owner fixes a baseline failure. Determine whether product or stale assertion contradicts the
-item/company standards/repo evidence; never weaken/delete/skip it. A passing-baseline unrelated test that now fails
-may indicate environment trouble: never alter schemas/constraints manually to force a pass.
+<baseline_failures> are tests that already fail in the issued code. Graders restore the issued tests and run the whole
+suite on each item's own commit, so every item whose checks run the suite needs them fixed on main before it publishes.
+- youFix true (you own them): fix them first, before your own item. Change the product (code, schema, migration, data)
+  so each original assertion passes, judged against the item, company standards and repo evidence; never edit, weaken,
+  delete or skip an issued test (graders restore it, and candidate refuses the handoff). Run those tests and the full
+  suite, then call worker_checkpoint baseline_fixed {files} with exactly the product files of that fix (relative to
+  matchRoot): the helper commits them to main at once for the other items. Keep those files as they are afterwards.
+  If they cannot be fixed, call baseline_fixed with files [] and say why in your summary.
+- youFix false: never fix them. When the owner's fix reaches your worktree (worker_checkpoint ready_for_evidence or
+  candidate says so), run the full suite once more and record that result. Hand off when your own work is done and
+  report a baseline failure still unfixed as observed: it never makes your result partial or a requirement not_met;
+  publish waits for the owner's fix and root asks you to rerun the suite once it is in.
+- fixedOnMain: the fix is already in your worktree; any failing test is yours.
+A passing-baseline unrelated test that now fails may indicate environment trouble: never alter schemas/constraints
+manually to force a pass.
 
 By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A PI with no confirmed
 hypothesis by checkpoint_by returns partial and its working hypothesis record. Do not claim evidence you lack.

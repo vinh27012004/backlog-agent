@@ -1,7 +1,7 @@
 // Kiểm workflow với git/worktree thật; không gọi LLM hay mạng ngoài.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
@@ -326,12 +326,17 @@ test('worker_checkpoint candidate keeps the worker writing until the fix-result,
     assert.ok(res.problems.some(p => re.test(p)), `${re} in ${JSON.stringify(res.problems)}`);
   }
   sh('git', ['checkout', '--', 'M1/src/vitest.config.ts'], f.wt.worktreeRoot);
+  // EIOR38SI: BUG-01 viết lại assertion của cascade.test.ts; grader khôi phục test gốc nên mọi commit sau vẫn hỏng.
   writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'a.test.js'), 'test 2\n');
   writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: [] }] }));
   f.result(2);
   res = await checkpoint(args);
+  assert.equal(res.handedOff, false); assert.equal(f.ji.workerState, 'writing');
+  assert.match(res.problems.join('\n'), /issued tests changed: src\/tests\/a\.test\.js; graders restore/);
+  sh('git', ['checkout', '--', 'M1/src/tests/a.test.js'], f.wt.worktreeRoot);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'b.test.js'), 'test new\n');
+  res = await checkpoint(args);
   assert.equal(res.handedOff, true, JSON.stringify(res)); assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
-  assert.ok(res.warnings.some(w => /existing tests changed: src\/tests\/a\.test\.js/.test(w)), 'a changed existing test is only reported');
 });
 
 // BTZNI69E: layout.test.ts của BUG-01 launch msedge; grader chạy suite ở môi trường không có trình duyệt, vitest thoát 1
@@ -405,6 +410,11 @@ const submitted = f => {
   f.rt.gm.postSubmission = async (key, intent) => { bodies.push(JSON.parse(intent.body)); return { kind: 'SUBMITTED', submission: { id: randomUUID() } }; };
   return bodies;
 };
+// autoPublish ghi candidate (preflight) rồi mới tạo job publish.
+const publishJob = async f => {
+  for (let i = 0; i < 200 && !f.rt.jobs.jobs.get(f.ji.publishJobId); i++) await new Promise(r => setTimeout(r, 25));
+  await f.rt.jobs.jobs.get(f.ji.publishJobId).promise;
+};
 const publishDone = async (f, args) => {
   const job = await f.rt.workflow.publish(args); await f.rt.jobs.jobs.get(job.jobId).promise;
   return f.rt.jobs.view(f.rt.jobs.jobs.get(job.jobId));
@@ -433,13 +443,106 @@ test('after code, tests and evidence the fix-result is published as is, with no 
   assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === f.key), []);
 });
 
-test('an answer-only item is published without an independent solver', async () => {
+test('an answer-only item is published without an independent solver (root publishes when autoPublish is off)', async () => {
   const f = fixture('TASK-01', true), bodies = submitted(f);
+  localRuntime(f.root, { autoPublish: false });
   const p = await f.preflight(f.result(1));
+  assert.deepEqual(f.rt.workflow.autoPublish(), []);
   const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
   assert.deepEqual([next.action, next.arguments.candidateId], ['publish_item', p.candidateId]);
   const done = await publishDone(f, next.arguments);
   assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done)); assert.equal(bodies[0].answer.position, '2');
+});
+
+// CA3WKX60: fixer PI-01 viết fix-result 27 s sau khi submit.json đã xong, rồi root mất 10 s mới gọi publish_item.
+test('an answer-only handoff needs no fix-result from the worker and the helper publishes it once, without root', async () => {
+  const f = fixture('TASK-01', true), bodies = submitted(f);
+  const checkpoint = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
+  f.ji.workerState = 'writing';
+  const res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+  const written = JSON.parse(readFileSync(join(f.results, 'TASK-01-fixer-1.json'), 'utf8'));
+  assert.equal(written.status, 'fixed'); assert.match(written.summary, /position=2/);
+  assert.deepEqual(written.changed_files, ['answers/TASK-01/submit.json']);
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === f.key), [], 'root has nothing to do');
+  assert.deepEqual(f.rt.rootResults(), [], 'no "fix-result ready" notice for root');
+  assert.deepEqual(f.rt.workflow.autoPublish(), [f.key]);
+  assert.deepEqual(f.rt.workflow.autoPublish(), [], 'one automatic publish per handoff');
+  await publishJob(f);
+  assert.equal(f.rt.jobs.view(f.rt.jobs.jobs.get(f.ji.publishJobId)).result.status, 'SUBMITTED');
+  assert.equal(bodies.length, 1); assert.equal(bodies[0].answer.position, '2');
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === f.key), []);
+});
+
+test('the helper waits for a writing worker\'s handoff, tries its publish once and leaves a failure to root', async () => {
+  const f = fixture('PI-01', true);
+  f.rt.gm.view.items[0].raw.descriptionMd = '## Context\nReminders for paid invoices.\n## Out of scope\nChanging the application source, re-sending e-mails.\n';
+  f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() });
+  let down = true;
+  f.rt.gm.postSubmission = async () => { if (down) throw Object.assign(Error('Game Master unavailable'), { code: 'GM_UNAVAILABLE' }); return { kind: 'SUBMITTED', submission: { id: randomUUID() } }; };
+  const own = f.result(1);   // fix-result của chính worker, viết trước khi gọi candidate
+  f.ji.workerState = 'writing';
+  assert.deepEqual(f.rt.workflow.autoPublish(), [], 'the worker has not handed off yet');
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === f.key), [], 'still the helper\'s publish, not root\'s');
+  const res = await f.rt.workerCheckpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+  assert.equal(f.rt.workflow.latestResult(f.key), own, 'the worker\'s own fix-result is kept');
+  assert.deepEqual(f.rt.workflow.autoPublish(), [f.key]);
+  await publishJob(f);
+  assert.equal(f.rt.jobs.jobs.get(f.ji.publishJobId).state, 'failed');
+  const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
+  assert.ok(['publish_item', 'submit_work'].includes(next?.action), JSON.stringify(next));
+  assert.deepEqual(f.rt.workflow.autoPublish(), [], 'no second automatic try');
+  down = false;
+  const done = next.action === 'submit_work' ? await f.rt.submitWork(next.arguments) : (await publishDone(f, next.arguments)).result;
+  assert.equal(done.status, 'SUBMITTED', JSON.stringify(done));
+});
+
+// CA3WKX60: PI-01 chờ install + generate + migrate + seed 43 s, fixer đọc 42K ký tự skill rồi tự gọi search_logs từng
+// service trong 41 s (5 lượt) và tự chép log vào evidence.
+test('a report-only PI is prepared without dependency setup, with every service log merged into a timeline and copied into evidence', async () => {
+  const f = fixture('PI-01', true);
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, verificationKind: undefined });
+  f.rt.gm.view.items[0].raw = { title: 'Clients receive payment reminders for invoices they already paid', points: 160,
+    descriptionMd: '## Context\nSince this morning clients complain about reminders.\n## Out of scope\nChanging the application source, re-sending e-mails.\n' };
+  f.rt.startWork = async () => ({ type: 'PI', triage: { models: { fixer: [{ model: 'gpt-6.1-sol', reasoning_effort: 'high' }] } },
+    materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), files: [], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' }, requirements: [] });
+  const logs = {
+    deploy: [{ ts: '2026-10-27T06:05:40Z', service: 'deploy', requestId: 'dep-2', message: 'Release rel-2 completed' }],
+    'reminder-worker': [{ ts: '2026-10-27T07:40:01Z', service: 'reminder-worker', requestId: 'rem-b', message: 'Reminder sent' },
+      { ts: '2026-10-27T07:40:00Z', service: 'reminder-worker', requestId: 'rem-a', message: 'Reminder sent' }],
+    web: [{ ts: '2026-10-27T05:00:00Z', service: 'web', requestId: 'web-1', message: 'GET /' }],
+  };
+  const calls = [];
+  f.rt.company.list = async () => [{ name: 'kb_search', inputSchema: {} }, { name: 'search_logs', inputSchema: { properties: { query: {}, service: {} } } }];
+  f.rt.company.invoke = async (name, args) => {
+    calls.push([name, args]);
+    const text = v => ({ content: [{ type: 'text', text: JSON.stringify(v, null, 2) }] });
+    if (name === 'kb_search') return text({ articles: [{ id: 'KB-OPS-01', body: 'Use the service name exactly as it appears in logs: web, deploy, reminder-worker.' }] });
+    if (!args.service) return text({ total: 40, returned: 1, entries: logs.web });
+    const entries = logs[args.service] ?? [];
+    return text({ total: args.service === 'web' ? 30 : entries.length, returned: entries.length, entries });
+  };
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  assert.equal(done.result.worktree.codegraph, 'report-only PI');
+  assert.equal(f.rt.jobs.view(f.rt.jobs.jobs.get(done.result.worktree.setupJobId)).result.skipped, 'report-only PI', 'no install, generate, migrate or seed');
+  const company = join(f.rt.session.paths.teamWork, 'items', f.key, 'company');
+  const timeline = JSON.parse(readFileSync(join(company, 'timeline.json'), 'utf8'));
+  assert.deepEqual(timeline.entries.map(e => e.requestId), ['web-1', 'dep-2', 'rem-a', 'rem-b'], 'all services merged, sorted by ts');
+  assert.deepEqual(timeline.services.map(s => [s.service, s.complete]).sort(), [['deploy', true], ['reminder-worker', true], ['web', false]]);
+  assert.ok(calls.some(([n, a]) => n === 'search_logs' && a.service === 're-sending'), 'hyphenated names in the item are probed');
+  const saved = readdirSync(company);
+  assert.equal(saved.filter(n => /search_logs/.test(n)).length, 3, `services without entries are not saved: ${saved}`);
+  const evidence = readdirSync(join(f.wt.matchRoot, 'answers', f.key, 'evidence'));
+  for (const n of saved) assert.ok(evidence.includes(n), `${n} copied into evidence`);
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  assert.match(brief, /<report_only_pi>[\s\S]*answers\/PI-01\/evidence\/derive\.mjs/);
+  assert.match(brief, /search_logs \(service web: 1\/30 INCOMPLETE\)/);
+  assert.match(brief, /timeline \(4 entries from 3 services, sorted by ts\)/);
+  assert.doesNotMatch(brief, /<skills>|<profile>/, 'the playbook replaces the skill files');
 });
 
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {
@@ -508,4 +611,122 @@ test('prepare names the exact backlog skill and stack-notes file', () => {
   assert.deepEqual(itemSkills('EPIC', 'rust'), { item: null, stackNotes: '.agents/skills/stack-notes/unknown.md' });
   for (const [t, s] of [['BUG', 'node'], ['CR', 'java-maven'], ['TASK', 'python'], ['PI', 'go'], ['BUG', 'php'], ['BUG', 'dotnet'], ['BUG', 'unknown']])
     for (const p of Object.values(itemSkills(t, s))) assert.ok(existsSync(join('pack', p.replace('.agents/', ''))), p);
+});
+
+// EIOR38SI: test fail sẵn ở bản phát; BUG-01 là chủ, BUG-02 cần cả bộ test. Grader chạy suite trên commit của từng
+// item, BUG-02 lên main lúc 14:20 trước bản sửa của BUG-01 (14:27) và mất 20 điểm. f là BUG-02; BUG-01 có worktree riêng.
+function baselineFixture() {
+  const f = fixture('BUG-02', false, { 'src/status.js': 'export const paid = (p, t) => p > t;\n', 'src/tests/status.test.js': 'expect(paid(5, 5)).toBe(true);\n' });
+  const head = sh('git', ['rev-parse', 'HEAD'], f.checkout);
+  f.rt.journal.data.initialRevision = head;
+  f.rt.journal.data.preparation = { baseline: { status: 'FAIL', failing: ['tests/status.test.js > paid in full'] }, baselineOwner: 'BUG-01' };
+  f.ji.needsSuite = true;
+  const owner = f.rt.wtPaths('BUG-01');
+  sh('git', ['worktree', 'add', '-q', '--detach', owner.worktreeRoot, 'HEAD'], f.checkout);
+  const oi = Object.assign(f.rt.journal.item('BUG-01'), { startedAt: new Date().toISOString(), worktreeBase: head, workerState: 'writing', verificationKind: 'mvs',
+    prepared: { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } } });
+  f.rt.gm.view.items.push({ key: 'BUG-01', title: 'BUG-01', raw: { descriptionMd: '## Acceptance criteria\n1. Sidebar.' } });
+  const rows = (minutesLeft = 30) => ['BUG-01', 'BUG-02'].map(key => ({ key, type: 'BUG', status: 'OPEN', local: 'started', minutesLeft }));
+  f.rt.itemRows = () => rows();
+  const checkpoint = args => f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
+  const ownerFix = () => writeFileSync(join(owner.matchRoot, 'src', 'status.js'), 'export const paid = (p, t) => p >= t;\n');
+  return { ...f, owner, oi, rows, checkpoint, ownerFix };
+}
+const text = file => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+const FIXED = 'export const paid = (p, t) => p >= t;\n';
+
+test('the baseline owner lands its fix on main first; an item that runs the suite publishes only after syncing it', async () => {
+  const f = baselineFixture();
+  f.result(1); f.ji.checkpoint = 'candidate';
+  const actions = () => f.rt.workflow.actions().nextActions.filter(a => a.key === 'BUG-02').map(a => a.action);
+  assert.deepEqual(actions(), [], 'publish waits while the owner works on the baseline');
+  assert.deepEqual(f.rt.rootResults().map(u => u.key), []);
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: 'BUG-02', fixResultFile: join(f.results, 'BUG-02-fixer-1.json') }), /BASELINE_PENDING/);
+  f.rt.itemRows = () => f.rows(4);
+  assert.deepEqual(actions(), ['publish_item'], 'in the last minutes it publishes as is');
+  f.rt.itemRows = () => f.rows();
+
+  // Chủ sửa test gốc thì bị từ chối; sửa sản phẩm rồi báo đúng file đó.
+  writeFileSync(join(f.owner.matchRoot, 'src', 'tests', 'status.test.js'), 'expect(true).toBe(true);\n');
+  await assert.rejects(f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: ['src/tests/status.test.js'] }), /graders restore issued tests/);
+  await assert.rejects(f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'baseline_fixed', files: ['src/status.js'] }), /NOT_BASELINE_OWNER/);
+  sh('git', ['checkout', '--', 'M1/src/tests/status.test.js'], f.owner.worktreeRoot);
+  f.ownerFix();
+  const res = await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: ['src/status.js'] });
+  assert.deepEqual([res.state, res.writesAllowed], ['pending', true]);
+  assert.deepEqual(actions(), [], 'still waiting until the fix is on main');
+
+  assert.deepEqual(await f.rt.workflow.autoBaseline(), ['BUG-02']);
+  assert.match(sh('git', ['log', '-1', '--format=%s'], f.checkout), /^BUG-01: make the tests that fail in the issued code pass/);
+  assert.equal(text(join(f.checkout, 'M1', 'src', 'status.js')), FIXED);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED, 'BUG-02 worktree has the fix');
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'lib.js')), 'export const value=2;\n', 'and keeps its own change');
+  const refresh = f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02');
+  assert.deepEqual([refresh.action, refresh.reason], ['refresh_candidate', 'baseline_fix']);
+  assert.match(refresh.followup, /BUG-01's fix for the baseline failures/);
+
+  // Worker chạy lại cả bộ test và bàn giao bản 2: publish được, rồi chủ publish mà không bị SYNC_REQUIRED.
+  f.result(2);
+  const next = f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02');
+  assert.deepEqual([next.action, next.arguments.fixResultFile], ['publish_item', join(f.results, 'BUG-02-fixer-2.json')]);
+  f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() }); f.rt.gm.postSubmission = async () => ({ kind: 'SUBMITTED', submission: { id: randomUUID() } });
+  const settle = async j => { await f.rt.jobs.jobs.get(j.jobId).promise; return f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId)); };
+  let done = await settle(await f.rt.workflow.publish({ backlogItemKey: 'BUG-02', fixResultFile: next.arguments.fixResultFile }));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  writeFileSync(join(f.owner.matchRoot, 'src', 'layout.js'), 'export const offset=240;\n');
+  mkdirSync(join(f.owner.matchRoot, 'answers', 'BUG-01'), { recursive: true });
+  writeFileSync(join(f.owner.matchRoot, 'answers', 'BUG-01', 'submit.json'), JSON.stringify({ status: 'DONE' }));
+  writeFileSync(join(f.results, 'BUG-01-fixer-1.json'), JSON.stringify(fix()));
+  f.oi.workerState = 'yielded';
+  done = await settle(await f.rt.workflow.publish({ backlogItemKey: 'BUG-01', fixResultFile: join(f.results, 'BUG-01-fixer-1.json') }));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  assert.equal(text(join(f.checkout, 'M1', 'src', 'layout.js')), 'export const offset=240;\n');
+});
+
+test('a writing worker that hands off after the baseline fix landed is synced and asked to rerun the suite', async () => {
+  const f = baselineFixture();
+  f.ji.workerState = 'writing';
+  f.result(1);
+  let res = await f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'candidate' });
+  assert.equal(res.handedOff, true);
+  assert.ok(res.warnings.some(w => /not fixed on main yet: BUG-01 lands that fix first/.test(w)), JSON.stringify(res.warnings));
+  f.ji.workerState = 'writing';
+  f.ownerFix();
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: ['src/status.js'] });
+  await f.rt.workflow.landBaseline();
+  res = await f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'candidate' });
+  assert.equal(res.handedOff, false);
+  assert.match(res.problems[0], /BUG-01's fix for the baseline failures just landed on main/);
+  assert.equal(f.ji.workerState, 'writing');
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED);
+  f.result(2);
+  res = await f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'candidate' });
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+});
+
+test('the owner syncs onto main after its own baseline fix landed, the new migration file included', async () => {
+  const f = baselineFixture();
+  mkdirSync(join(f.owner.matchRoot, 'src', 'migrations'), { recursive: true });
+  writeFileSync(join(f.owner.matchRoot, 'src', 'migrations', '002_restrict.sql'), 'ALTER TABLE invoices RESTRICT;\n');
+  f.ownerFix();
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: ['src/status.js', 'src/migrations/002_restrict.sql'] });
+  await f.rt.workflow.landBaseline();
+  assert.equal(f.rt.journal.data.preparation.baselineFix.state, 'landed');
+  assert.equal(text(join(f.checkout, 'M1', 'src', 'migrations', '002_restrict.sql')), 'ALTER TABLE invoices RESTRICT;\n');
+  writeFileSync(join(f.owner.matchRoot, 'src', 'layout.js'), 'export const offset=240;\n');
+  f.oi.workerState = 'yielded';
+  const s = await f.rt.worktree({ action: 'sync', backlogItemKey: 'BUG-01' });
+  assert.equal(s.synced, true);
+  assert.equal(text(join(f.owner.matchRoot, 'src', 'layout.js')), 'export const offset=240;\n');
+  assert.equal(text(join(f.owner.matchRoot, 'src', 'status.js')), FIXED);
+});
+
+test('an owner that cannot fix the baseline releases the items waiting for it', async () => {
+  const f = baselineFixture();
+  f.result(1); f.ji.checkpoint = 'candidate';
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner');
+  const res = await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: [] });
+  assert.equal(res.state, 'abandoned');
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === 'BUG-02').map(a => a.action), ['publish_item']);
 });
