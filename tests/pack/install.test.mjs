@@ -9,7 +9,7 @@ import { REPO, hasPlayer, install, McpClient, player, tempDir } from './support.
 // Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
 test('the fixer is told which skills and references to read; it is the only subagent profile', () => {
   const fixer = readFileSync(join(REPO, 'pack', 'agents', 'team-fixer.toml'), 'utf8');
-  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/evidence-playbook.md']) {
+  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/evidence-playbook.md', 'backlog-references/domain-checks.md']) {
     assert.ok(fixer.includes(f), `fixer prompt names ${f}`);
   }
   assert.deepEqual(readdirSync(join(REPO, 'pack', 'agents')).sort(), ['team-fixer.toml', 'team-orchestrator.toml']);

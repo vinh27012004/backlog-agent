@@ -45,4 +45,5 @@ or when a decision/lookup only root can make blocks you.
 # Read only the relevant reference
 - BUG investigation: bug-patterns.md.
 - PI investigation: pi-triage.md.
+- Edge cases by domain (money, dates, ordering, file export, access, UI layout, incident): domain-checks.md.
 - Workers capturing UI/data/download evidence: evidence-playbook.md.

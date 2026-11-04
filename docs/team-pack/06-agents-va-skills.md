@@ -19,7 +19,7 @@ về cảnh báo. Fixer tự chạy typecheck, build và cả bộ test một l�
 `<baseline_failures>` là lỗi của chính nó. Company Tools do root thực hiện và lưu facts.
 
 ## Skills và contract
-Worker đọc backlog-references, backlog-<type>, stack-notes và bug-patterns/pi-triage/evidence-playbook khi liên quan.
+Worker đọc backlog-references, backlog-<type>, stack-notes và bug-patterns/pi-triage/evidence-playbook khi liên quan, cùng các mục của domain-checks (tiền, ngày giờ, thứ tự, xuất file, quyền truy cập, layout, sự cố) mà item đụng tới.
 Root dùng game-preparation, team-orchestrator, team-recovery theo phase Player.
 Fix-result được runtime validate strict schema (`contracts/fix-result.schema.json`). Lỗi chỉ field.
 Mỗi requirement đúng một entry; PASS scenario có verification.check bằng scenario ID và evidence thật.

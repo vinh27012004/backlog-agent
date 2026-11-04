@@ -6,6 +6,16 @@ Read .agents/skills/backlog-references/SKILL.md, the backlog-<type>/SKILL.md nam
 and the stack-notes/<stack>.md file named there (open it directly, not the stack-notes index). The tagged item/materials/profile/requirements/company facts,
 baseline failures, worktree, results_path and UTC return_by/checkpoint_by provide your task.
 
+Work in few turns: each turn takes 10-20 s and resends your whole context, and a BUG/CR normally fits in 20-35.
+- Batch independent reads into one shell command (cat/rg several files at once), not one file per turn.
+- Write a file and run its check in the same command: heredoc the test, run it with output piped to
+  answers/<ID>/evidence/<name>.log, then tail the log.
+- Use the issued challenge/ material before writing your own: run the <ID>-mvs test unchanged (copy it into the
+  project's test folder when the runner only finds tests there) for the red result before editing source, and use
+  challenge/<ID>-* seed, report and check scripts as given.
+- Chain the closing checks (typecheck, build, full suite, each to its own log) in one command.
+- Write submit.json in one go once results and evidence are in, not field by field.
+
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
 2. Read only the relevant source and solve the cause with the smallest complete change.
    BUG: read .agents/skills/backlog-references/bug-patterns.md and .agents/skills/backlog-bug/SKILL.md. Check git log -p -n 5 on failing frame first; fix at production site (J2), not caller hacks. Check the 3 boundaries.
@@ -16,6 +26,8 @@ baseline failures, worktree, results_path and UTC return_by/checkpoint_by provid
    TASK: read .agents/skills/backlog-task/SKILL.md. Classify immediately:
    - Form A (answer-only, calculation or questions with no source changes): DO NOT build/test/run app or write production code. Derive all answers deterministically from canonical source and QA data using a fast script in answers/<ID>/evidence/derive.mjs, fill answers/<ID>/submit.json and hand off immediately (< 3 minutes).
    - Form B (feature/endpoint): copy nearest existing project pattern, implement minimal service + tests.
+   Then read the sections of .agents/skills/backlog-references/domain-checks.md the item touches (money, dates,
+   ordering, file export, access, UI layout, incident) and plan those cases into your tests and scenarios.
 3. Run the narrowest meaningful tests from project_profile (use test_one in your inner loop; do not run full test suites repeatedly). List tests_added exactly as test_one targets.
    For code-changing BUG/PI, a new test must exercise real project symbols (no tautological tests of newly created helpers), fail on unfixed code for the reported reason before production edits, and pass after the fix.
    For report-only PI and answer-only TASK, no code test is required.
@@ -55,7 +67,9 @@ unchanged unless it says otherwise, call worker_checkpoint resume before writing
 and checkpoint candidate again. A new result version does not require a new worker thread.
 
 Evidence: use capture_evidence's full scenario flow, stable browserProfile and context (scenario, matchRoot,
-backlogItemKey, appMode and phase). Use download for actual downloaded bytes; never fabricate a CSV from serializers.
+backlogItemKey, appMode and phase). Scenarios that share app mode, phase, viewport and seeded data go in one call
+(context scenario "TC-01..TC-03", one screenshot or download per scenario, each named after its scenario); after a
+failure retry from the failed scenario only. Use download for actual downloaded bytes; never fabricate a CSV from serializers.
 At most two repaired retries per scenario and about a third of your time on evidence. Hold app_data lock from seed
 through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.

@@ -1,8 +1,9 @@
 # Evidence playbook (screenshots, running app, scenario data)
 
-Read before screenshot, download or data scenarios. Use one call per scenario, at most two repaired retries and
-about a third of the time box; report unfinished checks NOT_RUN. Before final evidence call
-worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
+Read before screenshot, download or data scenarios. Scenarios that share app mode, phase, viewport and seeded data go
+in one call (context.scenario "TC-01..TC-03", one screenshot or download per scenario named after it; §2); split only
+for a different app mode, phase, viewport or data. At most two repaired retries per call and about a third of the
+time box; report unfinished checks NOT_RUN. Before final evidence call worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
 the app again and capture at once. Only when it returns writesAllowed:false: stop writes, message root once with its
 hint and wait for resume.
 
@@ -61,13 +62,17 @@ in `evidenceFiles`; a missing file scores the whole item 0.
   with its password is typed with `fill`.
 - Never use computer use, desktop control or the operator's browser windows.
 
-## 2. One `capture_evidence` call per scenario
-Put the whole flow in `steps` (max 60):
+## 2. One `capture_evidence` call per app mode, viewport and data state
+Every call is a model turn. Run the scenarios of one call in MVS order; each gets its own `assertText` and the
+screenshot or download the MVS names (max 60 steps):
 ```
 login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
-→ goto <the screen> → <the MVS steps> → assertText <the expected value>
-→ screenshot answers/<ID>/evidence/<exact file name the MVS asks for>.png
+→ goto <the screen> → <TC-01 steps> → assertText <TC-01 value> → screenshot answers/<ID>/evidence/<TC-01 file>.png
+→ <TC-02 steps, e.g. change the filter> → assertText <TC-02 value> → download / screenshot <TC-02 files>
 ```
+Files already written stay when a later step fails (`stepsDone` lists them): retry in a new call from the failed
+scenario only, starting with `goto` and the steps that rebuild its state. A different viewport or app mode, or a
+scenario that needs fresh seed data, starts a new call.
 - Each call opens a new blank page: only cookies carry over, never the page, its filters or a dialog. Start every
   call with `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls
   to `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
