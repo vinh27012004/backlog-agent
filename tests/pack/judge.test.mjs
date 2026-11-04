@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { buildBench } from '../../tools/judge/bench.mjs';
 import { collectMatch } from '../../tools/judge/collect.mjs';
 import { buildReport } from '../../tools/judge/items.mjs';
 import { scoreMatch } from '../../tools/judge/score.mjs';
@@ -200,4 +201,36 @@ test('the item table joins usage, judge and titles across matches and flags what
   assert.match(md, /\| BUG-01 · Sidebar covers content \| NEW1: 12m00s ✗ \|/);
   assert.ok(csv.startsWith('match,key,type,points,title,outcome,judge'));
   assert.equal(csv.split('\n').length, 4, 'header and one row per item');
+});
+
+// Benchmark theo bộ đề (bench.mjs): trận cùng bộ item gom một nhóm dù dừng sớm, trận mới so với trận liền trước; mốc
+// thời gian/credit tốt nhất chỉ lấy từ trận nộp ít nhất bằng trận mới, credit trống khi có model ngoài price card.
+test('the bench groups matches by item set and compares the newest with the previous one', () => {
+  const runs = tempDir('mtm-bench-');
+  const big = ['BUG-01', 'BUG-02', 'BUG-03', 'CR-01', 'PI-01'], small = ['BUG-01', 'TASK-01', 'TASK-02'];
+  const match = (id, day, keys, done, credits, unpriced = ['codex-auto-review']) => {
+    const from = Date.UTC(2026, 10, day, 1);
+    const items = Object.fromEntries(keys.map((k, i) => [k, i < done
+      ? { outcome: 'SUBMITTED', ms: (10 + i) * 60_000, endedAt: new Date(from + (20 + i) * 60_000).toISOString(), phases: {}, jobs: {} }
+      : { outcome: 'NOT_STARTED', phases: {}, jobs: {} }]));
+    json(join(runs, id, '_usage', 'usage.json'), { matchId: id, window: { from, to: from + 40 * 60_000 }, credits, unpriced,
+      total: { input_tokens: 1e7 }, byRole: { root: { tokens: { input_tokens: 4e6 } } }, quota: {}, items, threads: [] });
+  };
+  match('S1', 1, small, 3, 50);
+  match('B1', 2, big, 2, 10);                                  // dừng sớm: rẻ nhưng không so được
+  match('B2', 3, big.slice(0, 4), 3, 90, ['gpt-x', 'codex-auto-review']);   // thiếu PI-01 vẫn cùng bộ; credit không tin được
+  match('B3', 4, big, 5, 80);
+  const { groups, pairs, md } = buildBench(runs);
+  assert.deepEqual(groups.map(g => [g.name, g.matches.map(m => m.id)]), [['Bộ 5 item', ['B1', 'B2', 'B3']], ['Bộ 3 item', ['S1']]]);
+  const p = pairs.find(x => x.cur === 'B3');
+  assert.equal(p.prev, 'B2');
+  const row = label => p.metricRows.find(r => r[0] === label);
+  assert.deepEqual(row('Item nộp').slice(1, 4), ['5/5', '3/5', '+2 (+67%) ✓']);
+  assert.deepEqual(row('Credit').slice(1, 5), ['80', '—', '—', '—'], 'B2 has an unpriced model, B1 submitted fewer items');
+  assert.equal(row('Nộp xong item cuối (từ đầu trận)')[1], '24m00s');
+  const pi = p.itemRows.find(r => r[0] === 'PI-01');
+  assert.deepEqual([pi[2], pi[5]], ['· → nộp', 'mới nộp ✓']);
+  assert.match(md, /## Bộ 5 item: B3 so với B2/);
+  assert.match(md, /\*\*Trận mới chưa chấm judge\*\*/);
+  assert.equal(buildBench(runs, { match: 'B2', vs: 'B1' }).pairs[0].prev, 'B1');
 });

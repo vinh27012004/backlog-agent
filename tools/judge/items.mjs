@@ -107,12 +107,15 @@ export function matchSummary(bundle) {
       fixerThreads: fixers.length, fixerModels: [...new Set(fixers.map(t => `${String(t.model ?? '?').replace(/^gpt-/, '')}${t.effort ? `/${t.effort}` : ''}`))],
       fixerCalls: calls, secPerCall: calls ? busy / calls / 1000 : null, reviewerThreads: u.reviewer?.threads ?? 0,
       gates: u.gates ?? 0, gateMs: u.jobs?.run_gate?.ms ?? null, credits: own.reduce((a, t) => a + (t.credits ?? 0), 0), activity: activity[key] ?? null,
+      inputTokens: own.reduce((a, t) => a + (t.tokens?.input_tokens ?? 0), 0),
+      endedAt: u.endedAt ? Date.parse(u.endedAt) : null,
       judge: s?.judged ? (s.judge ? 'pass' : `fail ${s.highFails.map(h => h.id).join(',')}`) : '—',
       gateVsJudge: s?.gateVsJudge ?? 'n/a', reviewerVsJudge: s?.reviewerVsJudge ?? 'n/a' };
     return { ...row, flags: itemFlags(row) };
   });
-  return { id: usage.matchId, from: usage.window?.from ?? null, credits: usage.credits ?? null, limitAt: usage.quota?.limitAt ?? null,
-    judged: Boolean(judged), items };
+  const roleInput = Object.fromEntries(Object.entries(usage.byRole ?? {}).map(([role, v]) => [role, v.tokens?.input_tokens ?? 0]));
+  return { id: usage.matchId, from: usage.window?.from ?? null, to: usage.window?.to ?? null, credits: usage.credits ?? null,
+    limitAt: usage.quota?.limitAt ?? null, unpriced: usage.unpriced ?? [], input: usage.total?.input_tokens ?? null, roleInput, judged: Boolean(judged), items };
 }
 
 export function buildReport(runsDir) {

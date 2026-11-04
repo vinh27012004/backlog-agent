@@ -41,4 +41,6 @@ The tests use the Player source in `vendor/` as oracle; the directory form `node
 
 `/judge-practice <match checkout>` (skill in `.claude/skills/judge-practice/`, scripts in `tools/judge/`) re-judges every item against `tools/judge/rubric.md` before reading the gate/reviewer verdicts (matches before 2026-11-03 still have them), then reports false greens/reds; bundles go to the gitignored `runs/judge/`. The same skill runs `tools/judge/usage.mjs`, which sums tokens, credits and run time per role, item and thread from the Codex transcripts (`~/.codex/sessions`, one file per thread, same `session_id` as root; the Player dashboard counts root and, since 0.9.41, subagents, but never the guardian auto-review threads) plus the helper journal (`jobs[].ms`, `endedAt`, `outcome`), into `<bundle>/_usage/usage.md`. Then `tools/judge/items.mjs`
 rebuilds `runs/judge/_items/items.md` (+ `items.csv`): every match side by side and one row per item (judge, time per
-phase, fixer model and turns, evidence capture failures, credits, flags to tune).
+phase, fixer model and turns, evidence capture failures, credits, flags to tune), and `tools/judge/bench.mjs` writes
+`runs/judge/_items/bench.md`: matches grouped by item set, the newest of each set against the previous one of the same
+set, per match and per item.
