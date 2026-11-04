@@ -29,6 +29,10 @@ const typeOf = key => String(key).split('-')[0].toUpperCase();
 // thêm esbuild jsx vào vitest.config.ts cho test mới của nó, TASK-02 nộp sau mang theo thay đổi đó và mất TC-04).
 const TEST_CONFIG = /(^|\/)((vitest|jest|playwright|cypress|karma|mocha)\.(config|setup|workspace)\.[cm]?[jt]s|vitest\.workspace\.json|jest\.config\.json|\.mocharc\.[a-z]+|setupTests\.[jt]sx?|pytest\.ini|conftest\.py|tox\.ini|phpunit\.xml(\.dist)?|karma\.conf\.js)$/i;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|Tests?\.(java|cs)$/;
+// Test mở trình duyệt: grader chạy cả suite trong môi trường sạch không có trình duyệt, beforeAll hỏng thì vitest
+// thoát 1 dù 0 test hỏng (BTZNI69E: layout.test.ts của BUG-01 launch msedge, CR-01/CR-02/CR-03 mất TC test tự động,
+// 30 điểm). Cùng một chuỗi cho RegExp và `git grep -E` (không dùng \b, \s).
+const BROWSER_TEST = '(from|require\\()[ ]*["\'](playwright|playwright-core|@playwright/test|puppeteer|puppeteer-core|selenium-webdriver)["\']|(chromium|firefox|webkit)\\.launch\\(';
 // Lỗi bàn giao mà worker luôn tự sửa được; còn lại (evidence thiếu, PASS chưa đủ chứng cứ…) chỉ báo lại.
 const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid JSON|submit\.json lacks template key|submit\.json status is still)/;
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
@@ -140,8 +144,22 @@ export class Workflow {
       if (config.length) problems.push(`test configuration changed: ${config.join(', ')}; restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>) and make your test work with the existing config`);
       const tests = own.filter(p => TEST_FILE.test(p) && !config.includes(p));
       if (tests.length) warnings.push(`existing tests changed: ${tests.join(', ')}; allowed only when the item permits fixing a test that contradicts intended behaviour, explained in engineeringRecord`);
+      const browser = await this.browserTests(paths.worktreeRoot, ji.worktreeBase, folder, changed);
+      if (browser.length) problems.push(`test launches a browser: ${browser.join(', ')}; graders run the whole suite where no browser is installed, so the file errors and the suite exits 1 although no test fails. Test the logic without a browser (render the component or compute the CSS in node/jsdom) and keep browser checks as evidence scripts under answers/${key}/evidence/`);
     }
     return { problems, warnings };
+  }
+  // Test thêm/sửa của item (ngoài answers/) mở trình duyệt, khi bộ test phát ra chưa có file nào làm vậy (bộ test
+  // vốn là e2e thì môi trường chấm có trình duyệt).
+  async browserTests(worktreeRoot, base, folder, changed) {
+    const re = new RegExp(BROWSER_TEST);
+    const hits = changed.filter(f => f.status !== 'D' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
+      .filter(f => { try { return re.test(readFileSync(join(worktreeRoot, f.path), 'utf8')); } catch { return false; } })
+      .map(f => f.path.slice(folder.length));
+    if (!hits.length) return [];
+    const issued = await git(['grep', '-l', '-E', BROWSER_TEST, base, '--', folder], { cwd: worktreeRoot, allowFail: true });
+    const issuedTests = issued.out.split(/\r?\n/).map(l => l.slice(l.indexOf(':') + 1)).filter(p => p && !p.startsWith(`${folder}answers/`) && TEST_FILE.test(p));
+    return issuedTests.length ? [] : hits;
   }
   async candidateCheckpoint(args) {
     const { problems, warnings } = await this.handoffCheck(args.backlogItemKey);

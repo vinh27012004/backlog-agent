@@ -24,8 +24,10 @@ quả, source/environment và answer tree; sửa gì sau bàn giao thì CANDIDAT
 Khi ghi candidate, helper kiểm (`match/answers.mjs`, `env/evidence.mjs`) và chỉ báo lại, không chặn: submit.json theo
 template/schema, mỗi requirement đúng một entry, PASS scenario có verification.check bằng scenario ID và evidence MVS
 đòi, evidence mô tả item đòi, evidence cũ so với source/environment. Không gì chặn ở bước này: lỗi mà worker luôn tự sửa
-được (fix-result sai schema, submit.json hỏng hay sai schema/template, đổi cấu hình test) đã bị giữ lại ở
-worker_checkpoint candidate. File test có sẵn bị sửa chỉ là cảnh báo (đề cho sửa test mâu thuẫn, kèm giải thích).
+được (fix-result sai schema, submit.json hỏng hay sai schema/template, đổi cấu hình test, test mới mở trình duyệt khi
+bộ test phát ra chưa có test nào làm vậy) đã bị giữ lại ở worker_checkpoint candidate. Test mở trình duyệt: grader chạy
+cả suite ở môi trường không có trình duyệt, file đó hỏng ở beforeAll, vitest thoát 1 dù 0 test hỏng (BTZNI69E:
+`layout.test.ts` của BUG-01 launch msedge, CR-01, CR-02, CR-03 mỗi item mất 10 điểm TC test tự động). File test có sẵn bị sửa chỉ là cảnh báo (đề cho sửa test mâu thuẫn, kèm giải thích).
 
 Snapshot loại answers/ và challenge/ (file BTC phát, không chạy trong app); environment hash env files, marker dependency, runtime/commands và biến build/test liên quan,
 không xuất secret. Hậu tố database theo trận/item và virtualStoreDir không tính, nên checkout chính và worktree cùng

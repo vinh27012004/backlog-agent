@@ -256,6 +256,33 @@ test('worker_checkpoint candidate keeps the worker writing until the fix-result,
   assert.ok(res.warnings.some(w => /existing tests changed: src\/tests\/a\.test\.js/.test(w)), 'a changed existing test is only reported');
 });
 
+// BTZNI69E: layout.test.ts của BUG-01 launch msedge; grader chạy suite ở môi trường không có trình duyệt, vitest thoát 1
+// với 0 test hỏng và CR-01, CR-02, CR-03 nộp sau mất TC test tự động. Helper giữ worker lại ở candidate.
+test('worker_checkpoint candidate refuses a new test that launches a browser unless the issued tests already do', async () => {
+  const f = fixture('BUG-01');
+  const checkpoint = args => f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
+  const args = { backlogItemKey: f.key, phase: 'candidate' };
+  f.result(1); f.ji.workerState = 'writing';
+  mkdirSync(join(f.wt.matchRoot, 'src', 'tests'), { recursive: true });
+  const layout = join(f.wt.matchRoot, 'src', 'tests', 'layout.test.ts');
+  writeFileSync(layout, 'import { chromium } from "playwright";\nconst b = await chromium.launch({ channel: "msedge" });\n');
+  writeFileSync(join(f.dir, 'evidence', 'check.mjs'), 'import { chromium } from "playwright";\n');
+  let res = await checkpoint(args);
+  assert.equal(res.handedOff, false, JSON.stringify(res));
+  const problem = res.problems.find(p => /test launches a browser/.test(p));
+  assert.match(problem ?? '', /src\/tests\/layout\.test\.ts/); assert.doesNotMatch(problem, /check\.mjs/, 'evidence scripts are fine');
+  writeFileSync(layout, 'import { expect, it } from "vitest";\nit("x", () => expect(1).toBe(1));\n');
+  f.result(2);
+  res = await checkpoint(args);
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+  // Bộ test phát ra vốn là e2e: môi trường chấm có trình duyệt, không chặn.
+  const e2e = fixture('BUG-01', false, { 'src/tests/e2e.spec.ts': 'import { test } from "@playwright/test";\n' });
+  e2e.result(1); e2e.ji.workerState = 'writing';
+  writeFileSync(join(e2e.wt.matchRoot, 'src', 'tests', 'new.spec.ts'), 'import { test } from "@playwright/test";\n');
+  res = await e2e.rt.definitions().find(t => t.name === 'worker_checkpoint').handler({ backlogItemKey: e2e.key, phase: 'candidate' });
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+});
+
 // Worker code + test, chụp evidence rồi nộp; helper không gate, không đòi review, không trả todo (03/11).
 const submitted = f => {
   const bodies = []; f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() });

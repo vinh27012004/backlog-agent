@@ -674,8 +674,18 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `ELEMENT_NOT_ACTIONABLE` kèm lý do (`element is not enabled`). `goto` tới cổng không có app báo `NAVIGATION_FAILED`
   ngay thay vì để bước sau chờ hết giờ. Lỗi khác của Playwright tới agent là `BROWSER_STEP_FAILED`/`STEP_TIMEOUT`
   kèm `error.details` như mọi bước hỏng.
-- Test: `tests/pack/browser.test.mjs` (16 test, dùng `playwright-core` ở `<repo>/playwright`, `support.mjs` tự cài lần
+- Test: `tests/pack/browser.test.mjs` (17 test, dùng `playwright-core` ở `<repo>/playwright`, `support.mjs` tự cài lần
   đầu và trỏ helper đã cài tới đó qua `MTM_PLAYWRIGHT_DIR`).
+
+### 5.26 `capture_evidence`: `drag` trên @hello-pangea/dnd (04/11, sau BTZNI69E)
+
+- @hello-pangea/dnd và react-beautiful-dnd bỏ qua chuột hay phím bắt đầu trong `button`/`input`… nằm trong drag handle.
+  Card của Solova là một `<button>` phủ kín handle, nên kéo chuột chỉ mở card; fixer tự dò Tab rồi Space cũng không
+  trúng handle (BUG-04-TC-02 `NOT_RUN`, mất 15 điểm, dù grader chạy lại MVS đạt).
+- Nguồn và đích là phần tử `data-rfd-draggable-id` cùng một `data-rfd-droppable-id`: helper focus chính handle
+  (`data-rfd-drag-handle-draggable-id`), Space nhấc, mũi tên đúng số bước theo `position` (before/after/center, trục dọc
+  hay ngang theo vị trí hai phần tử), Space thả; bước ghi `mode: keyboard` và `moves`. Khác list hay không phải rfd thì
+  vẫn kéo chuột như cũ. Test: `browser.test.mjs`.
 
 ### 5.19 `decide` (R, mới, D9)
 

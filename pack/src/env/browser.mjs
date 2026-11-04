@@ -523,6 +523,36 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             const target = await find({ selector: s.to.selector, text: s.to.text, index: s.to.index }, s.timeoutMs);
             const source = await find(q, s.timeoutMs);
             await source.scrollIntoViewIfNeeded({ timeout: left(5000) });
+            // @hello-pangea/dnd, react-beautiful-dnd: không nhấc khi chuột hay phím bắt đầu trong button/input nằm trong
+            // handle (BTZNI69E BUG-04: cả card là <button>, kéo chuột chỉ mở card, TC-02 NOT_RUN mất 15 điểm). Nguồn và
+            // đích cùng một Droppable thì focus chính handle, Space nhấc, mũi tên đúng số bước, Space thả.
+            const plan = await source.evaluate((el, [to, position]) => {
+              const near = (n, sel) => n.closest(sel) ?? n.querySelector(sel);
+              const a = near(el, '[data-rfd-draggable-id]'), b = near(to, '[data-rfd-draggable-id]');
+              const handle = near(el, '[data-rfd-drag-handle-draggable-id]');
+              const drop = a?.closest('[data-rfd-droppable-id]');
+              if (!a || !b || !handle || a === b || !drop || b.closest('[data-rfd-droppable-id]') !== drop) return null;
+              const items = [...drop.querySelectorAll('[data-rfd-draggable-id]')].filter(n => n.closest('[data-rfd-droppable-id]') === drop);
+              const from = items.indexOf(a), at = items.indexOf(b);
+              const dest = position === 'after' ? (from > at ? at + 1 : at) : (from > at ? at : position === 'before' ? at - 1 : at);
+              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+              const vertical = Math.abs(rb.top - ra.top) >= Math.abs(rb.left - ra.left);
+              handle.focus();
+              return { steps: dest - from, vertical, focused: document.activeElement === handle };
+            }, [await target.elementHandle(), s.position ?? 'center']);
+            if (plan?.focused) {
+              const key = plan.vertical ? (plan.steps < 0 ? 'ArrowUp' : 'ArrowDown') : (plan.steps < 0 ? 'ArrowLeft' : 'ArrowRight');
+              if (plan.steps !== 0) {
+                await page.keyboard.press('Space');
+                await sleep(250);
+                for (let n = 0; n < Math.abs(plan.steps); n++) { await page.keyboard.press(key); await sleep(200); }
+                await sleep(250);
+                await page.keyboard.press('Space');
+                await sleep(Math.min(3000, s.settleMs ?? 500));
+              }
+              log.push({ step: i + 1, action: 'drag', mode: 'keyboard', moves: plan.steps });
+              break;
+            }
             const fb = await source.boundingBox(), tb = await target.boundingBox();
             if (!fb) fail('ELEMENT_NOT_FOUND', describeQuery(q));
             if (!tb) fail('ELEMENT_NOT_FOUND', describeQuery(s.to));

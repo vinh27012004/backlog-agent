@@ -427,6 +427,47 @@ test('capture_evidence drags with real mouse events and presses Space', { skip: 
   }
 });
 
+// BTZNI69E BUG-04: card của @hello-pangea/dnd là <button> trong drag handle; thư viện bỏ qua chuột/phím bắt đầu trong
+// button nên kéo chuột chỉ mở card. Trang giả chặn như vậy và chỉ nhận Space/mũi tên trên chính handle.
+const RFD = page(`<div data-rfd-droppable-id="L1" style="margin:40px;width:200px">
+${['A', 'B', 'C'].map(t => `<div data-rfd-draggable-id="${t}" data-rfd-drag-handle-draggable-id="${t}" tabindex="0"><button style="width:100%;height:40px">${t}</button></div>`).join('')}
+</div><div id="order"></div>
+<script>
+const drop = document.querySelector('[data-rfd-droppable-id]');
+const show = () => order.textContent = 'order ' + [...drop.children].map(n => n.dataset.rfdDraggableId).join(',');
+show(); let lifted = null;
+window.addEventListener('mousedown', e => { if (e.target.closest('button')) return; });
+window.addEventListener('keydown', e => {
+  const h = e.target.closest?.('[data-rfd-drag-handle-draggable-id]');
+  if (!h || e.target !== h) return;
+  if (e.key === ' ') { e.preventDefault(); if (!lifted) lifted = h; else { lifted = null; show(); } return; }
+  if (!lifted) return;
+  if (e.key === 'ArrowUp' && lifted.previousElementSibling) drop.insertBefore(lifted, lifted.previousElementSibling);
+  if (e.key === 'ArrowDown' && lifted.nextElementSibling) drop.insertBefore(lifted.nextElementSibling, lifted);
+  lifted.focus();
+});
+</script>`);
+
+test('capture_evidence drags a @hello-pangea/dnd card whose content is a button with the keyboard on its handle', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(RFD); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const card = t => ({ selector: `[data-rfd-draggable-id="${t}"]` });
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'goto', url: `http://127.0.0.1:${server.address().port}/` },
+      { action: 'drag', ...card('C'), to: card('A'), position: 'before' },
+      { action: 'assertText', text: 'order C,A,B' },
+      { action: 'drag', ...card('B'), to: card('C'), position: 'before' },
+      { action: 'assertText', text: 'order B,C,A' },
+      { action: 'drag', ...card('B'), to: card('A'), position: 'after' },
+      { action: 'assertText', text: 'order C,A,B' }] });
+    assert.deepEqual(res.steps.filter(s => s.action === 'drag').map(s => [s.mode, s.moves]), [['keyboard', -2], ['keyboard', -2], ['keyboard', 2]]);
+  } finally {
+    server.close();
+  }
+});
+
 // PXWV53VC: đường dẫn tương đối bị từ chối (cả ba worker), ảnh dashboard chụp khi còn "—", assertText ngay sau click
 // điều hướng báo ASSERT_FAILED.
 test('evidence paths may be relative to context.matchRoot', () => {

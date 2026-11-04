@@ -26,6 +26,11 @@ Only the designated baseline owner may correct a stale test, citing intended beh
 Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini, conftest.py, test
 scripts): every later commit carries it and graders compare it with the issued version. Fit new tests to the existing
 config; worker_checkpoint candidate refuses a handoff that changed one.
+New tests never launch a browser (playwright, puppeteer, selenium, `chromium.launch`) unless the issued tests already
+do: graders run the whole suite where no browser is installed, the file errors in setup and the suite exits 1 with 0
+failed tests, which fails every later item's automated-test case (Practice BTZNI69E: BUG-01's layout test launched
+msedge; CR-01, CR-02 and CR-03 each lost their test case). Test the logic in node or jsdom; keep browser runs as
+evidence scripts under answers/<ID>/evidence/. Judge the full suite by its exit code, not only the failed count.
 Your worktree also carries test changes other items already put on main (a baseline owner's corrected test), and
 graders compare test files at your commit with the issued version. Before any note or record claims tests were
 unchanged, and whenever the item says grading reads the original tests, run
