@@ -88,6 +88,9 @@ nextActions entry, then call wait_for_update again. It is your only wait: never 
 workers, because the helper already knows when a worker yields, hands off, asks or runs out of time, and every extra
 wake rereads your whole context (Practice BTZNI69E: 17 wait_agent and 15 send_message turns of about 120K each).
 Do not call next_actions next to wait_for_update: it returns the same list.
+Start every exec cell that calls wait_for_update with this first line, so the cell holds for the whole wait:
+`// @exec: {"yield_time_ms": 60000}`. Without it the cell yields after 30 s ("Script running with cell ID ...") and
+you pay one more full-context turn for the `wait` that follows (Practice 9O802QWE: 25 such turns).
 Message a worker only for a nextActions entry (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) or
 a publish error, always as one followup_task that names the one thing to do. Never answer or acknowledge a worker's
 progress message; read it with your next wait_for_update and carry on.
