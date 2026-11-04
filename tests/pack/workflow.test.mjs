@@ -283,6 +283,44 @@ test('worker_checkpoint candidate refuses a new test that launches a browser unl
   assert.equal(res.handedOff, true, JSON.stringify(res));
 });
 
+// BTZNI69E: fixer nhắn root 20 lần, root thức qua wait_agent rồi trả lời từng tin. Worker hỏi qua worker_checkpoint
+// blocked: helper đánh thức root bằng answer_worker; root trả lời rồi resume đóng câu hỏi.
+test('worker_checkpoint blocked raises answer_worker for root until root resumes the worker', async () => {
+  const f = fixture('BUG-01');
+  const checkpoint = args => f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
+  f.ji.workerState = 'writing'; f.ji.workerThread = '/root/bug01_fixer'; f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
+  await assert.rejects(async () => checkpoint({ backlogItemKey: f.key, phase: 'blocked' }), /question/);
+  const cursor = f.rt.events.seq;
+  const res = await checkpoint({ backlogItemKey: f.key, phase: 'blocked', question: 'Which revision of KB-EXP-01 applies? I read revision 2 in the saved facts.' });
+  assert.equal(res.writesAllowed, true); assert.match(res.hint, /End your turn/);
+  assert.ok(f.rt.events.since(cursor).some(e => e.type === 'WORKER_BLOCKED' && e.key === f.key));
+  const ask = f.rt.workflow.actions().nextActions.find(a => a.action === 'answer_worker');
+  assert.equal(ask?.workerThread, '/root/bug01_fixer'); assert.match(ask.question, /KB-EXP-01/);
+  await checkpoint({ backlogItemKey: f.key, phase: 'resume', threadId: '/root/bug01_fixer' });
+  assert.equal(f.rt.workflow.actions().nextActions.some(a => a.action === 'answer_worker'), false, 'resume closes the question');
+});
+
+// BTZNI69E: 7/27 wait_for_update về tay không vì sự kiện không sinh việc (worker được tự sync rồi chạy tiếp, job dọn
+// database, TIMELINE). Ở GAME chỉ thức khi có nextActions hoặc sự kiện root phải xử lý.
+test('wait_for_update in GAME keeps waiting through events that bring no work and wakes on work or a match change', async () => {
+  const f = fixture('BUG-01');
+  f.ji.workerState = 'writing'; f.ji.workerThread = '/root/bug01_fixer'; f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
+  assert.deepEqual(f.rt.workflow.actions().nextActions, [], 'nothing to do while the worker writes');
+  const waitFor = async (timeoutMs, push) => {
+    const cursor = f.rt.events.seq, since = Date.now();
+    const pending = f.rt.waitForUpdate({ timeoutMs, cursor });
+    setTimeout(push, 100);
+    const res = await pending;
+    return { res, ms: Date.now() - since };
+  };
+  let { res, ms } = await waitFor(900, () => { f.rt.events.push('TIMELINE', { event: 'x' }); f.rt.events.push('JOB_DONE', { kind: 'drop_databases' }); });
+  assert.ok(ms >= 850, `no early wake (${ms} ms)`); assert.deepEqual(res.events.map(e => e.type), ['TIMELINE', 'JOB_DONE']);
+  ({ res, ms } = await waitFor(5000, () => f.rt.events.push('MATCH_STATUS', { status: 'PAUSED' })));
+  assert.ok(ms < 2000, `MATCH_STATUS wakes root (${ms} ms)`);
+  ({ res, ms } = await waitFor(5000, () => f.rt.workflow.blockedCheckpoint({ backlogItemKey: f.key, question: 'Need the KB revision.' })));
+  assert.ok(ms < 2000, `work wakes root (${ms} ms)`); assert.ok(res.nextActions.some(a => a.action === 'answer_worker'));
+});
+
 // Worker code + test, chụp evidence rồi nộp; helper không gate, không đòi review, không trả todo (03/11).
 const submitted = f => {
   const bodies = []; f.rt.gm.endpoint = () => ({ matchUuid: randomUUID() });

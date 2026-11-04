@@ -19,7 +19,9 @@ report_ready rồi kết thúc lượt PREPARE. Không thêm coding-agent CLI ho
 
 ## 3. GAME
 Configure frame GAME, login_match, refresh_match, company_tools, rồi vòng wait_for_update (trả cả nextActions; không gọi
-thêm next_actions) xen wait_agent khi có worker đang chạy.
+thêm next_actions). Từ 04/11 đây là lệnh chờ duy nhất của root: không wait_agent; worker báo root qua worker_checkpoint
+(ready_for_evidence, candidate, blocked {question}), không send_message; root nhắn worker bằng followup_task khi
+nextActions bảo (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) hay publish lỗi.
 prepare_item trả materials/worktree/profile/timeBox/models, root lookup facts liên quan rồi brief worker.
 Root chỉ dùng cơ chế agent native, helper không tự spawn.
 

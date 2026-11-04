@@ -6,6 +6,11 @@ Read .agents/skills/backlog-references/SKILL.md, the backlog-<type>/SKILL.md nam
 and the stack-notes/<stack>.md file named there (open it directly, not the stack-notes index). The tagged item/materials/profile/requirements/company facts,
 baseline failures, worktree, results_path and UTC return_by/checkpoint_by provide your task.
 
+Never send_message to root, not for progress, findings or "done": each message grows root's context and could
+wake it for a full context reread. Root follows you through worker_checkpoint only. When a decision or lookup only root can make stops
+you (company tools, another item, the time box), call worker_checkpoint blocked with one question and what you
+already checked, then end your turn with that question as your reply; root's answer arrives as a followup.
+
 Work in few turns: each turn takes 10-20 s and resends your whole context, and a BUG/CR normally fits in 20-35.
 - Batch independent reads into one shell command (cat/rg several files at once), not one file per turn.
 - Write a file and run its check in the same command: heredoc the test, run it with output piped to
@@ -46,8 +51,8 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    A UI fix is done when the page looks right in the app mode the MVS names (dev or production), not only in a test.
 4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
    Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:
-   start the app again and collect final evidence now, no message to root. Otherwise stop all writes, message root
-   once with the returned hint and wait; after root says resume, call worker_checkpoint resume and restart the app.
+   start the app again and collect final evidence now, no message to root. Otherwise stop all writes and end your
+   turn with the returned hint as your reply; root's followup says resume: call worker_checkpoint resume and restart the app.
    Never wait for another item's fix (shared layout, baseline, data): capture from your worktree now with the
    playbook workaround and name the shared defect in the scenario note.
    Before-fix screenshots are captured before changing source and labelled before_fix.

@@ -44,8 +44,11 @@ Never change protected exam-info.json or env-require files.
 The profile grants writing your own results JSON. Write the strict contract to a temporary
 file beside the given results path, then rename atomically. Each handoff uses a NEW numbered filename; never overwrite
 a result already handed off. Match the item's language in human-readable fields; report only observed outcomes.
-Do not repeatedly report progress. Final replies reach root automatically; message once when yielding for sync,
-or when a decision/lookup only root can make blocks you.
+Never send_message to root: each message grows root's context and could wake it for nothing (Practice BTZNI69E:
+fixers sent 20 progress messages, about 40 root turns of about 120K tokens each). Root learns everything through worker_checkpoint and the
+helper: ready_for_evidence, candidate, and blocked {question} when a decision or lookup only root can make stops you
+(then end your turn with the question as your reply). Your final reply reaches root by itself. A followup from root
+arrives as a new task in this thread.
 
 # Read only the relevant reference
 - BUG investigation: bug-patterns.md.

@@ -177,6 +177,7 @@ export class Workflow {
       ji.workerState = 'writing';
       ji.workStartedAt = Date.now();
       if (threadId) ji.workerThread = threadId;
+      delete ji.question;
     } else {
       if (ji.workStartedAt) this.metric(key, ji.workerPhase ?? 'code_test', ji.workStartedAt);
       ji.workerState = 'yielded';
@@ -186,7 +187,19 @@ export class Workflow {
     ji.checkpoint = phase;
     this.rt.journal.save();
     return { key, phase, writesAllowed: phase === 'resume',
-      hint: phase === 'ready_for_evidence' ? 'Stop writing. Root may sync now, then sends resume; restart the app before final evidence.' : null };
+      hint: phase === 'ready_for_evidence' ? 'Stop writing and end your turn. Root may sync now, then sends a followup to resume; restart the app before final evidence.' : null };
+  }
+  // blocked: worker cần root quyết hay tra cứu (Company Tools, item khác, time box). Helper ghi câu hỏi và đánh thức
+  // root bằng answer_worker trong nextActions, thay cho send_message lên root: BTZNI69E fixer nhắn root 20 lần giữa
+  // chừng, mỗi tin root thức qua wait_agent rồi trả lời, khoảng 2 lượt × 120K context. Câu hỏi đóng khi root gọi resume.
+  blockedCheckpoint({ backlogItemKey: key, question }) {
+    const ji = this.item(key), text = String(question ?? '').trim();
+    if (!text) fail('INVALID_ARGUMENT', 'blocked needs question');
+    ji.question = { text: text.slice(0, 2000), at: new Date().toISOString() };
+    this.rt.journal.save();
+    this.rt.events.push('WORKER_BLOCKED', { key });
+    return { key, phase: 'blocked', writesAllowed: ji.workerState === 'writing',
+      hint: 'Root sees this question at its next wait_for_update. End your turn now with the question as your reply; root answers with a followup, then continue.' };
   }
   // ready_for_evidence: worker vừa ngừng ghi (đang chờ chính lời gọi này), nên helper sync luôn rồi mở ghi lại, không
   // đợi root một vòng (4D895OVI: CR-01, CR-02 mỗi item chờ khoảng 1 phút). Root chỉ còn việc khi sync xung đột hoặc
@@ -202,15 +215,15 @@ export class Workflow {
       synced = await r.worktree({ action: 'sync', backlogItemKey: key });
     } catch (e) {
       return { ...yielded, syncError: { code: e.code ?? 'INTERNAL_ERROR', message: e.message },
-        hint: 'Helper could not sync: stay yielded, message root once with this error and wait for resume.' };
+        hint: 'Helper could not sync: stay yielded and end your turn with this error as your reply; root gets sync_before_evidence from the helper and sends a followup to resume.' };
     }
-    if (synced.setupJobId) return { ...yielded, synced, hint: 'Dependencies changed: stay yielded and message root once; root resumes you after setup.' };
+    if (synced.setupJobId) return { ...yielded, synced, hint: 'Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.' };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
         hint: 'Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.' };
     } catch (e) {
-      return { ...yielded, synced, hint: `${e.code}: stay yielded and message root once.` };
+      return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
     }
   }
   // Ghi candidate từ fix-result vừa bàn giao. Kiểm answer, evidence và yêu cầu chỉ thành cảnh báo.
@@ -374,6 +387,7 @@ export class Workflow {
         }
       }
       if (ji.prepared && !ji.workerThread && !c) { add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId }); continue; }
+      if (ji.question) { add(key, 'answer_worker', {}, { question: ji.question.text, askedAt: ji.question.at, workerThread: ji.workerThread ?? null }); continue; }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
       if (c && !freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id });

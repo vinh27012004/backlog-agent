@@ -8,8 +8,8 @@ J56ZZWSS bỏ cả worker evidence riêng của item tier strong: một fixer l�
 | Tool | Hành vi |
 |---|---|
 | prepare_item | Job Start Work, materials, worktree/setup/index, profile/models/timeBox và paths viết brief; chờ job tới 25 s nên thường trả kết quả luôn |
-| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); candidate (sau khi ghi fix-result) kiểm fix-result mới nhất, submit.json và cấu hình test, có lỗi thì giữ worker ghi tiếp (`handedOff:false`); resume mở lại; root đăng ký threadId |
-| next_actions | Hàng đợi có tham số và waitMs theo release/deadline: prepare_item, spawn_worker, sync_before_evidence, refresh_candidate, publish_item, submit_work, stop_worker. wait_for_update trả cùng danh sách nên root chỉ vòng wait_agent → wait_for_update |
+| worker_checkpoint | ready_for_evidence/candidate nhường quyền ghi; ready_for_evidence tự sync worktree rồi mở ghi lại (xung đột hay cài lại dependency thì chờ root); candidate (sau khi ghi fix-result) kiểm fix-result mới nhất, submit.json và cấu hình test, có lỗi thì giữ worker ghi tiếp (`handedOff:false`); blocked {question} ghi câu hỏi cho root (sự kiện WORKER_BLOCKED, nextActions answer_worker) thay cho send_message; resume mở lại, đóng câu hỏi; root đăng ký threadId |
+| next_actions | Hàng đợi có tham số và waitMs theo release/deadline: prepare_item, spawn_worker, sync_before_evidence, refresh_candidate, publish_item, submit_work, stop_worker. wait_for_update trả cùng danh sách và là lệnh chờ duy nhất của root (từ 04/11, không wait_agent); answer_worker khi worker gọi `worker_checkpoint blocked` |
 | publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent; chờ job tới 25 s (thường 10–15 s là xong) |
 
 Mỗi item một team_fixer. Root thực hiện native agent operations và Company Tools lookup; helper không thêm agent CLI.
@@ -35,6 +35,25 @@ source có cùng fingerprint; app dùng lại bản build cùng snapshot (05 §5
 
 BACKLOG_TESTS (bước verification của publish) đếm testResults của submit.json, không có thì requirements của fix-result,
 answer_only thì kết quả kiểm schema/source. Kịch bản chưa ghi không PASS; last-chance nộp với FAIL/NOT_RUN trung thực.
+
+## Root chỉ chờ bằng wait_for_update (04/11, sau BTZNI69E)
+
+Root của BTZNI69E 142 lượt, context TB khoảng 120K: 27 lượt sau `wait_for_update` (7 lần về tay không), 17 sau
+`wait_agent` (8 lần hết giờ), 15 sau `send_message`. Fixer nhắn root 20 lần giữa chừng (báo tiến độ), root trả lời
+15 lần; mỗi tin khoảng 2 lượt root. Sửa:
+- Ở GAME, `wait_for_update` chỉ trả về khi có nextActions, khi gặp MATCH_STATUS, ITEM_CHANGED, ITEM_CLOSED,
+  POLL_ERROR, hoặc khi hết hạn chờ (tối đa 55 s, sớm hơn khi tới mốc ra đề/deadline). Sự kiện không sinh việc
+  (WORKER_YIELDED của worker vừa được tự sync, JOB_DONE dọn database, TIMELINE) thì chờ tiếp; `events` vẫn trả đủ.
+- Skill root: `wait_for_update` là lệnh chờ duy nhất, không `wait_agent`; nhắn worker bằng một `followup_task` chỉ khi
+  nextActions bảo hoặc publish lỗi; không trả lời tin tiến độ.
+- Fixer không `send_message` lên root. Cần root quyết/tra cứu thì `worker_checkpoint blocked {question}`: helper ghi
+  câu hỏi, đẩy WORKER_BLOCKED, nextActions có `answer_worker` (question, workerThread); root trả lời bằng followup rồi
+  gọi `worker_checkpoint resume {threadId}` để đóng câu hỏi. Worker yielded vì sync lỗi cũng chỉ kết thúc lượt;
+  root thấy `sync_before_evidence` từ helper.
+- Worker dừng ngang không checkpoint: tin cuối của nó nằm trong hàng đợi, root đọc ở lần thức sau (tối đa 55 s);
+  worker treo vẫn bị `stop_worker` bắt ở returnBy như cũ. Trần 55 s nằm dưới `tool_timeout_sec = 120`.
+- Kiểm ở trận sau (`usage.md`, `bench.md`): `wait_agent` = 0, lượt root giảm (142 ở BTZNI69E), thời gian từ
+  candidate tới SUBMITTED không tăng.
 
 ## Evidence và recovery
 

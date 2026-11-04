@@ -30,6 +30,8 @@ import { trustedTeamWorkspace } from './core/paths.mjs';
 import { HelperError, fail, isId, oneLine, writeFileAtomic } from './core/util.mjs';
 
 const PREPARE_BUDGET_MS = 8 * 60_000;
+// Sự kiện luôn đánh thức root dù chưa sinh nextActions: trận dừng/kết thúc, đề đổi, item đóng, lỗi poll Game Master.
+const WAKE_EVENTS = new Set(['MATCH_STATUS', 'ITEM_CHANGED', 'ITEM_CLOSED', 'POLL_ERROR']);
 // Phút để dành cho integrate + push + submit sau khi fixer trả kết quả (root vài lượt).
 const PUBLISH_RESERVE_MIN = 5;
 // PI là cuộc đua (Game Rules §6: 100/90/75/60% theo thứ hạng, bấm giờ từ lúc đề hiện): mỗi lượt fixer tối đa
@@ -185,8 +187,8 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start even if little time is left.'), requiredScenarios: num('Number of verification scenarios you will run (MVS count or acceptance criteria, min 1).') }, ['backlogItemKey']), handler: a => this.startWork(a) },
       { name: 'prepare_item', description: 'GAME: one background job for Start Work, materials, worktree/environment setup, profile and complete worker brief inputs. Waits up to waitSeconds (default 25) and usually returns the finished team_fixer brief inputs; state running means call job_status.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start with little time left.'), waitSeconds: num('Wait max 45 seconds (default 25).') }, ['backlogItemKey']), handler: a => this.workflow.prepare(a) },
-      { name: 'worker_checkpoint', description: 'GAME, worker or root: ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded, message root once and wait for resume. candidate (after writing the fix-result) checks the newest fix-result against its contract, submit.json against the item schema/template and that no test configuration changed: problems keep you writing (handedOff:false) until you fix them and write the next numbered fix-result; warnings are information. resume grants writes again. Root never syncs a writing worker.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'resume'] }, threadId: str('Root: native worker thread ID when granting writes.') }, ['backlogItemKey', 'phase']),
+      { name: 'worker_checkpoint', description: 'GAME, worker or root. This is how a worker signals root: never send_message to root. ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded and end your turn with the hint as your reply: root gets the sync from the helper and sends a followup to resume. candidate (after writing the fix-result) checks the newest fix-result against its contract, submit.json against the item schema/template, that no test configuration changed and that no new test launches a browser: problems keep you writing (handedOff:false) until you fix them and write the next numbered fix-result; warnings are information. blocked {question}: only for a decision or lookup that root alone can make (company tools, another item, the time box); the helper wakes root with answer_worker, then end your turn with the question as your reply and continue when root\'s followup arrives. resume grants writes again (root: also registers threadId and closes an answered question). Root never syncs a writing worker.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'blocked', 'resume'] }, question: str('blocked: the one question for root, with what you already checked.'), threadId: str('Root: native worker thread ID when granting writes.') }, ['backlogItemKey', 'phase']),
         readOnly: true, handler: a => this.workerCheckpoint(a) },
       { name: 'next_actions', description: 'GAME: ordered actions for new items, workers, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
         inputSchema: obj({}), readOnly: true, handler: () => { this.session.require('GAME'); return this.workflow.actions(); } },
@@ -203,7 +205,7 @@ export class Runtime {
           lastChance: obj({ reason: str('Why no further attempt fits and what is not verified (one line).') }, ['reason']) }, ['backlogItemKey', 'gitRevision']), handler: a => this.submitWork(a) },
       { name: 'report_progress', description: 'Write a root-decided progress event: BLOCKER_OPENED, BLOCKER_RESOLVED, BACKLOG_STATUS (IN_PROGRESS/COMPLETED/BLOCKED/FAILED), ORCHESTRATOR_RESTARTED, ORCHESTRATOR_ENDED, or a BLOCKED/FAILED stage. No envelope fields.',
         inputSchema: obj({ event: { type: 'object', description: 'Event without schemaVersion/playerSessionId.' } }, ['event']), handler: a => this.reportProgress(a) },
-      { name: 'wait_for_update', description: 'Block up to timeoutMs (max 55000) for new events: ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, FIX_RESULT (a fixer wrote a fix-result that is not published yet; state.newResults lists them), POLL_ERROR. Use instead of ending the turn.',
+      { name: 'wait_for_update', description: 'The one wait of root: block up to timeoutMs (max 55000). Returns at once when nextActions is not empty; otherwise in GAME it returns when an event produces nextActions (new item with a free slot, worker yielded or blocked, fix-result written, job done) or on MATCH_STATUS, ITEM_CHANGED, ITEM_CLOSED, POLL_ERROR, else at the timeout, the next release or the nearest deadline. events lists everything seen since cursor (ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, WORKER_YIELDED, WORKER_BLOCKED, FIX_RESULT, POLL_ERROR, TIMELINE). Use instead of ending the turn and instead of wait_agent.',
         inputSchema: obj({ timeoutMs: num('Max wait in ms, up to 55000.'), cursor: num('Last seq you have seen; -1 = only events from now on.') }), readOnly: true, handler: (a, ctx) => this.waitForUpdate(a, ctx) },
       { name: 'job_status', description: 'State and result of a background job. Returns early with `newPI` (keys) while a revealed PI has not been started: start it, then wait again.',
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
@@ -262,7 +264,7 @@ export class Runtime {
     }
     const next = this.session.phase === 'PREPARE'
       ? ['prepare_checkout', 'setup_environment (job) while you call login_match', 'wait_for_update until JOB_DONE', 'report_ready', 'end the turn']
-      : ['login_match', 'refresh_match', 'company_tools', 'wait_for_update (its nextActions) → prepare_item → native team_fixer → publish_item', 'wait_agent / wait_for_update; never end the turn while the match runs'];
+      : ['login_match', 'refresh_match', 'company_tools', 'wait_for_update (its nextActions) → prepare_item → native team_fixer → publish_item', 'wait_for_update is the only wait (no wait_agent); never end the turn while the match runs'];
     return {
       phase: this.session.phase, type: this.session.type, matchId: d.matchId, teamId: d.teamId,
       paths: this.session.paths, restartAttempt: d.restartAttempt ?? 0, models: this.session.models,
@@ -292,6 +294,7 @@ export class Runtime {
   workerCheckpoint(args) {
     if (args.phase === 'ready_for_evidence') return this.workflow.evidenceCheckpoint(args);
     if (args.phase === 'candidate') return this.workflow.candidateCheckpoint(args);
+    if (args.phase === 'blocked') return this.workflow.blockedCheckpoint(args);
     return this.workflow.checkpoint(args);
   }
 
@@ -532,7 +535,7 @@ export class Runtime {
       returnBy: at(work), ...(pi ? { checkpointBy: at(Math.min(PI_CHECKPOINT_MIN, work)) } : {}) };
   }
 
-  // Mốc ra đề tiếp theo theo đồng hồ trận, để root canh lượt chờ (wait_agent) trả về ngay sau mốc đó.
+  // Mốc ra đề tiếp theo theo đồng hồ trận, để wait_for_update trả về ngay sau mốc đó.
   releases() {
     const file = join(this.session.paths.matchRoot, 'README.md');
     if (this.releaseCache?.file !== file) {
@@ -1243,7 +1246,17 @@ export class Runtime {
     // item đã ra mà chưa làm vẫn thấy trong state.open.
     const from = cursor < 0 ? this.events.seq : cursor;
     const pending = this.workflow.actions();
-    const events = await this.events.wait(from, pending.nextActions.length ? 0 : Math.max(0, Math.min(55_000, timeoutMs, pending.waitMs)), ctx.signal);
+    const until = Date.now() + (pending.nextActions.length ? 0 : Math.max(0, Math.min(55_000, timeoutMs, pending.waitMs)));
+    // GAME: chỉ thức khi có việc (nextActions) hoặc sự kiện root phải tự xử lý. Sự kiện không sinh việc (worker vừa
+    // được helper tự sync rồi chạy tiếp, job dọn database, TIMELINE) thì chờ tiếp tới hạn: BTZNI69E 7/27 lần
+    // wait_for_update về tay không, mỗi lần root đọc lại khoảng 120K context.
+    let events = [], seen = from;
+    for (;;) {
+      const got = await this.events.wait(seen, Math.max(0, until - Date.now()), ctx.signal);
+      if (got.length) { events.push(...got); seen = got[got.length - 1].seq; }
+      if (!got.length || ctx.signal?.aborted || Date.now() >= until || this.session.phase !== 'GAME') break;
+      if (got.some(e => WAKE_EVENTS.has(e.type)) || this.workflow.actions().nextActions.length) break;
+    }
     const last = events.length ? events[events.length - 1].seq : from;
     const rows = this.gm.view ? this.itemRows() : [];
     return { cursor: last, events: events.slice(-50), ...this.workflow.actions(),

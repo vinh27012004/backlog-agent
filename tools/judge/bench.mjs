@@ -59,6 +59,8 @@ const MATCH_METRICS = [
   { label: '· root', get: m => m.roleInput?.root ?? null, fmt: mtok, better: 'low' },
   { label: '· team_fixer', get: m => m.roleInput?.team_fixer ?? null, fmt: mtok, better: 'low' },
   { label: '· guardian', get: m => m.roleInput?.guardian ?? null, fmt: mtok, better: 'low' },
+  { label: 'Lượt root', get: m => m.rootCalls ?? null, fmt: num(0), better: 'low' },
+  { label: '· sau wait_agent, send_message', get: m => m.rootWaitCalls ?? null, fmt: num(0), better: 'low' },
   { label: 'Lượt fixer', get: m => sum(m.items.map(r => r.fixerCalls)), fmt: num(0), better: 'low' },
   { label: 'Chụp evidence hỏng', get: m => (m.items.some(r => r.activity) ? sum(m.items.map(r => r.activity?.captureFails)) : null), fmt: num(0), better: 'low' },
   { label: 'Item có cờ "cần xem"', get: m => m.items.filter(r => r.flags.length).length, fmt: num(0), better: 'low' },

@@ -39,9 +39,13 @@ worker_checkpoint resume with threadId. The same worker codes, tests and capture
 
 ## While the worker runs
 The worker calls worker_checkpoint ready_for_evidence; the helper syncs its worktree and resumes it in the same call,
-so normally root does nothing. Only when the worker messages that it stayed yielded (conflict, dependency setup) and
-nextActions says sync_before_evidence: worktree sync while yielded, wait for any setup job, then send resume to the
-existing worker. Never sync under a writing worker; a sync conflict leaves the worktree intact, return it to the
+so normally root does nothing. Only when nextActions says sync_before_evidence (the worker stayed yielded on a
+conflict or dependency setup): worktree sync while yielded, wait for any setup job, then one followup_task telling the
+existing worker to resume.
+answer_worker carries a question the worker raised with worker_checkpoint blocked (a company lookup, another item,
+the time box): answer it from root (company_call with backlogItemKey, match state), send the answer as one
+followup_task to that worker, then call worker_checkpoint resume {backlogItemKey, threadId} to close the question.
+Never sync under a writing worker; a sync conflict leaves the worktree intact, return it to the
 worker with the error. Never sync only to pick up another item's fix.
 
 ## Publish
@@ -70,10 +74,16 @@ entries first with lastCall: stop_worker, then publish_item as given; do them be
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 
 ## Waiting and root budget
-One loop: wait_for_update {cursor} returns events, state and nextActions (ordered exact inputs) with waitMs bounded
-by the nearest release/deadline; it returns at once when nextActions is not empty. Do every nextActions entry, then
-wait: with native agents running wait_agent at most waitMs, then wait_for_update again; with none, wait_for_update
-alone wakes on helper events. Do not call next_actions next to wait_for_update: it returns the same list.
+One loop: wait_for_update {cursor} returns events, state and nextActions (ordered exact inputs). It returns at once
+when nextActions is not empty, otherwise when an event brings work (a worker yielded or asked, a fix-result, a job,
+a new item with a free slot), on a match/item change, or at the next release or deadline (55 s at most). Do every
+nextActions entry, then call wait_for_update again. It is your only wait: never call wait_agent to watch
+workers, because the helper already knows when a worker yields, hands off, asks or runs out of time, and every extra
+wake rereads your whole context (Practice BTZNI69E: 17 wait_agent and 15 send_message turns of about 120K each).
+Do not call next_actions next to wait_for_update: it returns the same list.
+Message a worker only for a nextActions entry (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) or
+a publish error, always as one followup_task that names the one thing to do. Never answer or acknowledge a worker's
+progress message; read it with your next wait_for_update and carry on.
 Retain the cursor; do not replay old events. Do not repeatedly recreate agents.
 An entry is dropped only when nextActions stops returning it. A call that failed before reaching the helper
 (usage limit, approval review failure) is retried on the next pass, prepare_item included. A slot frees as soon as an

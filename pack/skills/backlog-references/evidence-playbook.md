@@ -4,8 +4,8 @@ Read before screenshot, download or data scenarios. Scenarios that share app mod
 in one call (context.scenario "TC-01..TC-03", one screenshot or download per scenario named after it; §2); split only
 for a different app mode, phase, viewport or data. At most two repaired retries per call and about a third of the
 time box; report unfinished checks NOT_RUN. Before final evidence call worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
-the app again and capture at once. Only when it returns writesAllowed:false: stop writes, message root once with its
-hint and wait for resume.
+the app again and capture at once. Only when it returns writesAllowed:false: stop writes and end your turn with its
+hint as your reply; root gets the sync from the helper and sends a followup to resume (never send_message to root).
 
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
