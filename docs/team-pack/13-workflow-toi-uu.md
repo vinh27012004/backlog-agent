@@ -13,7 +13,7 @@ J56ZZWSS bỏ cả worker evidence riêng của item tier strong: một fixer l�
 | publish_item | Job single-owner: ghi candidate từ fixResultFile, đếm verification, integrate, push, submit idempotent; chờ job tới 25 s (thường 10–15 s là xong) |
 
 Mỗi item một team_fixer. Root thực hiện native agent operations và Company Tools lookup; helper không thêm agent CLI.
-Proxy của worker chỉ có read_item, job_status, worktree status và worker_checkpoint, không Company Tools/publish.
+Proxy của worker có read_item, job_status, worktree status, worker_checkpoint và company_lookup (tra cứu chỉ đọc, từ 04/11), không company_call/publish.
 
 ## Candidate và phiên bản
 
@@ -54,6 +54,26 @@ Root của BTZNI69E 142 lượt, context TB khoảng 120K: 27 lượt sau `wait_
   worker treo vẫn bị `stop_worker` bắt ở returnBy như cũ. Trần 55 s nằm dưới `tool_timeout_sec = 120`.
 - Kiểm ở trận sau (`usage.md`, `bench.md`): `wait_agent` = 0, lượt root giảm (142 ở BTZNI69E), thời gian từ
   candidate tới SUBMITTED không tăng.
+
+## Bắt item nhanh: helper tự prepare, brief sẵn, tra cứu chỉ đọc (04/11, sau BTZNI69E)
+
+Timeline BTZNI69E: helper thấy đề khoảng 7 s sau giờ ra, nhưng đề ra → Start Work 11–93 s và chuẩn bị xong → spawn
+56–217 s; đề ra → worker bắt đầu 114–307 s (PI-01 184 s). Nguyên nhân: guardian duyệt từng lời gọi không chỉ đọc của
+root lần lượt (3–4 s mỗi lần; lệnh prepare_item sau đợi lệnh trước chờ job 25 s, 4 company_call của PI mất 17 s),
+root tự tra Company Tools và đọc skill PI trước khi spawn, tự soạn brief khoảng 2,5K ký tự, làm xen việc khác.
+- A. Poller (mỗi giây) gọi `workflow.autoPrepare()`: mỗi prepare_item trong nextActions (đề mới còn slot, PI, answer-only)
+  được helper tự chạy một lần (`ji.autoPrepared`; PI có force). Hỏng thì prepare_item vẫn nằm trong nextActions cho
+  root. Tắt bằng `"autoPrepare": false` ở `config/runtime.json` hoặc `team-sdlc-pack/local/runtime.json`.
+- B. Cuối job prepare, helper viết `.team-work/items/<ID>/brief.md` (item_meta, skills, profile, materials,
+  requirements, required_evidence, baseline_failures, recent_changes, company_facts, knowledge_hints, related_events,
+  item) và `ji.spawn`; nextActions `spawn_worker` mang `spawn` = đối số spawn_agent (task_name, model, effort, câu trỏ
+  tới brief). Root spawn trong một lượt rồi resume đăng ký threadId.
+- C. `prefetchCompany` song song với dựng worktree: `get_test_data` khi đề nhắc test data/fixture, `kb_search` (câu
+  hỏi từ tiêu đề và Context/Expected outcome/Requirements, `kbQuery`) khi đề đòi theo chuẩn công ty hoặc là PI.
+- D. `company_lookup` (readOnly, không qua guardian) chỉ cho tool tra cứu (cờ readOnlyHint của tool, hoặc tên
+  kb_/search/get_/list_/find_/read_/lookup), có trong proxy của worker; tool khác `NOT_A_LOOKUP`, root gọi
+  company_call. Số thứ tự file kết quả cấp đồng bộ để lời gọi song song không ghi đè nhau.
+- Kiểm ở trận sau: đề ra → worker bắt đầu (mục tiêu 45–70 s), không còn prepare_item/company_call của root trước spawn.
 
 ## Evidence và recovery
 

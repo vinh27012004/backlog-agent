@@ -78,7 +78,8 @@ export class CompanyTools {
   async list({ refresh = false } = {}) {
     if (this.tools && !refresh) return this.tools;
     const result = await this.call('tools/list', {});
-    this.tools = (result?.tools ?? []).map(t => ({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema ?? {} }));
+    this.tools = (result?.tools ?? []).map(t => ({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema ?? {},
+      ...(t.annotations?.readOnlyHint === true ? { readOnly: true } : {}) }));
     return this.tools;
   }
 

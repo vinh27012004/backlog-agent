@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { mockTransport } from '../../pack/src/decide/jev.mjs';
-import { fakeGameMaster, hasPlayer, install, makeRemote, McpClient, player, sh, tempDir, validFixResult } from './support.mjs';
+import { fakeGameMaster, hasPlayer, install, localRuntime, makeRemote, McpClient, player, sh, tempDir, validFixResult } from './support.mjs';
 
 const MATCH = 'TEST1234';
 const MATCH_UUID = '2292cde2-2422-4afb-afa6-d4a782c38a25';
@@ -17,6 +17,8 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
   const root = tempDir('mtm-e2e-');
   const tw = join(root, 'BUN');
   install(tw);
+  // Kịch bản này lái từng bước như root (start_work, worktree…); luồng helper tự prepare có test riêng trong workflow.
+  localRuntime(tw, { autoPrepare: false });
   const remote = makeRemote(root, MATCH);
   const repository = { url: remote.url, branch: 'main', folder: MATCH };
   const gm = await fakeGameMaster({ matchId: MATCH, matchUuid: MATCH_UUID, repository, apiKey: API_KEY });

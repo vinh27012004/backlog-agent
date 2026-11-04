@@ -51,6 +51,7 @@ const MATCH_METRICS = [
   { label: 'Nộp xong item cuối (từ đầu trận)', get: m => { const ends = m.items.filter(SUBMITTED).map(r => r.endedAt).filter(fin);
     return ends.length && fin(m.from) ? Math.max(...ends) - m.from : null; }, fmt: dur, better: 'low', time: true },
   { label: 'TB thời gian item đã nộp', get: m => mean(m.items.filter(SUBMITTED).map(r => r.ms)), fmt: dur, better: 'low', time: true },
+  { label: 'TB đề ra → thợ bắt đầu', get: m => mean(m.items.map(r => r.pickupMs).filter(v => fin(v) && v >= 0)), fmt: dur, better: 'low', time: true },
   { label: 'TB code/test', get: m => mean(m.items.filter(SUBMITTED).map(r => r.codeMs)), fmt: dur, better: 'low', time: true },
   { label: 'TB evidence', get: m => mean(m.items.filter(SUBMITTED).map(r => r.evidenceMs)), fmt: dur, better: 'low', time: true },
   { label: 'Credit', get: credits, fmt: num(0), better: 'low' },

@@ -130,6 +130,53 @@ test('prepare is idempotent and returns worker brief inputs without repeating St
   assert.equal((await f.rt.workflow.prepare({ backlogItemKey: f.key })).jobId, j.jobId); assert.equal(starts, 1);
 });
 
+// BTZNI69E: đề ra → Start Work 11–93 s (prepare_item của root qua guardian, lần lượt), chuẩn bị xong → spawn 56–217 s
+// (root tự tra Company Tools, đọc skill, soạn brief). Helper tự prepare một lần, lấy trước dữ liệu công ty, viết brief
+// và đưa sẵn đối số spawn_agent vào nextActions.
+test('the helper prepares a new item itself once, prefetches company facts, writes the brief and hands root the spawn arguments', async () => {
+  const f = fixture('CR-01');
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
+  f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: f.ji.prepared ? 'started' : 'todo', minutesLeft: 30 }];
+  f.rt.gm.view.items[0].raw = { title: 'Export the filtered invoice list as CSV', points: 140,
+    descriptionMd: '## Context\nAccountants import invoice lists.\n## Requirements\nFollow the company data-exchange standard. Verify with the official QA test data.\n' };
+  let starts = 0;
+  f.rt.startWork = async () => { starts++; return { type: 'CR', triage: { models: { fixer: [{ model: 'gpt-6.1-sol', reasoning_effort: 'high' }] } },
+    materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), files: ['challenge/CR-01-seed.ts'], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' },
+    requirements: [{ id: 'AC-1', text: 'CSV' }], baselineFailures: null }; };
+  f.rt.worktree = async () => ({ ...f.wt, issuedRevision: 'abc123', setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });
+  const called = [];
+  f.rt.company.list = async () => [{ name: 'kb_search', inputSchema: {} }, { name: 'get_test_data', inputSchema: {} }, { name: 'search_logs', inputSchema: {} }];
+  f.rt.company.invoke = async (name, args) => { called.push([name, args]); return { content: [{ type: 'text', text: `${name} result` }] }; };
+  assert.deepEqual(f.rt.workflow.autoPrepare(), [f.key]);
+  assert.deepEqual(f.rt.workflow.autoPrepare(), [], 'one automatic prepare per item');
+  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(f.ji.prepareJobId));
+  assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(starts, 1);
+  assert.deepEqual(called.map(c => c[0]).sort(), ['get_test_data', 'kb_search']);
+  assert.match(called.find(c => c[0] === 'kb_search')[1].query, /export.*invoice/);
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  for (const re of [/<item_meta>[\s\S]*return_by: 2099-11-04T05:00:00.000Z/, /issuedRevision: abc123/, /results_path: .*CR-01-fixer-1\.json/,
+    /<requirements>[\s\S]*AC-1/, /<company_facts>[\s\S]*kb_search: .*0[12]-kb_search\.json/, /<company_facts>[\s\S]*get_test_data: .*0[12]-get_test_data\.json/, /company_lookup/, /<item>[\s\S]*official QA test data/]) {
+    assert.match(brief, re);
+  }
+  const spawn = f.rt.workflow.actions().nextActions.find(a => a.action === 'spawn_worker')?.spawn;
+  assert.deepEqual([spawn?.task_name, spawn?.agent_type, spawn?.fork_turns, spawn?.model, spawn?.reasoning_effort], ['cr01_fixer', 'team_fixer', 'none', 'gpt-6.1-sol', 'high']);
+  assert.match(spawn.message, /brief\.md/);
+});
+
+// D: tra cứu chỉ đọc không qua guardian, cho cả worker qua proxy; tool không phải tra cứu vẫn phải qua company_call.
+test('company_lookup is a read-only lookup for root and workers and refuses tools that are not lookups', async () => {
+  const f = fixture('PI-01');
+  const tool = f.rt.definitions().find(t => t.name === 'company_lookup');
+  assert.equal(tool.readOnly, true);
+  f.rt.company.list = async () => [{ name: 'search_logs', inputSchema: {} }, { name: 'create_ticket', inputSchema: {} }];
+  f.rt.company.invoke = async name => ({ content: [{ type: 'text', text: `${name} ok` }] });
+  const res = await f.rt.proxyCall('company_lookup', { name: 'search_logs', arguments: { query: 'reminder', service: 'reminder-worker' }, backlogItemKey: f.key });
+  assert.ok(existsSync(res.savedTo), 'saved beside the item materials');
+  await assert.rejects(async () => f.rt.companyLookup({ name: 'create_ticket', backlogItemKey: f.key }), /NOT_A_LOOKUP/);
+  await assert.rejects(async () => f.rt.companyLookup({ name: 'search_logs' }), /backlogItemKey/);
+});
+
 test('next actions use the nearest release and offer the publish of a handed-off candidate', async () => {
   const f = fixture(), file = f.result(1); await f.preflight(file); f.rt.releases = () => ({ next: { at: new Date(Date.now() + 3000).toISOString() } });
   const next = f.rt.workflow.actions(); assert.ok(next.waitMs <= 4000);

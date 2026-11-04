@@ -109,6 +109,9 @@ export function matchSummary(bundle) {
       gates: u.gates ?? 0, gateMs: u.jobs?.run_gate?.ms ?? null, credits: own.reduce((a, t) => a + (t.credits ?? 0), 0), activity: activity[key] ?? null,
       inputTokens: own.reduce((a, t) => a + (t.tokens?.input_tokens ?? 0), 0),
       endedAt: u.endedAt ? Date.parse(u.endedAt) : null,
+      // Đề ra (helper thấy) → thread fixer đầu tiên bắt đầu: tốc độ bắt item.
+      pickupMs: fixers.length && u.startedAt && Number.isFinite(u.dispatchMs)
+        ? Math.min(...fixers.map(t => t.start ?? Infinity)) - (Date.parse(u.startedAt) - u.dispatchMs) : null,
       judge: s?.judged ? (s.judge ? 'pass' : `fail ${s.highFails.map(h => h.id).join(',')}`) : '—',
       gateVsJudge: s?.gateVsJudge ?? 'n/a', reviewerVsJudge: s?.reviewerVsJudge ?? 'n/a' };
     return { ...row, flags: itemFlags(row) };

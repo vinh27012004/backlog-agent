@@ -24,7 +24,7 @@ checkpoint candidate, rồi nộp nguyên kết quả đó, kiểm answer/eviden
 | D1 | Một phiên Codex do Player sở hữu, chỉ subagent native. |
 | D2 | Runtime/installer dùng Node.js built-in; không thêm npm dependency. |
 | D3 | Root mỏng, helper giữ logic tất định và trạng thái. |
-| D4 | Helper root là một writer, giữ credential. Proxy worker: read_item, job_status, worktree status, worker_checkpoint. Company Tools do root lookup. |
+| D4 | Helper root là một writer, giữ credential. Proxy worker: read_item, job_status, worktree status, worker_checkpoint, company_lookup (từ 04/11: tra cứu Company Tools chỉ đọc; key vẫn chỉ ở helper root, kết quả lưu ở items/<ID>/company/). Tool công ty không phải tra cứu vẫn chỉ root gọi (company_call). |
 | D5 | Frame qua configure_session, credential không vào brief/log/file. |
 | D6 | Worktree riêng, tích hợp tuần tự vào branch được giao, không force push. |
 | D7 | Submit intent lưu trước POST, replay cùng body/key/SHA; receipt có rồi không nộp lại. |

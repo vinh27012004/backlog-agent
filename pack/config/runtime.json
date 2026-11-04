@@ -1,3 +1,4 @@
 {
-  "maxItemsInFlight": 5
+  "maxItemsInFlight": 5,
+  "autoPrepare": true
 }
