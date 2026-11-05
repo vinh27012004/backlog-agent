@@ -1,16 +1,22 @@
 // Điều phối tất định: chuẩn bị, bàn giao, checkpoint và publish có thể tiếp tục sau restart. Worker code, test và chụp
 // evidence; fix-result nó bàn giao được nộp nguyên như vậy, kiểm answer/evidence chỉ ra cảnh báo.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { answerCheck, changedFiles, requirementsCheck } from './answers.mjs';
 import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
+import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
+import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const FIX_RESULT_SCHEMA_FILE = fileURLToPath(new URL('../../contracts/fix-result.schema.json', import.meta.url));
+const FIX_RESULT_SCHEMA = JSON.parse(readFileSync(FIX_RESULT_SCHEMA_FILE, 'utf8'));
+const samePath = (a, b) => Boolean(a && b) && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
 const textDigest = file => {
   try {
     const raw = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').trim();
@@ -40,8 +46,11 @@ const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid J
 const LAST_CALL_MINUTES = 6;
 const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
 const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
+// Lời root gửi worker ở stop_worker (hết giờ / cơ hội cuối). ME1X0FFX: BUG-02 đã chạy đạt cả 3 kịch bản UI rồi, khi bị
+// dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
+const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
 // Lời root gửi worker khi helper vừa sync bản sửa baseline vào worktree đã bàn giao của nó.
-const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. Run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json, write the next numbered fix-result and call worker_checkpoint candidate. Change nothing else.`;
+const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. Run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json, then call worker_checkpoint candidate with your updated result (or write the next numbered fix-result yourself). Change nothing else.`;
 // PI chỉ báo cáo: brief thay mọi skill (CA3WKX60: fixer PI-01 đọc 42K ký tự skill trong 22 s, rồi tự kéo log, tự chép
 // evidence, viết fix-result 27 s; tổng 2m28s cho 10 lượt). Ba lượt: đọc, suy ra + ghi submit.json, bàn giao.
 const REPORT_ONLY_PI = `Report-only incident (Form A): the item forbids source changes, so this block is your whole procedure and replaces
@@ -73,6 +82,29 @@ export function itemSkills(type, stack) {
   const t = String(type ?? '').toLowerCase(), s = String(stack ?? '').split('-')[0];
   return { item: ITEM_SKILLS.includes(t) ? `.agents/skills/backlog-${t}/SKILL.md` : null,
     stackNotes: `.agents/skills/stack-notes/${STACK_NOTES.includes(s) ? s : 'unknown'}.md` };
+}
+
+// Nội dung skill chép vào cuối brief (9O802QWE: fixer mất 2–3 lượt đầu chỉ để mở brief rồi 4–6 file skill, ~40K ký tự,
+// có worker còn đi tìm schema và mã nguồn helper). Đặt sau <item> để khi output đọc file bị cắt thì mất phần skill, không
+// mất đề. Report-only PI đã có quy trình riêng nên không cần.
+const SKILLS_DIR = new URL('../../skills/', import.meta.url);
+const REFERENCE = name => `.agents/skills/backlog-references/${name}`;
+export function skillFiles(type, skills, { answerOnly = false } = {}) {
+  const t = String(type ?? '').toUpperCase();
+  return [REFERENCE('SKILL.md'), skills?.item, skills?.stackNotes,
+    ...(t === 'BUG' ? [REFERENCE('bug-patterns.md')] : []), ...(t === 'PI' ? [REFERENCE('pi-triage.md')] : []),
+    REFERENCE('domain-checks.md'), ...(answerOnly ? [] : [REFERENCE('evidence-playbook.md')])].filter(Boolean);
+}
+export function skillText(files) {
+  const parts = [];
+  for (const rel of files) {
+    let text;
+    try { text = readFileSync(new URL(rel.replace(/^\.agents\/skills\//, ''), SKILLS_DIR), 'utf8'); } catch { continue; }
+    text = text.replace(/\r\n/g, '\n').replace(/^---\n[\s\S]*?\n---\n+/, '').trim();
+    parts.push(`=== ${rel} ===\n${text}`);
+  }
+  if (!parts.length) return null;
+  return [`These skill files are copied here in full: never open them again (${parts.length} files).`, ...parts].join('\n\n');
 }
 
 // Khối <environment> của brief: trạng thái job setup của worktree lúc prepare xong (fixer được spawn không chờ nó).
@@ -175,7 +207,7 @@ export class Workflow {
         out.briefFile = this.writeBrief(key, out);
         ji.spawn = this.spawnArgs(key, out);
         r.journal.save();
-        return { ...out, spawn: ji.spawn, next: 'spawn_agent with exactly `spawn`, then worker_checkpoint resume with its threadId. Its handed-off fix-result is submitted as is.' };
+        return { ...out, spawn: ji.spawn, next: 'Spawn every spawn_worker in parallel with exactly `spawn`; no resume checkpoint after spawn. Its handed-off fix-result is submitted as is.' };
       }, { key });
       ji.prepareJobId = job.id;
       r.journal.save();
@@ -239,7 +271,7 @@ export class Workflow {
     const m = out.triage?.models?.fixer?.[0] ?? null;
     return { task_name: `${key.toLowerCase().replace(/[^a-z0-9]/g, '')}_fixer`, agent_type: 'team_fixer', fork_turns: 'none',
       ...(m?.model ? { model: m.model } : {}), ...(m?.reasoning_effort ? { reasoning_effort: m.reasoning_effort } : {}),
-      message: `You are the team_fixer for ${key}. Your complete brief is ${out.briefFile}: read it first, then follow your instructions. `
+      message: `You are the team_fixer for ${key}. Your complete brief is ${out.briefFile}: read it first, whole, in one exec that starts with // @exec: {"max_output_tokens": 40000}, then follow your instructions. `
         + `Hand off to ${out.fixResultFile} by ${out.timeBox?.returnBy ?? 'return_by'} UTC.` };
   }
   // Thư mục app của checkout chính có node_modules (null khi chưa cài hay không nhận ra stack).
@@ -261,7 +293,7 @@ export class Workflow {
         `return_by: ${tb.returnBy ?? 'unknown'} (UTC)`, ...(tb.checkpointBy ? [`checkpoint_by: ${tb.checkpointBy} (UTC)`] : []),
         `worktree: ${wt.worktreeRoot ?? ''}`, `matchRoot: ${wt.matchRoot ?? ''}`,
         ...(wt.issuedRevision ? [`issuedRevision: ${wt.issuedRevision}`] : []), ...(wt.baseRevision ? [`baseRevision: ${wt.baseRevision}`] : []),
-        `results_path: ${s.fixResultFile}`].join('\n')),
+        `results_path: ${s.fixResultFile}`, `fix_result_schema: ${FIX_RESULT_SCHEMA_FILE}`].join('\n')),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
       ...(s.reportOnly ? [] : block('environment', environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null))),
       ...(s.reportOnly ? [] : block('skills', [s.skills?.item, s.skills?.stackNotes].filter(Boolean).join('\n'))),
@@ -277,6 +309,7 @@ export class Workflow {
       ...block('knowledge_hints', s.knowledgeHints ?? null),
       ...block('related_events', s.relatedEvents ?? null),
       ...block('item', [raw.descriptionMd ?? raw.description ?? '', s.startInstruction ? `\nStart instruction: ${s.startInstruction}` : ''].join('')),
+      ...(s.reportOnly ? [] : block('skill_text', skillText(skillFiles(s.type ?? typeOf(key), s.skills, { answerOnly: s.verificationKind === 'answer_only' })))),
     ];
     const file = join(r.itemDir(key), 'brief.md');
     writeFileAtomic(file, `${lines.join('\n')}\n`);
@@ -357,12 +390,59 @@ export class Workflow {
     const issuedTests = issued.out.split(/\r?\n/).map(l => l.slice(l.indexOf(':') + 1)).filter(p => p && !p.startsWith(`${folder}answers/`) && TEST_FILE.test(p));
     return issuedTests.length ? [] : hits;
   }
+  // candidate {result}: worker chỉ gửi phần cần suy luận (status, summary, requirements, các dòng scenario của nó…);
+  // helper thêm phần cơ học (changed_files, test mới, các dòng run_checks) và mặc định, kiểm contract rồi ghi fix-result
+  // đánh số kế tiếp. 9O802QWE: lượt cuối viết fix-result 8–11 KB mất 30–71 s model mỗi item BUG/CR.
+  async composeResult(key, part) {
+    const r = this.rt, ji = this.item(key), paths = this.paths(key);
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return { problems: ['result must be an object with your part of the fix-result'] };
+    const props = FIX_RESULT_SCHEMA.properties;
+    const unknown = Object.keys(part).filter(k => !Object.hasOwn(props, k) || k === 'changed_files');
+    if (unknown.length) return { problems: [`result has fields the helper fills or the contract lacks: ${unknown.join(', ')}`] };
+    const folder = `${r.session.descriptor.matchId}/`;
+    const changed = r.liveWorktree(key) && ji.worktreeBase ? await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []) : [];
+    const own = changed.filter(f => f.path.startsWith(folder)).map(f => ({ ...f, rel: f.path.slice(folder.length) }));
+    const profile = detectProfile(paths.matchRoot);
+    const testsAdded = profile.root ? own.filter(f => f.status === 'A' && TEST_FILE.test(f.rel) && !f.rel.startsWith('answers/'))
+      .map(f => relative(profile.root, join(paths.matchRoot, f.rel)).replaceAll('\\', '/')).filter(t => t && !t.startsWith('..')) : [];
+    const verification = Array.isArray(part.verification) ? [...part.verification] : [];
+    const notes = [];
+    const checks = readChecks(r.session.paths.teamWork, key);
+    if (checks?.state === 'done' && samePath(checks.matchRoot, paths.matchRoot)) {
+      const current = checks.source ? (await this.snapshot(key, paths).catch(() => null))?.source : null;
+      const stale = Boolean(checks.source && current && checks.source !== current);
+      const baseline = new Set(r.journal.data.preparation?.baseline?.failing ?? []);
+      for (const row of verificationRows(checks)) {
+        if (verification.some(v => v?.check === row.check)) continue;
+        const test = row.check === CHECK_LABEL.test ? checks.results.find(c => c.name === 'test') : null;
+        const onlyBaseline = test?.failing?.length && test.failing.every(id => baseline.has(id));
+        verification.push({ ...row, note: [row.note, onlyBaseline ? 'every failing test is an issued baseline failure' : null,
+          stale ? 'ran before later source changes: run_checks again for the final result' : null].filter(Boolean).join('; ') });
+      }
+      if (stale) notes.push('run_checks results predate your last source change: call run_checks again, then candidate');
+    }
+    const value = { status: part.status, summary: part.summary, criteria: part.criteria ?? [], suspects: part.suspects ?? [],
+      root_cause: part.root_cause ?? null, hypotheses: part.hypotheses ?? [], changed_files: own.map(f => f.rel).slice(0, 300),
+      tests_added: part.tests_added ?? testsAdded, verification, needs_dependency: part.needs_dependency ?? [],
+      test_change: part.test_change ?? null, risks: part.risks ?? [], confidence: part.confidence ?? 0.8, requirements: part.requirements ?? [] };
+    const errors = validateSchema(value, FIX_RESULT_SCHEMA);
+    if (errors.length) return { problems: [`result does not fit the fix-result contract: ${errors.slice(0, 10).join('; ')}`] };
+    const file = this.nextResultFile(key);
+    writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
+    return { file, warnings: notes };
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
     const caught = await this.baselineCatchUp(key);
+    const composed = args.result !== undefined ? await this.composeResult(key, args.result) : null;
+    if (composed?.problems) {
+      return { key, phase: 'candidate', handedOff: false, writesAllowed: true, problems: composed.problems, warnings: [],
+        hint: 'Not handed off: correct the result argument and call worker_checkpoint candidate again (nothing was written).' };
+    }
     const { problems, warnings } = await this.handoffCheck(key);
+    if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
     if (caught?.synced) {
-      problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json, write the next numbered fix-result and call candidate again`);
+      problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
     } else if (caught?.error) warnings.push(`could not sync ${owner}'s baseline fix into your worktree (${caught.error}); hand off as observed`);
     if (this.baselineWait(key) === 'owner') {
       warnings.push(`the baseline failures are not fixed on main yet: ${owner} lands that fix first. Hand off now as observed; publish waits for the fix, then the helper syncs your worktree and root asks you to rerun the full suite`);
@@ -371,7 +451,7 @@ export class Workflow {
       return { key: args.backlogItemKey, phase: 'candidate', handedOff: false, writesAllowed: true, problems, warnings,
         hint: 'Not handed off: fix these (a fix-result problem needs the next numbered fix-result), then call worker_checkpoint candidate again.' };
     }
-    return { ...this.checkpoint(args), handedOff: true, warnings };
+    return { ...this.checkpoint(args), handedOff: true, fixResultFile: this.latestResult(key), warnings };
   }
   checkpoint({ backlogItemKey: key, phase, threadId = null }) {
     const ji = this.item(key);
@@ -392,6 +472,30 @@ export class Workflow {
     this.rt.journal.save();
     return { key, phase, writesAllowed: phase === 'resume',
       hint: phase === 'ready_for_evidence' ? 'Stop writing and end your turn. Root may sync now, then sends a followup to resume; restart the app before final evidence.' : null };
+  }
+  // Chỉ xác nhận thread khi worker thực sự gọi proxy: spawn lỗi (hết thread) vẫn được đề xuất lại ngay.
+  registerWorker(key) {
+    if (!key) return;
+    const ji = this.item(key);
+    if (!ji.spawn?.task_name || ji.workerThread) return;
+    ji.workerThread = `/root/${ji.spawn.task_name}`;
+    // Không resume ở đây: lời gọi muộn không được mở ghi lại sau candidate hoặc trong lúc sync/publish.
+    this.rt.journal.save();
+  }
+  // Gom spawn cùng đợt ra đề; không chặn PI hay việc khác đang cần root, không chờ các job setup.
+  spawnWaveJobs(actions) {
+    if (!actions.length || actions.some(a => a.action !== 'spawn_worker' || typeOf(a.key) === 'PI')) return [];
+    const r = this.rt;
+    const wave = key => {
+      const item = r.gm.view.items.find(i => i.key === key), ji = this.item(key);
+      const seconds = item?.revealedElapsedSec ?? item?.raw?.revealedElapsedSec ?? ji.revealedElapsedSec;
+      if (Number.isFinite(seconds)) return `release:${Math.floor(seconds / 60)}`;
+      const at = Date.parse(ji.releasedAtServer ?? ji.discoveredAt ?? '');
+      return Number.isFinite(at) ? `seen:${Math.floor(at / 60_000)}` : null;
+    };
+    const waves = new Set(actions.map(a => wave(a.key)).filter(Boolean));
+    return [...r.jobs.jobs.values()].filter(j => j.kind === 'prepare_item' && j.state === 'running'
+      && j.key && typeOf(j.key) !== 'PI' && waves.has(wave(j.key)));
   }
   // blocked: worker cần root quyết hay tra cứu (Company Tools, item khác, time box). Helper ghi câu hỏi và đánh thức
   // root bằng answer_worker trong nextActions, thay cho send_message lên root: BTZNI69E fixer nhắn root 20 lần giữa
@@ -428,10 +532,27 @@ export class Workflow {
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
+      const checks = await this.startChecks(key);
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
-        hint: `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}` };
+        ...(checks ? { checks } : {}),
+        hint: checks
+          ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call run_checks {action: "status", waitSeconds: 110} for its result (fix and run again only on a failure), then app start, which reuses that build, and capture final evidence.${baseline}`
+          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}` };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
+    }
+  }
+  // 08OQBPW8: worker chạy run_checks 3–4 lần, có lần trước sync rồi lại sau sync, và chụp evidence trên app tự build
+  // trước khi run_checks build lần nữa. Sau sync là source cuối cùng: helper chạy luôn một lần ở đây (không đợi một
+  // lượt model), app start chờ build đó rồi dùng lại. Tắt: "autoChecks": false trong runtime.json.
+  async startChecks(key) {
+    const r = this.rt;
+    if (r.runtimeConfig().autoChecks === false || !r.liveWorktree(key)) return null;
+    try {
+      const res = await r.runChecks({ backlogItemKey: key, matchRoot: r.wtPaths(key).matchRoot, waitSeconds: 0 });
+      return { state: res.state, runId: res.runId ?? null, ...(res.cached ? { cached: true } : {}) };
+    } catch (e) {
+      return null;   // stack không có app hay profile: worker tự chạy như trước
     }
   }
   // ---------------------------------------------------------------- test fail sẵn ở bản phát (baseline)
@@ -787,11 +908,11 @@ export class Workflow {
       if (r.jobs.jobs.get(ji.publishJobId)?.state === 'running') continue;
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
-      if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy }); continue; }
+      if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
       if (ji.startedAt && lastCallOf(row)) {
         // Cuối giờ: worker bàn giao ngay rồi nộp những gì đang có.
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };
-        if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy }); continue; }
+        if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
         if (c && c.state !== 'stale') {
           if (!freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id }, extra);
           continue;

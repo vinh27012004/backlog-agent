@@ -207,6 +207,14 @@ function install({ teamWorkspace, force, codegraph: withCodegraph, playwright: w
   copy('team-pack-info.json', '.mtm/team-pack-info.json');
   copy('team-runtime.json', '.mtm/team-runtime.json');
   for (const rel of listFiles(runtime, 'skills')) copy(rel, `.agents/${rel}`);
+  // Công tắc áp dụng lúc cài skill; mô tả tool đọc lại cấu hình local mỗi lần tools/list.
+  const runtimeCfg = { ...readJson(join(runtime, 'config', 'runtime.json')),
+    ...(existsSync(join(packRoot, 'local', 'runtime.json')) ? readJson(join(packRoot, 'local', 'runtime.json')) : {}) };
+  if (runtimeCfg.compactStartFrame === false) {
+    const skill = join(tw, '.agents', 'skills', 'team-orchestrator', 'SKILL.md');
+    writeIfChanged(skill, readFileSync(skill, 'utf8').replace(/For START_GAME_V4,[\s\S]*?(?=In GAME, configure_session)/,
+      'Configure the Player frame verbatim.\n'));
+  }
 
   const server = join(runtime, 'bin', 'runtime-server.mjs').replaceAll('\\', '/');
   const codegraph = installCodegraph(packRoot, withCodegraph);

@@ -56,13 +56,19 @@ export class Session {
   get configured() { return this.descriptor !== null; }
 
   configure(frame, teamWorkspace) {
-    const { marker, descriptor: d, policies } = parseFrame(frame);
-    const type = d.type;
+    const { marker, descriptor: incoming, policies } = parseFrame(frame);
+    const type = incoming.type;
+    const activeGame = type === 'START_GAME' || type === 'RESUME_GAME';
+    // START rút gọn chỉ kế thừa descriptor đã kiểm trong RAM; RESUME đầy đủ vẫn tự khôi phục như trước.
+    if (activeGame && !this.secrets.password && !(type === 'RESUME_GAME' && incoming.username && incoming.password)) {
+      fail('NEEDS_PREPARATION_FRAME', 'Gửi frame PREPARE_GAME_V2 trong thread này trước, rồi gửi lại frame GAME.');
+    }
+    if (this.descriptor && (this.descriptor.playerSessionId !== incoming.playerSessionId || this.descriptor.matchId !== incoming.matchId || this.descriptor.teamId !== incoming.teamId)) {
+      fail('SESSION_MISMATCH', 'playerSessionId, matchId hoặc teamId khác phiên đã chuẩn bị');
+    }
+    const d = activeGame ? { ...(this.descriptor ?? {}), ...incoming } : incoming;
     for (const key of ['requestId', 'playerSessionId', 'teamId', 'matchId']) {
       if (!isId(d[key])) fail('INVALID_FRAME', `${key}`);
-    }
-    if (this.descriptor && this.descriptor.playerSessionId !== d.playerSessionId) {
-      fail('SESSION_MISMATCH', 'playerSessionId changed in this helper process');
     }
     if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
     if (d.teamWorkspace && !samePath(d.teamWorkspace, teamWorkspace)) fail('PATH_OUTSIDE_WORKSPACE', 'teamWorkspace');
@@ -112,6 +118,9 @@ export class Session {
     this.descriptor = { ...(this.descriptor ?? {}), ...publicPart };
     this.secrets = secrets;
     this.policies = { ...this.policies, ...policies };
+    if (activeGame && !policies.MTM_SUBMISSION_POLICY_V1) {
+      this.policies.MTM_SUBMISSION_POLICY_V1 = submissionPolicy(checkoutRoot, matchRoot);
+    }
     this.phase = type === 'START_GAME' || type === 'RESUME_GAME' ? 'GAME' : 'PREPARE';
     this.type = type;
     this.marker = marker;
@@ -134,4 +143,19 @@ export class Session {
     const p = this.policies.MTM_MODEL_POLICY_V1;
     return p ? { orchestratorModel: p.orchestratorModel, allowedModels: p.allowedModels ?? [] } : null;
   }
+}
+
+// Cùng hợp đồng Player 0.9.44 (app/src/submission-policy.mjs); đường dẫn policy luôn dùng dấu /.
+export function submissionPolicy(checkoutRoot, matchRoot) {
+  const root = matchRoot.replaceAll('\\', '/');
+  return {
+    schemaVersion: 1, policyId: 'MTM_SUBMISSION_POLICY_V1', scope: 'ACTIVE_GAME_BACKLOG_SUBMISSIONS',
+    repositoryRoot: root, checkoutRoot: checkoutRoot.replaceAll('\\', '/'), matchRoot: root,
+    startWorkTemplate: `${root}/challenge/<BACKLOG-ID>-submit.json`,
+    canonicalSubmitFile: `${root}/answers/<BACKLOG-ID>/submit.json`,
+    canonicalEvidenceDirectory: `${root}/answers/<BACKLOG-ID>/evidence/`,
+    evidenceReferenceFormat: 'evidence/<filename>',
+    forbiddenEvidenceDirectories: [`${root}/evidence/`, `${root}/challenge/evidence/`],
+    instruction: 'A submit template returned by Start Work is source material only. For each backlog, materialize answers/<BACKLOG-ID>/submit.json and store every evidence file under answers/<BACKLOG-ID>/evidence/. In submit.json, use paths relative to the backlog answer directory, such as evidence/<filename>. Never commit backlog evidence to repository-root evidence/ or challenge/evidence/. Validate these paths before commit and before submission. The team may implement this rule with MCP, a helper, or its own orchestration code.'
+  };
 }

@@ -14,7 +14,7 @@ Check the item description immediately upon opening:
   - The item's canonical scope is the input: every action, amount and assumption it states ("assume every amount is stored correctly") is data that reaches storage as written, even when the issued screen has no control for it (CA3WKX60 TASK-04: the form sends `taxMinor: 0`, yet the stated 30.00 tax is part of the stored total; dropping it cost the receivable field). Trace what the issued server, posting and status code do with those stored values, bugs included. When two readings remain, take the one that uses every stated value and name the other in the summary.
   - Fill `answers/<ID>/submit.json` with the exact computed values, ensuring correct string/integer types matching `challenge/<ID>-submit.schema.json`.
   - A canonical commit the item names but the clone lacks (the issued history is squashed) is not a blocker: use the issued source, say so in the summary and keep status DONE when the answer is derived.
-  - Write the fix-result, checkpoint candidate (it validates submit.json) and hand off within 2-3 minutes!
+  - Checkpoint candidate without writing a fix-result (the helper writes it from submit.json and validates submit.json) and hand off within 2-3 minutes!
 - **Form B: Code Feature / Endpoint TASK**:
   - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
 

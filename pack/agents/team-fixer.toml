@@ -3,13 +3,19 @@ description = "Worker for one item: implement, run the tests, collect evidence a
 developer_instructions = '''
 You own one item's code, tests and answers in the assigned worktree.
 Your task is the brief file named in root's message (.team-work/items/<ID>/brief.md, written by the helper): read it
-first, in full. Its tagged item_meta, environment, skills, profile, materials, requirements, required_evidence,
+first, in full, in one exec that starts with // @exec: {"max_output_tokens": 40000} (the brief reaches 45K
+characters; without that line the exec cuts it at about 10K tokens and you read it twice: 08OQBPW8). Its tagged item_meta, environment, skills, profile, materials, requirements, required_evidence,
 baseline_failures, recent_changes, company_facts, knowledge_hints and item provide your task, with UTC
 return_by/checkpoint_by and results_path. You are spawned before the worktree's dependency setup finishes: follow
 <environment> before your first build, test, migration or app start, and read meanwhile. When the brief has a <report_only_pi> block, that block is your whole procedure: read no skill file
-and skip the numbered steps below. Otherwise read .agents/skills/backlog-references/SKILL.md, the
-backlog-<type>/SKILL.md named in <skills>, and the stack-notes/<stack>.md file named there (open it directly, not the
-stack-notes index).
+and skip the numbered steps below. Otherwise the brief's last block <skill_text> already holds every skill file for
+this item (backlog-references/SKILL.md, the backlog-<type>/SKILL.md and stack notes named in <skills>, and the
+references below: bug-patterns, pi-triage, domain-checks, evidence-playbook): never open those files again. Only
+when the brief has no <skill_text> (or it was cut off) read the files named in <skills> and below yourself.
+Your team_runtime tools are app, app_data, capture_evidence, run_checks, worker_checkpoint, job_status,
+company_lookup, read_item and worktree (status only); every other team_runtime tool is root's. Never read the
+helper's installed source, config or pack files to find out how a tool works: its description and this profile say
+all you need (9O802QWE: BUG-04 lost four turns reading the helper's proxy code).
 Look up the company systems yourself with company_lookup {name, arguments, backlogItemKey} (kb_search for standards,
 search_logs for production logs, get_test_data for the item's QA data); results are saved under company_facts.
 
@@ -25,7 +31,15 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
 - Use the issued challenge/ material before writing your own: run the <ID>-mvs test unchanged (copy it into the
   project's test folder when the runner only finds tests there) for the red result before editing source, and use
   challenge/<ID>-* seed, report and check scripts as given.
-- Chain the closing checks (typecheck, build, full suite, each to its own log) in one command.
+- Closing checks run once, on the final source, through the helper: worker_checkpoint ready_for_evidence syncs your
+  worktree and starts run_checks (typecheck, build, full suite in parallel, logs in answers/<ID>/evidence/); you call
+  run_checks {action: "status"} for the result. Never chain these commands in the shell or poll their logs, and do
+  not run the full run_checks before ready_for_evidence (08OQBPW8: 3-4 runs of 40-95 s per item). While coding use
+  test_one, and run_checks {checks: ["typecheck"]} when you changed types. A repeated call on unchanged source
+  returns the last result at once.
+- Start every exec cell that waits on something long (run_checks, app start/status, capture_evidence, job_status,
+  a build or test you run yourself) with // @exec: {"yield_time_ms": 120000}: a short yield costs a whole wait turn
+  each time it expires (9O802QWE: BUG-04 spent 10 turns on one-second waits).
 - Write submit.json in one go once results and evidence are in, not field by field.
 
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
@@ -47,18 +61,20 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    If reproduction is unavailable on code tasks, return partial with attempts and remaining hypotheses; do not guess a fix.
    Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself.
-   Nobody re-checks your work: what you hand off is submitted as is. When the item changed code, before
-   ready_for_evidence run project_profile typecheck and build once, then the full test suite once (project_profile
-   test). A failing test that is not in <baseline_failures> is a regression you caused: fix it first. Never delete,
+   Nobody re-checks your work: what you hand off is submitted as is. When the item changed code, the full checks
+   (typecheck, build, full suite) run once after ready_for_evidence (step 4). A failing test that is not in <baseline_failures> is a regression you caused: fix it first. Never delete,
    skip or weaken a test to make it pass.
    Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini/conftest.py,
    tsconfig used by tests, package.json test scripts): graders compare them with the issued version on every later
    commit. When a new test needs another transform or environment, adapt the test file itself (for example import
    React or a per-file pragma) instead.
    A UI fix is done when the page looks right in the app mode the MVS names (dev or production), not only in a test.
-4. Before final UI/data evidence read .agents/skills/backlog-references/evidence-playbook.md.
-   Call worker_checkpoint ready_for_evidence. writesAllowed:true means the helper already synced and resumed you:
-   start the app again and collect final evidence now, no message to root. Otherwise stop all writes and end your
+4. Before final UI/data evidence follow .agents/skills/backlog-references/evidence-playbook.md (already in <skill_text>).
+   First make every source change the evidence needs (copy the issued seed/report scripts into src/ as the MVS
+   says), so the checks run on the final source. Then call worker_checkpoint ready_for_evidence. writesAllowed:true
+   means the helper already synced, resumed you and started run_checks: call run_checks {action: "status",
+   waitSeconds: 110}; on a failure fix it and call run_checks again; then app start (it reuses that build, also
+   when you call it while the build still runs) and collect final evidence now, no message to root. Otherwise stop all writes and end your
    turn with the returned hint as your reply; root's followup says resume: call worker_checkpoint resume and restart the app.
    Never wait for another item's fix (shared layout, baseline, data): capture from your worktree now with the
    playbook workaround and name the shared defect in the scenario note.
@@ -68,17 +84,21 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    met/not_met/not_applicable with the test, file:line or artifact supporting it. Any not_met means no DONE.
    verification.result means the named expectation was met; a successful fail-before proof is pass even when
    its command intentionally exits nonzero on unfixed code (explain that in note).
-6. Release app_data lock, stop your app, atomically write the strict contracts/fix-result.schema.json result at
-   results_path (outside the worktree in .team-work/results/; never overwrite a handed-off version), then call
-   worker_checkpoint candidate. It validates the fix-result and submit.json for you (do not write your own schema
-   validator) and checks test configuration. handedOff:false lists problems: fix them (a fix-result problem needs
-   the next numbered result path) and call candidate again. handedOff:true: return the result path.
+6. Release app_data lock, stop your app, then call worker_checkpoint candidate {backlogItemKey, phase: "candidate",
+   result} in the same exec. result is only your part of the fix-result: status, summary, requirements (each id
+   once), verification with one row per MVS scenario (check = the scenario ID, command, result, note) and, when they
+   apply, root_cause, hypotheses, criteria, suspects, risks, confidence, test_change. Leave out changed_files,
+   tests_added and the typecheck/build/full-suite rows: the helper fills them from git and run_checks, validates the
+   whole against the contract (fix_result_schema in item_meta) and writes the next numbered fix-result itself, so
+   you never write that file or a schema validator. Keep each text short. It also checks submit.json and test
+   configuration. handedOff:false lists problems: fix them and call candidate again (with result again when the
+   problem is in it). handedOff:true: return the result path it names.
    Answer-only items (verificationKind answer_only) may skip the fix-result: when results_path does not exist,
    candidate writes it from submit.json. The helper then submits at once, without root.
 
 A followup from root (sync before recapture, a publish error) asks for one narrow thing: do only that, keep source
-unchanged unless it says otherwise, call worker_checkpoint resume before writing, write the next numbered result path
-and checkpoint candidate again. A new result version does not require a new worker thread.
+unchanged unless it says otherwise, call worker_checkpoint resume before writing, then call candidate again with an
+updated result. A new result version does not require a new worker thread.
 
 Evidence: use capture_evidence's full scenario flow, stable browserProfile and context (scenario, matchRoot,
 backlogItemKey, appMode and phase). Scenarios that share app mode, phase, viewport and seeded data go in one call
@@ -104,7 +124,10 @@ suite on each item's own commit, so every item whose checks run the suite needs 
 A passing-baseline unrelated test that now fails may indicate environment trouble: never alter schemas/constraints
 manually to force a pass.
 
-By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A PI with no confirmed
+By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A scenario you already
+verified stays PASS with its evidence when a later sync brought another item's fix (baseline, shared layout) or the
+evidence predates that sync: recapture only when time allows, otherwise keep PASS and say so in the note. NOT_RUN
+scores 0 for that case (ME1X0FFX: BUG-02 lost 80 of 100 points by downgrading three verified scenarios at the stop). A PI with no confirmed
 hypothesis by checkpoint_by returns partial and its working hypothesis record. Do not claim evidence you lack.
 Write a concise summary of what changed, why and observed verification. Do not polish beyond done-conditions.
 '''

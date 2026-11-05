@@ -4,7 +4,19 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { REPO, hasPlayer, install, McpClient, player, tempDir } from './support.mjs';
+import { REPO, hasPlayer, install, localRuntime, McpClient, player, tempDir } from './support.mjs';
+import { Runtime } from '../../pack/src/tools.mjs';
+
+test('compactStartFrame defaults on and disabling it installs the verbatim START instruction', () => {
+  const tw = join(tempDir('mtm-compact-'), 'BUN');
+  install(tw);
+  const skill = join(tw, '.agents', 'skills', 'team-orchestrator', 'SKILL.md');
+  assert.match(readFileSync(skill, 'utf8'), /For START_GAME_V4/);
+  localRuntime(tw, { compactStartFrame: false }); install(tw);
+  assert.match(readFileSync(skill, 'utf8'), /Configure the Player frame verbatim/);
+  assert.doesNotMatch(readFileSync(skill, 'utf8'), /For START_GAME_V4/);
+  assert.match(new Runtime({ teamWorkspace: tw }).definitions().find(t => t.name === 'configure_session').description, /Configure the Player frame verbatim/);
+});
 
 // Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
 test('the fixer is told which skills and references to read; it is the only subagent profile', () => {

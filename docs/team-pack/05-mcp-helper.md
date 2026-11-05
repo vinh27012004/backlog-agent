@@ -165,20 +165,30 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.22 | (proxy) | subagent | GAME | Không phải tool mới: helper của subagent chuyển `read_item`, `job_status`, `worktree status`, `worker_checkpoint` sang helper của root |
 | 5.18 | ~~`condense_log`~~ | | | Chưa từng dựng; bỏ cùng gate 03/11 |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
+| 5.27 | `run_checks` | A | mọi | Typecheck, build, cả bộ test của worktree, song song, log vào evidence (05/11) |
 
 ### 5.1 `configure_session`
 
-- **Input**: `{frame: string}`, là nguyên văn từ dòng marker (vd `START_GAME_V4`) tới hết các khối
-  policy. Root chép **y nguyên**, không sửa.
+- **Input**: `{frame: string}`. PREPARE_GAME_V2 và các frame RESUME chép nguyên văn từ marker tới hết policy.
+  Với START_GAME_V4, mặc định chỉ chép marker và descriptor gồm `schemaVersion`, `type`, `requestId`,
+  `playerSessionId`, `teamId`, `matchId`, `apiKeySecret`, `apiKeyLength`, `apiKeySha256`, `apiKeyScopes`,
+  `gameMasterApiUrl`, `allowedApiOrigins`; giữ nguyên từng giá trị, bỏ khối policy. Frame đầy đủ vẫn được nhận.
+  Helper kế thừa path, URL trang trận, repository và model policy từ descriptor PREPARE đã kiểm trong RAM.
+  Khi thiếu submission policy, helper dựng đủ trường MTM_SUBMISSION_POLICY_V1 theo Player 0.9.44 từ
+  checkoutRoot/matchRoot (path dùng `/`, template, answer/evidence chuẩn, thư mục cấm và instruction).
+  `compactStartFrame: true` trong `pack/config/runtime.json`; đổi thành `false` rồi cài lại để skill trở về
+  “Configure the Player frame verbatim”. Có thể ghi đè bằng `team-sdlc-pack/local/runtime.json`.
 - **Kiểm**: marker hợp lệ và khớp `descriptor.type`; `schemaVersion`; id; path tuyệt đối, nằm trong
   TeamWorkspace và đúng công thức (`checkoutRoot = TW/matches/<matchId>`,
   `matchRoot = checkoutRoot/<folder>`, `progressLogFile = TW/team-sdlc-pack/logs/<matchId>.progress.ndjson`);
   `repository.folder == matchId`; origin `https` (loopback chỉ khi `MTM_TEAM_TEST_MODE=1`); bearer có
   độ dài UTF-8 và SHA-256 khớp `apiKeyLength`/`apiKeySha256`; `apiKeyScopes` có `submission:create` (hoặc `submissions:create` như guide ghi, T13);
-  `playerSessionId` không đổi so với lần configure trước trong cùng tiến trình.
+  `playerSessionId`, `matchId`, `teamId` không đổi so với lần configure trước trong cùng tiến trình.
 - `START_GAME` cần `username`/`password` từ lượt PREPARE. Thiếu (helper đã bị khởi động lại) thì trả
   `NEEDS_PREPARATION_FRAME`, và root gọi lại `configure_session` với frame PREPARE còn trong lịch sử
   thread, rồi gửi lại frame START.
+- RESUME_GAME_V1 đầy đủ vẫn tự khôi phục với username/password như trước; chỉ rút gọn khi helper còn PREPARE
+  trong RAM. Secret vẫn qua `registerSecret`, không xuất trong kết quả, journal hay log.
 - **Output** (không secret): `{phase, matchId, teamId, paths, restartAttempt, models: {orchestratorModel, allowedModels},
   log: {bytes, restartCount, backlogs: {ID: status}, openBlockers: [...]}, journal: {...tóm tắt}, next: [...]}`.
 - **Lỗi**: `INVALID_FRAME`, `PATH_OUTSIDE_WORKSPACE`, `API_KEY_INTEGRITY_MISMATCH`, `SESSION_MISMATCH`.
@@ -376,6 +386,8 @@ chạy, không bao giờ là đạt. Root **không** tự ghi `BACKLOG_TESTS` b�
 
 ### 5.15 `wait_for_update`
 
+- Nếu chỉ có `spawn_worker` và item cùng wave còn chạy `prepare_item`, helper gom tối đa 2 s trước khi trả
+  để root spawn song song; không giữ PI hay việc khác, không chờ setup, có abort, tổng lời gọi vẫn ≤ 55 s.
 - **Input**: `{timeoutMs ≤ 55000, cursor?}`. Có sự kiện chưa lấy thì trả ngay. `cursor: -1` (29/10) = chỉ sự kiện
   từ lúc gọi: vòng chờ "Nothing workable" của skill root dùng nó, thức khi có `ITEM_NEW`/`ITEM_CHANGED`/`ITEM_CLOSING`/
   `MATCH_STATUS`, khi `state.open` có item, khi trận kết thúc, hoặc sau 9 phút (TOKXKPBV: root truyền `cursor: 0`,
@@ -505,6 +517,7 @@ pack/src/
     browser.mjs                 # capture_evidence qua Playwright (playwright-core, §5.25)
     codegraph.mjs               # dựng index codegraph cho checkout chính và worktree (§5.21)
     testreport.mjs              # chạy test baseline với reporter JSON/JUnit, id từng test
+    checks.mjs                  # run_checks: typecheck, build, cả bộ test của worktree (§5.27)
   decide/                       # ra quyết định
     decisions.mjs jev.mjs       # điểm quyết định: Jev trước, luật code dự phòng (D9)
     signals.mjs                 # đặc trưng item cho triage: grep, topology codegraph, KB
@@ -690,6 +703,28 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   (`data-rfd-drag-handle-draggable-id`), Space nhấc, mũi tên đúng số bước theo `position` (before/after/center, trục dọc
   hay ngang theo vị trí hai phần tử), Space thả; bước ghi `mode: keyboard` và `moves`. Khác list hay không phải rfd thì
   vẫn kéo chuột như cũ. Test: `browser.test.mjs`.
+
+### 5.27 `run_checks` (A, mới 05/11, sau 9O802QWE)
+
+- Vào: `{action?: run|status, backlogItemKey, matchRoot, checks?: [typecheck, build, test], force?, waitSeconds? (≤ 110)}`.
+  Mọi agent; chạy trong helper của chính agent đó (không qua proxy), như `app`. Các bước luôn chạy song song.
+- `worker_checkpoint ready_for_evidence` tự gọi nó (helper của root, `waitSeconds: 0`) ngay sau sync; tắt bằng
+  `autoChecks: false` (08OQBPW8).
+- Cache: lần chạy xong ghi `snapshot` khi source/môi trường không đổi trong lúc chạy; `run` với cùng snapshot và các
+  bước đã có kết quả (không timeout) trả lại lần đó (`cached: true`) trừ khi `force`.
+- `app start` chờ `run_checks` đang build của cùng item (đọc `checks.json`, pid còn sống) rồi mới launch, quá
+  `waitSeconds` thì trả `waiting_for_checks`.
+- Lệnh lấy từ `detect_profile` của `matchRoot` (`typecheck`, `build`, `test_all` qua `runTests` có reporter JSON/JUnit,
+  báo cáo để ở `.team-work/scratch/<ID>/checks/`). Log: `answers/<ID>/evidence/{typecheck,build,full-suite}.log`.
+  Profile thiếu lệnh nào thì bước đó `skipped`.
+- Trạng thái ở `.team-work/items/<ID>/checks.json` (`runId`, `pid`, `state` running|done|lost, `results`, `source`).
+  Chờ tới `waitSeconds`; quá thì trả `running`, gọi `status` để chờ tiếp. `run` khi đang có lần chạy sống thì nhập vào
+  lần đó. Helper chạy nó chết giữa chừng thì `status` trả `lost`.
+- Có `build`: dừng app của item trước (build ghi đè thư mục build), `forgetBuild`, và khi build đạt mà snapshot
+  source/môi trường trước và sau như nhau thì `rememberBuild(..., 'run_checks')`: `app start` sau đó dùng lại bản build.
+- Kết quả: mỗi bước `{name, command, state passed|failed|timeout|skipped, exitCode, ms, log, counts?, failing?, tail?}`;
+  `ok`, `hint`. `worker_checkpoint candidate {result}` chép các bước thành dòng `verification` (typecheck, build, full
+  test suite). Test: `checks.test.mjs`, `workflow.test.mjs`.
 
 ### 5.19 `decide` (R, mới, D9)
 

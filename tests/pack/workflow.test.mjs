@@ -159,9 +159,78 @@ test('the helper prepares a new item itself once, prefetches company facts, writ
     /<requirements>[\s\S]*AC-1/, /<company_facts>[\s\S]*kb_search: .*0[12]-kb_search\.json/, /<company_facts>[\s\S]*get_test_data: .*0[12]-get_test_data\.json/, /company_lookup/, /<item>[\s\S]*official QA test data/]) {
     assert.match(brief, re);
   }
+  // 9O802QWE: 2–3 lượt đầu chỉ để mở 4–6 file skill. Brief chép sẵn chúng, sau <item> (output bị cắt thì mất skill, không mất đề).
+  assert.match(brief, /fix_result_schema: .*fix-result\.schema\.json/);
+  const skills = brief.slice(brief.indexOf('<skill_text>'));
+  assert.ok(brief.indexOf('<skill_text>') > brief.indexOf('</item>'), 'skills come after the item');
+  for (const rel of ['backlog-references/SKILL.md', 'backlog-cr/SKILL.md', 'stack-notes/unknown.md', 'backlog-references/domain-checks.md', 'backlog-references/evidence-playbook.md']) {
+    assert.ok(skills.includes(`=== .agents/skills/${rel} ===`), rel);
+  }
+  assert.doesNotMatch(skills, /bug-patterns\.md ===|^---\nname:/m, 'no BUG reference, no front matter');
   const spawn = f.rt.workflow.actions().nextActions.find(a => a.action === 'spawn_worker')?.spawn;
   assert.deepEqual([spawn?.task_name, spawn?.agent_type, spawn?.fork_turns, spawn?.model, spawn?.reasoning_effort], ['cr01_fixer', 'team_fixer', 'none', 'gpt-6.1-sol', 'high']);
   assert.match(spawn.message, /brief\.md/);
+  assert.equal(f.ji.workerThread, undefined, 'root read_item during prepare does not confirm a spawn');
+  assert.ok(f.rt.workflow.actions().nextActions.some(a => a.action === 'spawn_worker'), 'a failed native spawn stays retryable');
+  await f.rt.proxyCall('read_item', { backlogItemKey: f.key });
+  assert.equal(f.ji.workerThread, '/root/cr01_fixer'); assert.equal(f.ji.workerState, 'writing');
+  assert.equal(f.rt.workflow.blockedCheckpoint({ backlogItemKey: f.key, question: 'Need root decision' }).writesAllowed, true,
+    'the worker may write without a resume after spawn');
+  assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.action === 'spawn_worker'));
+});
+
+function spawnWaveFixture({ delay = 120, secondWave = 0, fail = false } = {}) {
+  const f = fixture(), keys = [f.key, 'BUG-02'];
+  f.rt.itemRows = () => keys.map(key => ({ key, type: 'BUG', status: 'OPEN', local: 'started', minutesLeft: 30 }));
+  f.rt.gm.view.items[0].raw.revealedElapsedSec = 0;
+  f.rt.gm.view.items.push({ key: 'BUG-02', raw: { revealedElapsedSec: secondWave } });
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
+  f.ji.spawn = { task_name: 'bug01_fixer' };
+  const second = f.rt.journal.item('BUG-02');
+  const job = f.rt.jobs.start('prepare_item', async () => {
+    await new Promise(r => setTimeout(r, delay));
+    if (fail) throw Error('prepare failed');
+    second.prepared = f.ji.prepared; second.spawn = { task_name: 'bug02_fixer' };
+  }, { key: 'BUG-02' });
+  second.prepareJobId = job.id;
+  return { ...f, second, job };
+}
+
+test('wait_for_update coalesces two prepare jobs in one wave and keeps both spawns retryable until worker activity', async () => {
+  const f = spawnWaveFixture(), start = Date.now();
+  const res = await f.rt.waitForUpdate({ cursor: -1, timeoutMs: 0 });
+  assert.deepEqual(res.nextActions.map(a => a.key).sort(), ['BUG-01', 'BUG-02']);
+  assert.ok(Date.now() - start >= 80); assert.ok(Date.now() - start < 2000);
+  assert.ok(res.events.some(e => e.type === 'JOB_DONE' && e.jobId === f.job.id));
+  assert.deepEqual(f.rt.workflow.actions().nextActions.map(a => a.key).sort(), ['BUG-01', 'BUG-02']);
+});
+
+test('spawn coalescing is capped at two seconds and does not wait for a different wave or urgent work', async () => {
+  const slow = spawnWaveFixture({ delay: 3200 }), start = Date.now();
+  const res = await slow.rt.waitForUpdate({ cursor: -1, timeoutMs: 0 });
+  assert.deepEqual(res.nextActions.map(a => a.key), ['BUG-01']);
+  assert.ok(Date.now() - start >= 1800); assert.ok(Date.now() - start < 3000);
+  await slow.job.promise;
+  const later = spawnWaveFixture({ secondWave: 480, delay: 700 }), since = Date.now();
+  assert.deepEqual((await later.rt.waitForUpdate({ cursor: -1, timeoutMs: 0 })).nextActions.map(a => a.key), ['BUG-01']);
+  assert.ok(Date.now() - since < 500); await later.job.promise;
+  const urgent = spawnWaveFixture({ delay: 700 }); urgent.ji.question = { text: 'Root decision', at: new Date().toISOString() };
+  urgent.ji.workerThread = '/root/bug01_fixer';
+  const now = Date.now();
+  assert.equal((await urgent.rt.waitForUpdate({ timeoutMs: 0 })).nextActions[0].action, 'answer_worker');
+  assert.ok(Date.now() - now < 500); await urgent.job.promise;
+});
+
+test('coalescing exits on prepare failure or abort and a late worker call cannot reopen yielded writes', async () => {
+  const failed = spawnWaveFixture({ fail: true });
+  assert.equal((await failed.rt.waitForUpdate({ timeoutMs: 0 })).nextActions[0].key, 'BUG-01');
+  assert.equal(failed.job.state, 'failed');
+  const f = spawnWaveFixture({ delay: 500 }), controller = new AbortController();
+  const wait = f.rt.waitForUpdate({ timeoutMs: 0 }, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 50);
+  const since = Date.now(); await wait; assert.ok(Date.now() - since < 400); await f.job.promise;
+  f.ji.workerState = 'yielded'; f.rt.workflow.registerWorker(f.key);
+  assert.equal(f.ji.workerState, 'yielded'); assert.equal(f.ji.workerThread, '/root/bug01_fixer');
 });
 
 // Item đang prepare (Start Work chưa xong, vẫn todo) giữ slot: tick sau của poller không tự prepare quá maxItemsInFlight.
@@ -276,7 +345,20 @@ test('in the last minutes the worker is stopped and the candidate published firs
   assert.deepEqual([next[0].key, next[0].action, next[0].lastCall], [f.key, 'publish_item', true], 'publish first, ahead of the new item');
   assert.deepEqual([next[0].arguments.candidateId, next[0].arguments.lastChance], [f.ji.candidate.id, undefined]);
   f.ji.workerState = 'writing';
-  assert.equal(f.rt.workflow.actions().nextActions[0].action, 'stop_worker');
+  const stop = f.rt.workflow.actions().nextActions[0];
+  assert.equal(stop.action, 'stop_worker');
+  // ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt xuống NOT_RUN khi bị dừng. Lời dừng do helper soạn, giữ PASS đã kiểm.
+  assert.match(stop.followup, /Keep every scenario you already verified as PASS/);
+});
+
+// ME1X0FFX: candidate {result} ghi BUG-02-fixer-1.json rồi trả problems; root thấy publish_item, publish hỏng và nhắn
+// worker giữa chừng. Kết quả của worker còn ghi không phải kết quả bàn giao.
+test('a fix-result of a worker that is still writing is not offered for publish', async () => {
+  const f = fixture(); f.result(1); f.ji.workerState = 'writing';
+  assert.deepEqual(f.rt.newResults(), []);
+  assert.equal(f.rt.workflow.actions().nextActions.some(a => a.action === 'publish_item'), false);
+  f.ji.workerState = 'yielded';
+  assert.deepEqual(f.rt.newResults().map(r => r.key), [f.key]);
 });
 
 test('publish integrates when main moved in other files and asks for a sync only when both changed a file', async () => {
@@ -337,6 +419,39 @@ test('worker_checkpoint candidate keeps the worker writing until the fix-result,
   writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'b.test.js'), 'test new\n');
   res = await checkpoint(args);
   assert.equal(res.handedOff, true, JSON.stringify(res)); assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
+});
+
+// 9O802QWE: lượt cuối viết fix-result 8–11 KB mất 30–71 s. Worker chỉ gửi phần suy luận; helper thêm changed_files,
+// test mới, các dòng run_checks, kiểm contract và ghi fix-result đánh số kế tiếp.
+test('worker_checkpoint candidate {result} writes the fix-result from the worker part, git and run_checks', async () => {
+  const f = fixture('BUG-01', false, { 'src/package.json': '{"name":"app","scripts":{"test":"vitest run","build":"next build"}}\n' });
+  const checkpoint = args => f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler(args);
+  f.ji.workerState = 'writing';
+  mkdirSync(join(f.wt.matchRoot, 'src', 'tests'), { recursive: true });
+  writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'value.test.js'), 'it("value", () => {});\n');
+  const checks = join(f.rt.session.paths.teamWork, 'items', f.key, 'checks.json');
+  mkdirSync(dirname(checks), { recursive: true });
+  writeFileSync(checks, JSON.stringify({ runId: 'r1', key: f.key, state: 'done', matchRoot: f.wt.matchRoot, results: [
+    { name: 'typecheck', command: 'pnpm run typecheck', state: 'passed', exitCode: 0, log: 'evidence/typecheck.log' },
+    { name: 'test', command: 'pnpm test', state: 'failed', exitCode: 1, log: 'evidence/full-suite.log', counts: { total: 3, passed: 2, failed: 1 }, failing: ['tests/old.test.js > old'] }] }));
+  f.rt.journal.data.preparation.baseline = { failing: ['tests/old.test.js > old'] };
+  const part = { status: 'fixed', summary: 'Value is 2', root_cause: 'value was 1', requirements: [{ id: 'AC-1', status: 'met', evidence: 'src/lib.js:1' }],
+    verification: [{ check: 'TC-1', command: null, result: 'pass', note: 'observed' }] };
+  let res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, status: 'done' } });
+  assert.equal(res.handedOff, false); assert.match(res.problems[0], /fix-result contract: .*status/);
+  assert.equal(existsSync(join(f.results, 'BUG-01-fixer-1.json')), false, 'nothing is written for a bad result');
+  res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, changed_files: [] } });
+  assert.match(res.problems[0], /helper fills .*changed_files/);
+  res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: part });
+  assert.equal(res.handedOff, true, JSON.stringify(res));
+  assert.equal(res.fixResultFile, join(f.results, 'BUG-01-fixer-1.json'));
+  const written = JSON.parse(readFileSync(res.fixResultFile, 'utf8'));
+  assert.deepEqual(written.changed_files.sort(), ['answers/BUG-01/submit.json', 'src/lib.js', 'src/tests/value.test.js']);
+  assert.deepEqual(written.tests_added, ['tests/value.test.js']);
+  assert.deepEqual(written.verification.map(v => [v.check, v.result]), [['TC-1', 'pass'], ['typecheck', 'pass'], ['full test suite', 'fail']]);
+  assert.match(written.verification[2].note, /every failing test is an issued baseline failure/);
+  assert.deepEqual([written.root_cause, written.confidence, written.test_change], ['value was 1', 0.8, null]);
+  assert.ok((await f.preflight(res.fixResultFile)).candidateId, 'the written result passes the publish contract');
 });
 
 // BTZNI69E: layout.test.ts của BUG-01 launch msedge; grader chạy suite ở môi trường không có trình duyệt, vitest thoát 1
@@ -542,7 +657,7 @@ test('a report-only PI is prepared without dependency setup, with every service 
   assert.match(brief, /<report_only_pi>[\s\S]*answers\/PI-01\/evidence\/derive\.mjs/);
   assert.match(brief, /search_logs \(service web: 1\/30 INCOMPLETE\)/);
   assert.match(brief, /timeline \(4 entries from 3 services, sorted by ts\)/);
-  assert.doesNotMatch(brief, /<skills>|<profile>/, 'the playbook replaces the skill files');
+  assert.doesNotMatch(brief, /<skills>|<profile>|<skill_text>/, 'the playbook replaces the skill files');
 });
 
 // EIOR38SI: helper thấy → fixer bắt đầu trung bình 1m24s, trong đó install/generate/migrate/seed 45–105 s. Fixer được
@@ -600,6 +715,8 @@ test('an answer-only TASK gets a worktree without dependency setup and a brief t
   assert.ok(brief.includes(`createRequire(${JSON.stringify(join(f.rt.session.paths.matchRoot, 'src', 'package.json'))})`),
     `project packages load from the installed main checkout: ${brief}`);
   assert.match(brief, /<skills>/, 'unlike a report-only PI, the TASK keeps its skill files');
+  assert.match(brief, /=== \.agents\/skills\/backlog-task\/SKILL\.md ===/);
+  assert.doesNotMatch(brief, /evidence-playbook\.md ===/, 'an answer-only item captures no screenshots');
 });
 
 test('a TASK that changes code or carries test results is not answer-only for setup', () => {
@@ -674,6 +791,21 @@ for (const via of ['direct', 'proxy']) test(`ready_for_evidence syncs and resume
   sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
   const conflict = await checkpoint(g.rt, { backlogItemKey: g.key, phase: 'ready_for_evidence' });
   assert.equal(conflict.writesAllowed, false); assert.equal(conflict.syncError.code, 'WORKTREE_CONFLICT'); assert.equal(g.ji.workerState, 'yielded');
+});
+
+// 08OQBPW8: worker chạy run_checks 3–4 lần, có lần trước sync. Helper chạy nó một lần ngay sau sync, trên source cuối.
+test('ready_for_evidence starts run_checks on the synced worktree unless autoChecks is off', async () => {
+  const f = fixture(); f.ji.workerThread = '/root/bug01';
+  const calls = [];
+  f.rt.runChecks = async args => { calls.push(args); return { state: 'running', runId: 'r-1' }; };
+  const res = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(res.writesAllowed, true, JSON.stringify(res));
+  assert.deepEqual(calls, [{ backlogItemKey: f.key, matchRoot: f.wt.matchRoot, waitSeconds: 0 }]);
+  assert.deepEqual(res.checks, { state: 'running', runId: 'r-1' });
+  assert.match(res.hint, /started run_checks .*run_checks {action: "status"/);
+  localRuntime(f.root, { autoChecks: false });
+  const off = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(calls.length, 1); assert.equal(off.checks, undefined); assert.match(off.hint, /Start the app again/);
 });
 
 test('proxy evidence checkpoint keeps the worker yielded while dependency setup is pending', async () => {

@@ -10,7 +10,9 @@ hint as your reply; root gets the sync from the helper and sends a followup to r
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
 outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale when your own files or the
-environment change after capture; runtime changes synced from other items also invalidate them. Only syncs limited to
+environment change after capture; runtime changes synced from other items also invalidate them. Stale means
+recapture when time allows, never downgrade: a scenario you verified stays PASS (note that it was captured before the
+sync) unless the synced change alters what it shows. Only syncs limited to
 tests and non-runtime documentation keep them valid. A manifest proves
 provenance, not correct UI.
 
@@ -146,12 +148,9 @@ waitFor supports selector with state visible, hidden or enabled. Prefer a real o
 Only unsupported operations such as API-only checks need a scratch script in .team-work/scratch/<ID>/;
 do not put it in product source, and fix it at most twice.
 
-## 8. Specific Task Traps & Fast Fixes
-- **BUG-01 (Layout check timeout on /accounting)**:
-  - On `/accounting`, the default Reports tab triggers an infinite polling query loop on `balanceSheet`.
-  - When taking Accounting screenshots, immediately click the Invoices tab (`{action: "click", selector: "[role=tab]", text: "Invoices"}`) to avoid the Reports request loop.
-  - If the supplied `BUG-01-layout-check.mjs` times out waiting for networkidle, do not retry endlessly. Record `not_run`, keep the 5/5 passing geometry tests, and publish under the last-chance rule.
-- **BUG-02 (VND currency report & baseline cascade test)**:
-  - `currency-report.txt` is NOT produced by the browser! Generate it directly in the terminal:
-    `pnpm exec tsx prisma/report-bug02.ts > answers/BUG-02/evidence/currency-report.txt` (after seeding `seed-bug02.ts`).
-  - Fix `tests/cascade.test.ts` (the item explicitly allows correcting this stale baseline test) so `pnpm test` exits 0 for TC-04.
+## 8. Pages that never settle, supplied check scripts
+- A screen that polls without end (a default tab whose query refetches in a loop) never reaches network idle: open a
+  tab or screen without that loop (click it right after `goto`) before `screenshot`, or pass `idle: false` when the
+  scenario only needs the visible layout, and say so in the note.
+- A check script the item supplies (challenge/<ID>-*.mjs) that times out waiting for network idle: run it once more at
+  most, then record that check `NOT_RUN` with its log and keep your own passing checks; never loop on it.

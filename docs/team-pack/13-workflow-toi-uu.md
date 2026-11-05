@@ -67,7 +67,8 @@ root tự tra Company Tools và đọc skill PI trước khi spawn, tự soạn 
 - B. Cuối job prepare, helper viết `.team-work/items/<ID>/brief.md` (item_meta, skills, profile, materials,
   requirements, required_evidence, baseline_failures, recent_changes, company_facts, knowledge_hints, related_events,
   item) và `ji.spawn`; nextActions `spawn_worker` mang `spawn` = đối số spawn_agent (task_name, model, effort, câu trỏ
-  tới brief). Root spawn trong một lượt rồi resume đăng ký threadId.
+  tới brief). Root spawn tất cả bằng các tool call song song trong một lượt; helper tự đăng ký thread khi worker
+  gọi tool lần đầu, không cần resume sau spawn (05/11, sau ME1X0FFX).
 - C. `prefetchCompany` song song với dựng worktree: `get_test_data` khi đề nhắc test data/fixture, `kb_search` (câu
   hỏi từ tiêu đề và Context/Expected outcome/Requirements, `kbQuery`) khi đề đòi theo chuẩn công ty hoặc là PI.
 - D. `company_lookup` (readOnly, không qua guardian) chỉ cho tool tra cứu (cờ readOnlyHint của tool, hoặc tên
@@ -198,6 +199,90 @@ Phút đầu fixer chỉ đọc brief, skill và code, chưa cần dependency. T
   TASK-04 nạp typescript để transpile source) khi checkout chính đã có node_modules.
 - Ước tính: BUG/CR từ helper thấy tới fixer bắt đầu còn khoảng 25–40 s (git worktree, codegraph, brief, một lượt spawn
   của root); TASK chỉ trả lời khoảng 20–30 s. Đo lại bằng bench sau trận kế ("· helper thấy → thợ bắt đầu").
+
+## Bớt lượt model của fixer: run_checks, candidate {result}, skill trong brief (05/11, sau 9O802QWE)
+
+9O802QWE (10/10 item đạt): BUG/CR mất 7–13 phút, trong đó 65–80% là model suy nghĩ (gpt-6.1-sol high, 12–14 s mỗi
+lượt, 22–33 lượt), mỗi lượt gửi lại context 60–110K; fixer chiếm 85/88 credit. Lượt bị phí: BUG-04 10 lượt `wait`
+1 s chờ chuỗi typecheck → build → test, CR-01/CR-02 4 lượt, nhiều lượt chỉ để `Get-Content -Tail build.log`; lượt cuối
+viết fix-result 8–11 KB mất 30–71 s; 2–3 lượt đầu chỉ để mở brief rồi 4–6 file skill (~40K ký tự); BUG-04 mất 4 lượt
+(~35 s) đọc mã nguồn helper (`proxy.mjs`, `tools.mjs`) để hiểu `company_lookup` / `job_status`. Sửa:
+- Tool `run_checks` (05 §5.27): helper chạy typecheck, build và cả bộ test theo profile, song song, log vào
+  `answers/<ID>/evidence/` (`typecheck.log`, `build.log`, `full-suite.log`), chờ tới 110 s và trả trạng thái từng
+  bước, số test, test fail, đuôi log khi hỏng. Ghi `.team-work/items/<ID>/checks.json`. Build đạt trên source không đổi
+  thì ghi nhớ bản build như `app start`, nên `app start` sau đó dùng lại (khỏi build lần hai).
+- `worker_checkpoint candidate {result}`: worker chỉ gửi phần cần suy luận (status, summary, requirements, các dòng
+  scenario MVS, root_cause/hypotheses… khi có); helper thêm `changed_files` (git so với `worktreeBase`), `tests_added`
+  (file test mới, theo đích `test_one`), các dòng typecheck/build/full suite từ `checks.json` (ghi chú khi mọi test fail
+  đều là baseline phát ra, hay khi source đổi sau lần chạy) và giá trị mặc định, kiểm contract trước khi ghi (sai thì
+  không ghi gì, không tốn số phiên bản), rồi ghi fix-result đánh số kế tiếp và bàn giao như cũ. Kết quả có
+  `fixResultFile`. Worker tự viết file vẫn được.
+- Brief: khối cuối `<skill_text>` chép sẵn backlog-references/SKILL.md, skill theo loại item, stack notes, bug-patterns
+  (BUG), pi-triage (PI), domain-checks và evidence-playbook (trừ item chỉ trả lời), bỏ front matter. Đặt sau `<item>`
+  để output bị cắt thì mất skill chứ không mất đề; `item_meta` thêm `fix_result_schema`. Report-only PI giữ quy trình riêng.
+- `team-fixer.toml`: đọc brief một lệnh (`max_output_tokens 40000`), không mở lại file skill; liệt kê đúng các tool
+  team_runtime của worker, cấm đọc mã nguồn/pack đã cài của helper; closing checks bằng `run_checks`; mọi exec chờ việc
+  lâu bắt đầu bằng `// @exec: {"yield_time_ms": 120000}`; bàn giao bằng `candidate {result}`.
+- evidence-playbook §8: bỏ mẹo gắn cứng BUG-01/BUG-02 của bộ đề luyện tập (ở giải thật cùng ID là bài khác; mẹo sửa
+  `cascade.test.ts` còn trái luật "không sửa test phát ra"), thay bằng bài học chung: trang poll không ngừng, script
+  kiểm của BTC chờ network idle quá hạn.
+- Ước tính: bớt 5–15 lượt mỗi item BUG/CR (≈ 1–3 phút và 0,5–1,5M input). Đo lại bằng bench sau trận kế. Chưa đổi
+  model fixer để trận kế đo riêng tác động của thay đổi này; A/B model (gpt-6-sol / 6.1-sol medium) để trận sau.
+
+### Đo lại sau 08OQBPW8 (05/11)
+
+10/10 đạt judge, credit 88 → 77, input fixer 14,0M → 10,6M, lượt fixer 217 → 170, cả 7 fixer bàn giao bằng
+`candidate {result}` ngay lần đầu. Nhưng thời gian item không giảm (TB 7m23s → 8m05s, evidence 3m54s → 5m12s): mỗi
+lượt dài 32 s vì tool chờ lâu. Nguyên nhân và sửa:
+- Mỗi worker chạy `run_checks` 3–4 lần, 40–95 s mỗi lần (BUG-01 ~175 s, CR-01 ~200 s): trước sync, sau sync, sau khi
+  chép script seed vào `src/`, trước candidate; 6/7 worker tự chọn `parallel:false`; BUG-04 chụp evidence trên app tự
+  build (56 s) rồi `run_checks` build lại.
+  - `run_checks` cache: lần chạy xong ghi `snapshot` (source ngoài answers/, challenge/ và môi trường) khi không đổi
+    trong lúc chạy; gọi lại với cùng snapshot thì trả lần đó ngay (`cached: true`), `force: true` để chạy lại.
+  - `worker_checkpoint ready_for_evidence` (helper của root) tự chạy `run_checks` ngay sau sync, trên source cuối
+    cùng, trả `checks {state, runId}`; worker chỉ gọi `run_checks status`. Tắt: `"autoChecks": false`.
+  - `app start` thấy `run_checks` của chính item đang build thì chờ nó (tới `waitSeconds`) rồi dùng lại bản build;
+    quá hạn thì trả `waiting_for_checks`.
+  - Bỏ `parallel` khỏi schema (luôn song song). `team-fixer.toml`: không chạy full `run_checks` trước
+    ready_for_evidence (chỉ test_one, `checks: ["typecheck"]` khi đổi kiểu), chép script seed/report vào `src/`
+    trước ready_for_evidence.
+- Brief ~45K ký tự bị exec cắt ở ~10K token dù `exec_command` có `max_output_tokens`: BUG-04, CR-03 đọc hai lần (một
+  lượt, thêm ~10K token context mỗi lượt sau). Lời spawn và profile bảo mở exec bằng
+  `// @exec: {"max_output_tokens": 40000}`.
+
+### ME1X0FFX (05/11): nhanh hơn, nhưng BUG-02 mất 80 điểm
+
+TB item 7m12s (tốt nhất bộ), evidence 4m00s, trận 30m05s, credit 74. BUG-02 được 20/100: đã chạy đạt cả 3 kịch bản UI
+(49360 VND, 15000 PARTIAL, 12375 USD) và ghi submit.json DONE, nhưng:
+- candidate trả problems vì bản sửa baseline của BUG-01 vừa lên main (chạy lại cả bộ test); `run_checks` chạy lại 89 s
+  và typecheck hỏng giả: tsc đọc `.next/types/**` (include của tsconfig Next.js) đúng lúc next build xoá và dựng lại
+  (TS6053). Sửa: typecheck chạy xong rồi mới build, test vẫn song song với cả hai.
+- `candidate {result}` đã ghi BUG-02-fixer-1.json trước khi trả problems; `newResults` coi nó là kết quả mới nên
+  nextActions đưa `publish_item`, publish hỏng (worker còn ghi), root nhắn worker hai lần giữa lúc chạy test. Sửa:
+  `newResults` bỏ item có worker đang ghi.
+- Gần hạn 18 phút, `stop_worker`: worker hạ 3 kịch bản đã đạt xuống NOT_RUN ("evidence chụp trước sync"). Sửa:
+  `stop_worker` mang `followup` cố định (root gửi nguyên văn): bàn giao trong một lượt, giữ PASS những gì đã kiểm, chỉ
+  NOT_RUN cái chưa từng chạy; profile fixer, playbook và lời candidate về baseline nói cùng điều đó.
+
+### Wave đầu sau ME1X0FFX
+
+- Số đo transcript root `rollout-…bba3…jsonl`: 19:11:52.4 server ra BUG-01/02 (pre-game watch thấy ngay);
+  19:11:54.6 Player gửi START_GAME cho gpt-6-luna (~56 token/s). Root chép frame 4.333 ký tự, 1.413 token
+  trong 19:12:02.7–19:12:26.8 (24 s); configure_session hoàn tất Start Work cả hai lúc 19:12:31.5 (5 s).
+  Spawn BUG-01 lúc 19:12:43.6, BUG-02 lúc 19:12:55.0; giữa hai spawn có ba lượt model: resume → wait → spawn.
+  Fixer chỉ ~5 s tới tool đầu tiên, giữ nguyên bước khởi động đó.
+- START rút gọn còn marker và 12 trường descriptor cần thiết; helper lấy phần còn lại từ PREPARE trong RAM,
+  kiểm session/match/team, scope, length/SHA-256 và dựng submission policy đúng Player. PREPARE và RESUME vẫn
+  chép nguyên văn trong skill; frame đầy đủ vẫn dùng được. Công tắc `compactStartFrame` mặc định true, tắt rồi
+  cài lại để về lời “Configure the Player frame verbatim”. Ước tính tiết kiệm khoảng 20 s ở wave đầu.
+- Worker được phép ghi từ prepare; lần đầu gọi helper qua proxy tự đăng ký `/root/<task_name>`, không mở ghi
+  lại nếu đã yielded. Spawn lỗi/hết thread chưa có lời gọi worker thì `spawn_worker` vẫn còn để thử lại.
+  Root spawn mọi entry song song, bỏ resume sau spawn; resume khi trả lời `answer_worker` vẫn giữ.
+- `wait_for_update` gom tối đa 2 s nếu chỉ có spawn và prepare cùng wave còn chạy; không chờ setup, không giữ
+  PI hay việc khác, có abort. Cùng wave dựa trên phút revealedElapsedSec, dự phòng mốc phát hiện/ra đề.
+  Transcript cho thấy prepare BUG-01 xong 19:12:34.615, BUG-02 xong 19:12:38.517: lệch 3,902 s, nên cửa sổ 2 s
+  chưa gom đủ cặp này khi phát lại nguyên timing. Với các item xong sát nhau, một lượt trả đủ spawn; ước tính
+  bớt khoảng 10 s cho mỗi item thứ hai trở đi, cần đo lại ở trận kế tiếp.
 
 ## Evidence và recovery
 

@@ -208,6 +208,24 @@ async function noteBuild(teamWorkspace, key, s) {
   if (current?.pid === s.pid) writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ ...current, recorded: true }));
 }
 
+// run_checks của chính item đang build thư mục này (helper tự chạy nó sau sync ở ready_for_evidence): chờ nó xong để
+// dùng lại bản build, thay vì build chồng lên cùng thư mục .next (08OQBPW8: app tự build 56 s rồi run_checks build
+// lại). Trạng thái đọc từ file vì run_checks có thể chạy trong helper của root.
+async function checksBuilding(where, key, waitSeconds) {
+  const file = join(dirname(where.logDir), 'items', key, 'checks.json');
+  const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
+  for (;;) {
+    let rec = null;
+    try { rec = JSON.parse(readFileSync(file, 'utf8')); } catch { /* chưa có run_checks */ }
+    if (rec?.state !== 'running' || !(rec.checks ?? []).includes('build') || !alive(rec.pid)) return null;
+    if (Date.now() >= deadline) {
+      return { state: 'waiting_for_checks', runId: rec.runId,
+        hint: 'run_checks is still building this worktree: call run_checks {action: "status", waitSeconds: 110}, then app start again (it reuses that build).' };
+    }
+    await sleep(1000);
+  }
+}
+
 export function stopApp(teamWorkspace, key) {
   const s = readState(teamWorkspace, key);
   if (!s) return { stopped: false, reason: 'no app recorded for this item' };
@@ -226,6 +244,8 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
   if (!['production', 'dev'].includes(mode)) fail('INVALID_ARGUMENT', 'mode');
 
   const where = locate(teamWorkspace, matchRoot);
+  const waiting = await checksBuilding(where, key, waitSeconds);
+  if (waiting) return waiting;
   // Start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là tiến trình mới; build lại khi source hay môi
   // trường khác bản build còn trong thư mục.
   stopApp(teamWorkspace, key);
