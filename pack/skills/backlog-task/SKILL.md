@@ -17,6 +17,19 @@ Check the item description immediately upon opening:
   - Checkpoint candidate without writing a fix-result (the helper writes it from submit.json and validates submit.json) and hand off within 2-3 minutes!
 - **Form B: Code Feature / Endpoint TASK**:
   - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
+- **Form C: Integration Test Suite / Spec Coverage TASK** (e.g. TASK-08: 'Integration test suite...', 'written from specification in challenge/...-spec.md', or Grader checks against broken builds/mutants):
+  - **Mutation Testing Rule (Broken Build Detection)**: Grader tests your suite against 4-6 broken builds (mutants). It earns points ONLY if it passes on the correct build AND FAILS (detects) on EVERY broken build!
+  - **The 5 Mandatory Spec Coverage Dimensions**:
+    1. *Boundary & Window Edge*: exact limits (e.g. +7 days vs +8 days), empty values, max thresholds.
+    2. *State, Linking & Reciprocity*: reciprocal pairs (transfers), counterpart moving, cascading deletes, account reassignments.
+    3. *Rule Precedence & Pipeline Ordering*: rules mutating payee/category before import matching.
+    4. *Multiplicity & Deduplication*: duplicate transactions, case-insensitivity, exact ID match vs fallback.
+    5. *CRITICAL - Scale & Batch Volume (> 20-50 items)*: NEVER test only 1-2 items! Grader always includes a mutant that breaks bulk processing (e.g. 'batch-volume'). Always write tests with 20-50+ transactions in a single batch action, asserting:
+       - Every item in the bulk batch is created/imported without loss (e.g. expect(created.length).toBe(60)).
+       - Reciprocal counterpart transfers exist for all batch items.
+       - Aggregate account balances match exactly down to the cent.
+       *(Without batch-volume cases, Grader's bulk processing mutant will not be detected, losing 16+ points as seen in TASK-08!)*
+  - Register every case in answers/<ID>/submit.json as { file, title, rules: ['<rule_id>', ...] } matching specification rule IDs.
 
 ## 1. Acceptance criteria & test viewpoints
 Derive criteria from the description. Cover the 4 core test viewpoint dimensions without inventing unrequested features:
@@ -24,6 +37,7 @@ Derive criteria from the description. Cover the 4 core test viewpoint dimensions
 - **Boundary**: limits and edge values (0, empty string `""`, max size/length, page boundary 0/1, empty list, first/last element).
 - **Error**: invalid payloads, missing mandatory fields, not found (404), unauthenticated/unauthorized (401/403), duplicate records.
 - **Cross-field**: interactions between dependent fields (e.g. date start after end, discount exceeding total, mutually exclusive flags).
+- **Scale & Batch Volume**: bulk operations (> 20-50 items per batch) to detect bulk-processing regressions and mutants.
 
 Ambiguous? Pick the interpretation closest to how similar features already behave in this project.
 
