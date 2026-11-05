@@ -28,6 +28,11 @@ Do not patch only the UI or only the service. Walk the full call chain outward:
 3. **Service / Business Logic**: Core algorithm, entity status transitions, authorization checks.
 4. **Data Persistence / Migration**:
    - Schema changes must use the project's native migration tool (Prisma, Alembic, Flyway, Liquibase, EF Migrations).
+- **Inter-Item Dependency Rule (CRITICAL - Learned from CR-07)**:
+  - If the item states that official test data / verification requires fixes from another item (e.g. 'contains the BUG-11 fixes', Unicode minus, parser fixes):
+    1. If that item is already merged on main: run `git merge origin/main` or cherry-pick its commit immediately.
+    2. If that item is not yet on main: YOU MUST apply that minimal prerequisite fix directly in your worktree! Grader tests your CR on your submitted commit alone; figures produced on another branch do not count.
+    3. NEVER submit with known broken figures (e.g. -70000000 instead of -180000000) or mark a scenario 'FAIL'. That cost 29 pts in CR-07! Always apply the prerequisite fix, verify cr-*-official test passes, and submit PASS with correct figures.
    - *Forbidden*: Modifying existing historical migrations. Always create a new migration.
 5. **Serialization / Mapping**: DTO $\leftrightarrow$ Entity mappers, date formatting, enum serializations.
    - *Forbidden*: Renaming or omitting existing response fields unless specifically mandated.

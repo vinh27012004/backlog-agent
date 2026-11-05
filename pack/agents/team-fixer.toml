@@ -45,7 +45,7 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
 2. Read only the relevant source and solve the cause with the smallest complete change.
    BUG: read .agents/skills/backlog-references/bug-patterns.md and .agents/skills/backlog-bug/SKILL.md. Check git log -p -n 5 on failing frame first; fix at production site (J2), not caller hacks. Check the 3 boundaries.
-   CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover 4 viewpoints (happy path, boundaries, error codes, backward compatibility).
+   CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover 4 viewpoints. Inter-item dependency (e.g. CR-07 needing BUG-11): merge origin/main if merged, or apply the minimal prerequisite fix directly so official test data produces correct figures on your own commit! Never submit known wrong figures or FAIL.
    PI: read .agents/skills/backlog-references/pi-triage.md and .agents/skills/backlog-pi/SKILL.md. Classify immediately:
    - Form A (report-only, source changes out of scope): DO NOT build/test/run app or edit code. Derive all answers deterministically from logs and company facts using a targeted script in answers/<ID>/evidence/.
    - Form B (code hotfix): apply minimal fix with reproduction test.
