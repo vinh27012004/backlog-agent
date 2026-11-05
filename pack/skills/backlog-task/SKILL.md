@@ -17,27 +17,28 @@ Check the item description immediately upon opening:
   - Checkpoint candidate without writing a fix-result (the helper writes it from submit.json and validates submit.json) and hand off within 2-3 minutes!
 - **Form B: Code Feature / Endpoint TASK**:
   - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
-- **Form C: Integration Test Suite / Spec Coverage TASK** (e.g. TASK-08: 'Integration test suite...', 'written from specification in challenge/...-spec.md', or Grader checks against broken builds/mutants):
-  - **Mutation Testing Rule (Broken Build Detection)**: Grader tests your suite against 4-6 broken builds (mutants). It earns points ONLY if it passes on the correct build AND FAILS (detects) on EVERY broken build!
-  - **The 5 Mandatory Spec Coverage Dimensions**:
-    1. *Boundary & Window Edge*: exact limits (e.g. +7 days vs +8 days), empty values, max thresholds.
-    2. *State, Linking & Reciprocity*: reciprocal pairs (transfers), counterpart moving, cascading deletes, account reassignments.
-    3. *Rule Precedence & Pipeline Ordering*: rules mutating payee/category before import matching.
-    4. *Multiplicity & Deduplication*: duplicate transactions, case-insensitivity, exact ID match vs fallback.
-    5. *CRITICAL - Scale & Batch Volume (> 20-50 items)*: NEVER test only 1-2 items! Grader always includes a mutant that breaks bulk processing (e.g. 'batch-volume'). Always write tests with 20-50+ transactions in a single batch action, asserting:
-       - Every item in the bulk batch is created/imported without loss (e.g. expect(created.length).toBe(60)).
-       - Reciprocal counterpart transfers exist for all batch items.
-       - Aggregate account balances match exactly down to the cent.
-       *(Without batch-volume cases, Grader's bulk processing mutant will not be detected, losing 16+ points as seen in TASK-08!)*
+- **Form C: Integration Test Suite / Specification Coverage TASK** (test suites written from specification):
+  - **Mutation Testing Rule (Broken Build Detection)**: Graders test integration suites against 4-6 broken builds (mutants) where each mutant injects a subtle bug. The suite scores full points ONLY when it passes on the correct build AND detects (fails on) EVERY broken mutant build!
+  - **The 6-Axis Universal Test Derivation Matrix (MANDATORY)**:
+    Every test suite must systematically cover all 6 axes:
+    1. *Dual-Sided Boundaries*: Test both sides of every threshold (`threshold` vs `threshold + 1`, `limit - 1` vs `limit`).
+    2. *State Mutation & Reciprocity*: Reciprocal pairs, counterpart updating, cascading deletion, reassignment across containers.
+    3. *Pipeline & Precedence*: Filter/rule ordering, overrides, exact match vs fallback match.
+    4. *Multiplicity & Deduplication*: Repeated identical entries, case-insensitivity, duplicate resolution.
+    5. *Scale & Batch Volume*: Bulk operations (> 20-50+ items in a single batch). Assert zero dropped items (`expect(created.length).toBe(N)`), reciprocal counterpart creation for all items, and exact conservation of aggregate balances down to the cent.
+    6. *Encoding & Data Diversity*: Unicode characters (minus signs, international text), zero, negative numbers.
+  - **Pre-Submission Mental Mutation Walkthrough**:
+    Ask: *"If a developer drops the 10th item in a batch loop, or changes `<=` to `<`, does at least one test in my suite FAIL?"* If not, the suite has blindspots—add targeted cases immediately.
   - Register every case in answers/<ID>/submit.json as { file, title, rules: ['<rule_id>', ...] } matching specification rule IDs.
 
-## 1. Acceptance criteria & test viewpoints
-Derive criteria from the description. Cover the 4 core test viewpoint dimensions without inventing unrequested features:
-- **Normal (Happy path)**: standard valid inputs, expected successful outcomes, correct HTTP status and data formats.
-- **Boundary**: limits and edge values (0, empty string `""`, max size/length, page boundary 0/1, empty list, first/last element).
-- **Error**: invalid payloads, missing mandatory fields, not found (404), unauthenticated/unauthorized (401/403), duplicate records.
-- **Cross-field**: interactions between dependent fields (e.g. date start after end, discount exceeding total, mutually exclusive flags).
-- **Scale & Batch Volume**: bulk operations (> 20-50 items per batch) to detect bulk-processing regressions and mutants.
+## 1. Acceptance criteria & test viewpoints (The 6-Axis Matrix)
+Derive criteria from the description. Cover all 6 universal test viewpoint axes without inventing unrequested features:
+- **Normal (Happy path)**: Standard valid inputs, expected successful outcomes, correct status and data formats.
+- **Dual-Sided Boundary**: Limits and edge values (0, empty string `""`, max size/length, page boundary 0/1, both sides of every comparison threshold).
+- **Error & Negative**: Invalid payloads, missing mandatory fields, not found (404), unauthorized (401/403), duplicate records.
+- **Cross-field & Interaction**: Interactions between dependent fields (e.g. date start after end, discounts, reciprocal pairs).
+- **Scale & Batch Volume**: Bulk operations (> 20-50 items per batch) to catch bulk-processing regressions, SQL chunking drops, and batch-volume mutants.
+- **Data Encoding & Charset**: Unicode characters, international accents, special minus/dash symbols, integer currency precision.
 
 Ambiguous? Pick the interpretation closest to how similar features already behave in this project.
 

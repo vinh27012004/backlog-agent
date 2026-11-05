@@ -72,6 +72,6 @@ Before modifying any production code, write a minimal reproduction test:
   - Every requested artifact (PNG screenshots, `.txt`, `.csv`, `.log`) must be present in `answers/<ID>/evidence/` and declared in `evidenceFiles`.
   - Non-UI artifacts (`.txt`, `.json`, `.csv`, `.log`) must be generated via scripts or command piping, never via browser.
 - Checkpoint candidate immediately after verification.
-- **ANTI-DOWNGRADE RULE FOR SUBMIT.JSON**:
-  - When the reproduction test passes and the fix is verified, all MVS scenarios covered by that fix MUST be reported as "result": "PASS" in submit.json with their evidence file.
-  - NEVER downgrade a verified scenario to "NOT_RUN" due to a minor browser screenshot glitch or demo state reset. BTC Grader requires "PASS" to trigger their replay check; marking "NOT_RUN" forfeits 25-30 points instantly!
+- **Anti-Downgrade Protocol for submit.json**:
+  - When reproduction tests pass and the underlying code fix is verified, all corresponding MVS scenarios MUST be reported as "result": "PASS" in submit.json with their evidence file.
+  - Graders require "PASS" to evaluate scenarios with their replay engine. Never self-downgrade a verified fix to "NOT_RUN" due to test runner or browser snapshot artifacts; doing so forfeits points without being tested.

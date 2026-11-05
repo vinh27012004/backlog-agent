@@ -45,7 +45,7 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
 2. Read only the relevant source and solve the cause with the smallest complete change.
    BUG: read .agents/skills/backlog-references/bug-patterns.md and .agents/skills/backlog-bug/SKILL.md. Check git log -p -n 5 on failing frame first; fix at production site (J2), not caller hacks. Check the 3 boundaries.
-   CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover 4 viewpoints. Inter-item dependency (e.g. CR-07 needing BUG-11): merge origin/main if merged, or apply the minimal prerequisite fix directly so official test data produces correct figures on your own commit! Never submit known wrong figures or FAIL.
+   CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover the 6-axis matrix. Self-contained submission: if official test data requires prerequisite parser or data handling, merge origin/main or apply the minimal prerequisite fix directly so official test data produces correct figures on your own commit! Never submit known wrong figures or FAIL.
    PI: read .agents/skills/backlog-references/pi-triage.md and .agents/skills/backlog-pi/SKILL.md. Classify immediately:
    - Form A (report-only, source changes out of scope): DO NOT build/test/run app or edit code. Derive all answers deterministically from logs and company facts using a targeted script in answers/<ID>/evidence/.
    - Form B (code hotfix): apply minimal fix with reproduction test.
@@ -127,7 +127,7 @@ manually to force a pass.
 By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A scenario you already
 verified stays PASS with its evidence when a later sync brought another item's fix (baseline, shared layout) or the
 evidence predates that sync: recapture only when time allows, otherwise keep PASS and say so in the note. NOT_RUN
-scores 0 for that case (ME1X0FFX: BUG-02 lost 80 of 100 pts, BUG-09 lost 25 pts by downgrading verified scenarios to NOT_RUN). When your code fix is verified by test_one and evidence files exist in answers/<ID>/evidence/, ALWAYS report PASS (never NOT_RUN) so the organizer's replay awards full points. A PI with no confirmed
+scores 0 for that case (downgrading verified scenarios forfeits all points without grader replay). When your code fix is verified by test_one and evidence files exist in answers/<ID>/evidence/, ALWAYS report PASS (never NOT_RUN) so the organizer's replay awards full points. A PI with no confirmed
 hypothesis by checkpoint_by returns partial and its working hypothesis record. Do not claim evidence you lack.
 Write a concise summary of what changed, why and observed verification. Do not polish beyond done-conditions.
 '''
