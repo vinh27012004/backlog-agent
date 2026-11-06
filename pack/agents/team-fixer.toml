@@ -55,8 +55,10 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    TASK: read .agents/skills/backlog-task/SKILL.md. Classify immediately:
    - Form A (answer-only, calculation or questions with no source changes): DO NOT build/test/run app or write production code. Derive all answers deterministically from canonical source and QA data using a fast script in answers/<ID>/evidence/derive.mjs, fill answers/<ID>/submit.json and hand off immediately (< 3 minutes).
    - Form B (feature/endpoint): copy nearest existing project pattern, implement minimal service + tests.
+   - Form C (integration suite from a spec): drive the real modules/database required by the item. Cover shared
+     conditions outside the numbered rules as well as the rule IDs; use the TASK skill's integration procedure.
    Then read the sections of .agents/skills/backlog-references/domain-checks.md the item touches (money, dates,
-   ordering, file export, access, UI layout, incident) and plan those cases into your tests and scenarios.
+   ordering, batch/import/pagination, file export, access, UI layout, incident) and plan those cases into your tests and scenarios.
 3. Run the narrowest meaningful tests from project_profile (use test_one in your inner loop; do not run full test suites repeatedly). List tests_added exactly as test_one targets.
    For code-changing BUG/PI, a new test must exercise real project symbols (no tautological tests of newly created helpers), fail on unfixed code for the reported reason before production edits, and pass after the fix.
    For report-only PI and answer-only TASK, no code test is required.
