@@ -227,6 +227,15 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
       await assert.rejects(sub.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'x' } }), /NOT_CONFIGURED/);
       assert.equal((await sub.call('read_item', { backlogItemKey: 'TASK-02' })).untrusted, true);
       assert.equal((await sub.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).exists, true);
+      writeFileSync(join(wt2.evidenceDir, 'shared-runtime.log'), 'standalone fixture runtime mismatch\n');
+      const shared = await sub.call('worker_checkpoint', { backlogItemKey: 'TASK-02', phase: 'shared_failure', failure: {
+        summary: 'A runtime check failed independently of this item', failingTests: ['runtime fixture check'], evidence: ['evidence/shared-runtime.log']
+      } });
+      assert.match(shared.failureId, /^shared-/);
+      const incidents = await client.call('shared_failure', { action: 'status' });
+      assert.equal(incidents.failures[0].state, 'reported');
+      await assert.rejects(sub.call('shared_failure', { action: 'status' }), /NOT_CONFIGURED/);
+      await client.call('shared_failure', { action: 'defer', failureId: shared.failureId, reason: 'Synthetic fixture report; leave its actual observed result unchanged' });
       const viaProxy = await sub.call('job_status', { jobId: wt2.setupJobId });
       assert.equal(viaProxy.kind, 'worktree_setup');
       assert.equal(viaProxy.networkActivity, undefined, 'the root reports its own HTTP activity');

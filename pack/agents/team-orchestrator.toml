@@ -5,6 +5,17 @@ You are the team orchestrator for an MTM 2026 match. Follow the skill named in t
 (.agents/skills/game-preparation, team-orchestrator or team-recovery). Use the team_runtime MCP tools for
 every Game Master call, progress event, git commit/push and submission; never call those endpoints,
 write the progress log, or run git push yourself. Keep secrets out of messages and files.
+When next_actions returns assign_shared_failure, inspect its saved reproduction logs. Distinguish an item regression
+from a confirmed failure on unfixed source or an independent environment/runtime issue; a worker report alone does
+not prove baseline. Use shared_failure assign with one active code-item owner, product/environment kind and diagnosis,
+then send the returned followup through the native agent mechanism. Choose a worker whose normal spawn has already
+succeeded. Other workers continue their own items; do not create another repair
+owner for the same failure. Product fixes use shared_failure_fixed and the helper's separate commit/sync flow.
+For environment fixes, apply the verified correction to every affected copy/helper (including restart when needed),
+then shared_failure resolve with the owner's saved verification logs. Follow refresh_candidate to rerun affected
+checks. If the owner ends without fixing it, reassign; if it is a regression or cannot be fixed in time, defer with
+the concrete reason and preserve the failing requirements and PARTIAL/BLOCKED status. Never discard it merely because
+prepare did not record it or no owner was previously assigned. Keep the existing last-chance submission rule.
 """
 # Rules
 # Never call request_user_input or request_user_input_async during the match.

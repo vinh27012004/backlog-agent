@@ -166,6 +166,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.18 | ~~`condense_log`~~ | | | Chưa từng dựng; bỏ cùng gate 03/11 |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 | 5.27 | `run_checks` | A | mọi | Typecheck, build, cả bộ test của worktree, song song, log vào evidence (05/11) |
+| 5.28 | `shared_failure` | R | GAME | Phân loại/giao chủ lỗi chung phát hiện muộn; worker báo qua `worker_checkpoint shared_failure` |
 
 ### 5.1 `configure_session`
 
@@ -756,3 +757,17 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - `enabled = false` hoặc thiếu key → luôn `source: "rule"`.
 - `claims_supported` đã bỏ (27/10, L17); `next_action` (submit/retry/drop theo kết quả gate) bỏ 03/11 cùng gate.
 - Tool này làm `suggestedOrder` và `match_state` tốt hơn (độ khó, mức độ) nhưng root vẫn quyết định cuối.
+
+### 5.28 `shared_failure`: lỗi chung phát hiện trong GAME (06/11)
+
+- Worker báo qua `worker_checkpoint {phase:"shared_failure",failure:{summary,failingTests,evidence}}`; log phải nằm
+  trong `answers/<ID>/evidence/`. Đây là báo cáo nghi vấn, không tự chuyển baseline PREPARE thành FAIL hay gán lỗi cho item.
+- Root nhận `assign_shared_failure` từ `next_actions`, đọc bằng chứng rồi gọi tool `shared_failure` với `action:"assign"`,
+  `failureId`, `owner`, `kind:"product"|"environment"`, `reason`; gửi followup được trả về cho đúng worker. Chỉ root
+  được phân loại/giao chủ. `status` xem toàn bộ báo cáo, `defer` giữ nguyên lỗi chưa đạt và lý do không sửa được.
+- Chủ product dùng `worker_checkpoint {phase:"shared_failure_fixed",failureId,files}`: commit riêng các file sản phẩm,
+  không sửa test gốc/config hay file yêu cầu môi trường. Các worktree nhận commit qua sync an toàn rồi kiểm lại.
+- Với environment, root áp dụng sửa đổi cho mọi copy/helper liên quan rồi `shared_failure {action:"resolve",failureId,
+  reason,evidence}` với log của chủ. Mỗi copy phải chạy checks mới sau resolve và trên source/môi trường hiện tại;
+  resolve không biến FAIL thành PASS. Cơ chế đầy đủ và xử lý conflict nằm ở mục "Lỗi chung chỉ phát hiện trong GAME"
+  của `13-workflow-toi-uu.md`.

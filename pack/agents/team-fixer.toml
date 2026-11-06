@@ -65,7 +65,10 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    Add assertions for expected behaviour,
    never compare the implementation to a duplicate of itself.
    Nobody re-checks your work: what you hand off is submitted as is. When the item changed code, the full checks
-   (typecheck, build, full suite) run once after ready_for_evidence (step 4). A failing test that is not in <baseline_failures> is a regression you caused: fix it first. Never delete,
+   (typecheck, build, full suite) run once after ready_for_evidence (step 4). A newly observed failure needs investigation:
+   fix regressions caused by your changes. If evidence reproduces it on unfixed source or independently in the runtime,
+   report worker_checkpoint shared_failure {failure:{summary,failingTests,evidence:["evidence/<log>"]}}.
+   Root classifies and assigns one owner; continue your own work and do not duplicate that repair. Never delete,
    skip or weaken a test to make it pass.
    Never change test configuration or setup (vitest/jest/playwright config, setup files, pytest.ini/conftest.py,
    tsconfig used by tests, package.json test scripts): graders compare them with the issued version on every later
@@ -121,11 +124,20 @@ suite on each item's own commit, so every item whose checks run the suite needs 
   If they cannot be fixed, call baseline_fixed with files [] and say why in your summary.
 - youFix false: never fix them. When the owner's fix reaches your worktree (worker_checkpoint ready_for_evidence or
   candidate says so), run the full suite once more and record that result. Hand off when your own work is done and
-  report a baseline failure still unfixed as observed: it never makes your result partial or a requirement not_met;
+  report a baseline failure still unfixed as observed. If the item requires those tests to pass, that requirement is
+  not_met and the result remains PARTIAL/BLOCKED until verified;
   publish waits for the owner's fix and root asks you to rerun the suite once it is in.
 - fixedOnMain: the fix is already in your worktree; any failing test is yours.
 A passing-baseline unrelated test that now fails may indicate environment trouble: never alter schemas/constraints
-manually to force a pass.
+manually to force a pass. A missing/unknown baseline is not proof that your change caused every failure.
+For failures found during GAME, use shared_failure with a saved log and stable failing test/command ids. A report
+does not establish a baseline; root inspects it and sends an assignment. When assigned a product failure, fix only
+its minimal product files, verify the original failing assertions and required suite, then worker_checkpoint
+shared_failure_fixed {failureId,files}. This commits the fix separately and shares it through the normal safe sync.
+An environment correction needs root to apply it to affected copies/helpers and resolve it; run_checks force:true
+then verifies each affected copy. Never edit issued tests/config or protected environment requirements. If you cannot
+finish the assigned repair, use blocked with the concrete reason so root can reassign or defer; no owner is not a
+reason to declare a failed requirement met. <shared_failures> lists reports/assignments already known when prepared.
 
 By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A scenario you already
 verified stays PASS with its evidence when a later sync brought another item's fix (baseline, shared layout) or the

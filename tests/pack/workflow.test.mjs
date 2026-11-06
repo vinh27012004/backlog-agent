@@ -1003,3 +1003,206 @@ test('an owner that cannot fix the baseline releases the items waiting for it', 
   assert.equal(res.state, 'abandoned');
   assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === 'BUG-02').map(a => a.action), ['publish_item']);
 });
+
+// OMZJW0S0: prepare ghi PASS nhưng GAME mới phát hiện lỗi chung. Không sửa lịch sử baseline hay suy ra PASS.
+function sharedFixture() {
+  const f = baselineFixture();
+  f.rt.journal.data.preparation = { baseline: { status: 'PASS', failing: [], counts: null } };
+  f.oi.needsSuite = true;
+  f.ji.workerThread = '/root/bug02'; f.oi.workerThread = '/root/bug01';
+  for (const [key, root] of [['BUG-01', f.owner.matchRoot], ['BUG-02', f.wt.matchRoot]]) {
+    const dir = join(root, 'answers', key, 'evidence'); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'shared.log'), 'original assertion fails independently of this item\n');
+  }
+  const report = (key = 'BUG-02', failingTests = ['tests/status.test.js > paid in full']) => f.rt.proxyCall('worker_checkpoint', {
+    backlogItemKey: key, phase: 'shared_failure', failure: { summary: 'Issued assertion fails before this item', failingTests, evidence: ['evidence/shared.log'] }
+  });
+  const manage = args => f.rt.definitions().find(t => t.name === 'shared_failure').handler(args);
+  return { ...f, report, manage };
+}
+
+test('late shared reports coalesce across workers, persist across restart, and only root can assign', async () => {
+  const f = sharedFixture(), original = structuredClone(f.rt.journal.data.preparation);
+  const reports = await Promise.all([f.report(), f.report('BUG-01')]);
+  assert.equal(reports[0].failureId, reports[1].failureId); assert.equal(reports[1].duplicate, true);
+  assert.equal(f.rt.workflow.sharedFailures.records().length, 1);
+  assert.equal(f.rt.workflow.sharedFailures.records()[0].reports.length, 2);
+  assert.deepEqual(f.rt.journal.data.preparation, original);
+  const next = f.rt.workflow.actions().nextActions.find(a => a.action === 'assign_shared_failure');
+  assert.equal(next.arguments.failureId, reports[0].failureId);
+  assert.deepEqual(next.candidates.sort(), ['BUG-01', 'BUG-02']);
+  assert.throws(() => f.rt.proxyCall('shared_failure', { action: 'assign' }), /PROXY_DENIED/);
+  f.rt.journalObj = new Journal(f.rt.session.paths.teamWork);
+  assert.equal(f.rt.workflow.sharedFailures.records()[0].reports.length, 2);
+  const assigned = f.manage({ action: 'assign', failureId: reports[0].failureId, owner: 'BUG-01', kind: 'product', reason: 'Reproduced on the unfixed product in both logs' });
+  assert.equal(assigned.workerThread, '/root/bug01'); assert.match(assigned.followup, /shared_failure_fixed/);
+  assert.throws(() => f.manage({ action: 'assign', failureId: reports[0].failureId, owner: 'BUG-02', kind: 'product', reason: 'duplicate owner' }), /SHARED_FAILURE_BUSY/);
+  assert.equal(f.manage({ action: 'assign', failureId: reports[0].failureId, owner: 'BUG-01', kind: 'product', reason: 'same assignment' }).owner, 'BUG-01');
+});
+
+test('a late product owner lands only the assigned files and affected worktrees refresh before publishing', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Confirmed before item changes' });
+  f.result(1); f.ji.checkpoint = 'candidate';
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, fixResultFile: join(f.results, 'BUG-02-fixer-1.json') }), /BASELINE_PENDING/);
+  await assert.rejects(f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'shared_failure_fixed', failureId, files: ['src/status.js'] }), /NOT_BASELINE_OWNER/);
+  f.ownerFix(); writeFileSync(join(f.owner.matchRoot, 'src', 'own-item.js'), 'not part of shared repair\n');
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId, files: ['src/status.js'] });
+  assert.deepEqual(await f.rt.workflow.autoBaseline(), ['BUG-02']);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED);
+  assert.equal(existsSync(join(f.checkout, 'M1', 'src', 'own-item.js')), false);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'lib.js')), 'export const value=2;\n');
+  assert.equal(f.rt.journal.data.preparation.baseline.status, 'PASS');
+  const issue = f.rt.workflow.sharedFailures.get(failureId);
+  assert.equal(f.ji.sharedBaselineFixes[failureId], issue.baselineFix.revision);
+  const refresh = f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02');
+  assert.equal(refresh.action, 'refresh_candidate'); assert.match(refresh.followup, /BUG-01/);
+  f.result(2);
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02').action, 'publish_item');
+});
+
+test('independent late product failures keep separate frozen fixes and one sync includes both', async () => {
+  const f = sharedFixture(), first = (await f.report()).failureId;
+  const second = (await f.report('BUG-02', ['another.test.js > other assertion'])).failureId;
+  for (const failureId of [first, second]) f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Independent failure reproduced on issued source' });
+  f.ownerFix();
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId: first, files: ['src/status.js'] });
+  writeFileSync(join(f.owner.matchRoot, 'src', 'other.js'), 'another corrected behavior\n');
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId: second, files: ['src/other.js'] });
+  f.result(1); f.ji.checkpoint = 'candidate';
+  await f.rt.workflow.autoBaseline();
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'other.js')), 'another corrected behavior\n');
+  assert.equal(Object.keys(f.ji.sharedBaselineFixes).length, 2);
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+});
+
+test('late report evidence stays inside its item and unassigned reports do not prove a baseline', async () => {
+  const f = sharedFixture();
+  const bad = evidence => f.rt.proxyCall('worker_checkpoint', { backlogItemKey: 'BUG-02', phase: 'shared_failure', failure: { summary: 'suspected', failingTests: ['test A'], evidence } });
+  assert.throws(() => bad(['evidence/../../submit.json']), /PATH_NOT_ALLOWED/);
+  assert.throws(() => bad(['evidence/missing.log']), /missing/);
+  const { failureId } = await f.report();
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+  await assert.rejects(f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'shared_failure_fixed', failureId, files: [] }), /assigned product failure/);
+  f.manage({ action: 'defer', failureId, reason: 'Evidence shows a regression in this item; reporter must repair its own code' });
+  assert.equal(f.manage({ action: 'status' }).failures[0].state, 'deferred');
+  assert.equal(f.rt.journal.data.preparation.baseline.status, 'PASS');
+});
+
+test('an ended shared owner is reassigned explicitly, and deferral releases waits without claiming success', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Reproduced independently' });
+  f.oi.endedAt = new Date().toISOString();
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner');
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.action === 'assign_shared_failure').arguments.failureId, failureId);
+  assert.equal(f.manage({ action: 'assign', failureId, owner: 'BUG-02', kind: 'product', reason: 'Previous owner ended without the repair' }).owner, 'BUG-02');
+  assert.throws(() => f.manage({ action: 'defer', failureId }), /reason/);
+  f.manage({ action: 'defer', failureId, reason: 'Insufficient time to reproduce safely; acceptance requirement remains failed' });
+  assert.match(f.manage({ action: 'status' }).failures[0].resolution, /remains failed/);
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+});
+
+test('environment resolution requires a fresh full check on each affected copy and never marks it PASS', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'environment', reason: 'Standalone runtime reproduction, no product dependency' });
+  f.result(1); f.ji.checkpoint = 'candidate';
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, fixResultFile: join(f.results, 'BUG-02-fixer-1.json') }), /SHARED_ENVIRONMENT_PENDING/);
+  assert.throws(() => f.manage({ action: 'resolve', failureId, reason: 'runtime corrected' }), /evidence/);
+  f.manage({ action: 'resolve', failureId, reason: 'Correct runtime applied to every affected helper and working copy', evidence: ['evidence/shared.log'] });
+  const issue = f.rt.workflow.sharedFailures.get(failureId);
+  const action = f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02');
+  assert.equal(action.reason, 'shared_environment'); assert.match(action.followup, /force:true/);
+  f.ji.workerState = 'writing';
+  let res = await f.checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.equal(res.handedOff, false); assert.match(res.problems.join(), /environment correction/);
+  const snapshot = await f.rt.workflow.snapshot(f.key);
+  const file = join(f.rt.session.paths.teamWork, 'items', f.key, 'checks.json');
+  mkdirSync(dirname(file), { recursive: true });
+  const checks = { state: 'done', matchRoot: f.wt.matchRoot, snapshot, source: snapshot.source,
+    startedAt: new Date(Date.parse(issue.endedAt) + 1).toISOString(), endedAt: new Date(Date.parse(issue.endedAt) + 2).toISOString(),
+    results: ['typecheck', 'build', 'test'].map(name => ({ name, state: name === 'test' ? 'failed' : 'passed', command: 'actual command' })) };
+  writeFileSync(file, JSON.stringify({ ...checks, startedAt: new Date(Date.parse(issue.endedAt) - 60_000).toISOString() }));
+  res = await f.checkpoint({ backlogItemKey: f.key, phase: 'candidate' }); assert.equal(res.handedOff, false, 'a check started before resolution is stale');
+  writeFileSync(file, JSON.stringify({ ...checks, snapshot: { ...snapshot, environment: 'old environment' } }));
+  res = await f.checkpoint({ backlogItemKey: f.key, phase: 'candidate' }); assert.equal(res.handedOff, false, 'environment fingerprint must match');
+  writeFileSync(file, JSON.stringify(checks));
+  res = await f.checkpoint({ backlogItemKey: f.key, phase: 'candidate' }); assert.equal(res.handedOff, true);
+  assert.equal(f.ji.sharedEnvironmentSeen[failureId], issue.endedAt);
+  assert.equal(f.manage({ action: 'status' }).failures[0].state, 'resolved');
+  assert.equal(f.rt.journal.data.preparation.baseline.status, 'PASS');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).results[2].state, 'failed', 'resolution does not turn failed checks into PASS');
+});
+
+test('writing workers receive a late repair only at checkpoint and preserve their own edits', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Reproduced before source edits' });
+  f.ji.workerState = 'writing'; f.result(1); f.ownerFix();
+  await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId, files: ['src/status.js'] });
+  await f.rt.workflow.autoBaseline();
+  assert.notEqual(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED, 'no sync under a writing worker');
+  const res = await f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'candidate' });
+  assert.equal(res.handedOff, false); assert.match(res.problems.join(), /BUG-01.*run the full suite/);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), FIXED);
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'lib.js')), 'export const value=2;\n');
+  assert.equal(f.ji.workerState, 'writing');
+});
+
+test('a shared sync conflict preserves work, asks for reconciliation and does not retry every poll', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Confirmed original failure' });
+  const own = 'export const paid = (p, t) => p === t;\n';
+  writeFileSync(join(f.wt.matchRoot, 'src', 'status.js'), own); f.result(1); f.ji.checkpoint = 'candidate';
+  f.ownerFix(); await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId, files: ['src/status.js'] });
+  await f.rt.workflow.autoBaseline();
+  assert.equal(text(join(f.wt.matchRoot, 'src', 'status.js')), own);
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'conflict');
+  assert.deepEqual(await f.rt.workflow.autoBaseline(), []);
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02').reason, 'shared_sync_conflict');
+  // Người sửa hòa giải source rồi helper sync qua đúng đường ghi nhận revision.
+  writeFileSync(join(f.wt.matchRoot, 'src', 'status.js'), FIXED);
+  await f.rt.worktree({ action: 'sync', backlogItemKey: 'BUG-02' });
+  assert.equal(f.ji.sharedBaselineSyncErrors?.[failureId], undefined);
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+});
+
+test('an assigned owner must finish or explicitly defer, while last-chance publication remains available', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-02', kind: 'product', reason: 'Reporter owns the verified repair' });
+  f.result(1); f.ji.checkpoint = 'candidate';
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02').reason, 'shared_failure_owner');
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: 'BUG-02', fixResultFile: join(f.results, 'BUG-02-fixer-1.json') }), /SHARED_FAILURE_PENDING/);
+  f.rt.itemRows = () => f.rows(4);
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02').action, 'publish_item');
+  f.rt.itemRows = () => f.rows();
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() - 1000).toISOString() } };
+  assert.ok(f.rt.workflow.actions().nextActions.some(a => a.action === 'assign_shared_failure'), 'expired owner needs an explicit reassignment');
+  f.manage({ action: 'defer', failureId, reason: 'Item time box expired; test requirement remains unmet' });
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-02').action, 'publish_item');
+});
+
+test('landing a late fix never overwrites a newer main edit to the same file', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Original failing assertion reproduced' });
+  f.ownerFix(); await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'shared_failure_fixed', failureId, files: ['src/status.js'] });
+  const latest = 'export const paid = (p, t) => p >= t && t > 0;\n';
+  writeFileSync(join(f.checkout, 'M1', 'src', 'status.js'), latest);
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'another item changes the same file'], f.checkout);
+  const issue = f.rt.workflow.sharedFailures.get(failureId);
+  for (let i = 0; i < 3; i++) assert.equal(await f.rt.workflow.landBaseline(issue), null);
+  assert.equal(text(join(f.checkout, 'M1', 'src', 'status.js')), latest);
+  assert.equal(issue.baselineFix.state, 'failed'); assert.match(issue.baselineFix.error.message, /reconcile/);
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner', 'a failed landing still needs root to reassign or defer');
+  assert.ok(f.rt.workflow.actions().nextActions.some(a => a.action === 'assign_shared_failure' && a.arguments.failureId === failureId));
+});
+
+test('late shared repairs do not hold answer-only items or require a prepare-time suite flag', async () => {
+  const f = sharedFixture();
+  f.ji.needsSuite = false;
+  const { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Runtime reproduction is independent of the prepare-time suite flag' });
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner');
+  f.rt.answerOnlyItem = key => key === 'BUG-02';
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+  assert.throws(() => f.report(), /active code item/);
+});

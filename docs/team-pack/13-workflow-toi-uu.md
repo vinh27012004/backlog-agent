@@ -182,7 +182,7 @@ BUG-02 còn 2 test hỏng, mất 20/100. Chủ BUG-01 còn viết lại assertio
 test gốc vẫn hỏng ở mọi commit sau đó. Sửa:
 - Chủ (`youFix:true`) sửa baseline **trước** việc của nó, bằng sản phẩm (code, schema, migration, data), rồi gọi
   `worker_checkpoint baseline_fixed {files}` (đường dẫn trong matchRoot). Helper từ chối test BTC phát, cấu hình test,
-  `answers/`, `.env` và file không đổi; chép đóng băng vào `.team-work/baseline/<ID>/`, ghi
+  `answers/`, `.env` và file không đổi; chép đóng băng vào `.team-work/baseline/<ID>/prepare/`, ghi
   `preparation.baselineFix = {owner, state: pending, files}`. `files: []`: không sửa được (`abandoned`), item khác thôi chờ.
 - `autoBaseline()` trong nhịp poller: `landBaseline()` giữ khoá publish (`publishOwner = 'BASELINE'`), chép các file đó
   vào main và commit riêng `<chủ>: make the tests that fail in the issued code pass (baseline)` (sự kiện
@@ -200,6 +200,34 @@ test gốc vẫn hỏng ở mọi commit sau đó. Sửa:
 - Item bắt đầu sau khi bản sửa lên main nhận `baselineFailures.fixedOnMain`; không giao chủ mới khi bản sửa đang chờ.
 - `worker_checkpoint candidate` chặn (không còn chỉ cảnh báo) mọi thay đổi ở file test BTC phát (`issued tests
   changed`); file test mới của item vẫn được.
+
+## Lỗi chung chỉ phát hiện trong GAME (06/11, sau OMZJW0S0)
+
+TASK-08 phát hiện hai test encoding fail sau khi prepare đã ghi baseline PASS giả; không có chủ nên root cho nộp
+PARTIAL. Luồng mới tách báo cáo trong GAME khỏi baseline lịch sử, không suy ra một lỗi mới luôn là regression của item.
+
+- Fixer giữ log trong `answers/<ID>/evidence/`, báo `worker_checkpoint shared_failure {failure:{summary,
+  failingTests,evidence}}`. Các báo cáo có cùng tập test/command được gộp trong `journal.sharedFailures`; thiếu log,
+  đường dẫn ngoài item hay item chỉ trả lời bị từ chối. Báo cáo không tự xác nhận đây là lỗi có sẵn.
+- Root nhận `assign_shared_failure`, đọc bằng chứng tái hiện trên source chưa sửa hoặc chương trình runtime độc lập,
+  rồi gọi `shared_failure {action:"assign",failureId,owner,kind:"product"|"environment",reason}` và gửi `followup`
+  được trả về cho đúng worker đã spawn. Mặc định áp dụng các item code còn hoạt động có kiểm suite; `affectedItems`
+  có thể giới hạn phạm vi. Chỉ một chủ cho mỗi lỗi; nhiều lỗi độc lập có thể tồn tại đồng thời. Chủ hết thời gian hoặc
+  kết thúc mà chưa sửa thì root phải giao lại hoặc `defer` kèm lý do; không tự coi yêu cầu đang fail là đạt.
+- `product`: chủ sửa các file sản phẩm chỉ chứa bản sửa chung, không trộn phần riêng còn dở. Sau kiểm tra, gọi
+  `worker_checkpoint shared_failure_fixed {failureId,files}`. Helper đóng băng riêng từng lỗi tại
+  `.team-work/baseline/<owner>/<failureId>/`, commit riêng qua `autoBaseline`, kiểm tra main chưa đổi cùng file
+  để không ghi đè bản sửa mới. Các worktree đang ghi tiếp tục việc riêng; chỉ sync tại checkpoint hoặc khi đã yield.
+  Sau sync phải kiểm lại suite. Conflict giữ nguyên worktree, trả `refresh_candidate` với lý do `shared_sync_conflict`,
+  không thử sync lặp mỗi nhịp poll. Các revision đã nhận lưu theo từng lỗi trong `sharedBaselineFixes`.
+- `environment`: chủ tái hiện và xác minh cách sửa; root áp dụng cho từng copy/helper (restart nếu cần), rồi
+  `shared_failure {action:"resolve",failureId,reason,evidence}` với log của chủ. `refresh_candidate` có lý do
+  `shared_environment` yêu cầu `run_checks {force:true}` trên từng copy bị ảnh hưởng; kiểm phải bắt đầu sau resolve
+  và khớp source + environment snapshot hiện tại. Resolve không đánh dấu test PASS.
+- Chỉ root được assign/resolve/defer; worker dùng proxy để report và bàn giao file đúng lỗi mình được giao. Trong
+  lúc sửa chỉ giữ publish của item liên quan; item chỉ trả lời tiếp tục. Chủ cũng không publish rồi bỏ quên sửa chung.
+  Luật cơ hội cuối vẫn áp dụng, nộp kết quả quan sát được và giữ PARTIAL/BLOCKED khi điều kiện đề chưa đạt.
+- Luồng baseline PREPARE dùng cơ chế cũ; thư mục đóng băng riêng của nó là `.team-work/baseline/<owner>/prepare/`.
 
 ## Spawn fixer không chờ setup, TASK chỉ trả lời không cài gì (04/11, sau EIOR38SI)
 

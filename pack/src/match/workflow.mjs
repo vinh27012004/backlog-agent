@@ -9,6 +9,7 @@ import { contentTree, git, revParse } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
+import { SharedFailures } from './shared-failures.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
@@ -130,7 +131,7 @@ export function environmentText(setup, mainAppRoot = null) {
 }
 
 export class Workflow {
-  constructor(runtime) { this.rt = runtime; this.publishOwner = null; }
+  constructor(runtime) { this.rt = runtime; this.publishOwner = null; this.sharedFailures = new SharedFailures(this); }
   item(key) {
     this.rt.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -199,7 +200,7 @@ export class Workflow {
         const out = { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, reportOnly,
           worktree, setup: setup ? { jobId: setup.jobId, state: setup.state, skipped: setup.result?.skipped ?? null } : null, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), companyFacts, resultsDir: join(r.session.paths.teamWork, 'results'),
-          knowledgeHints: ji.signals?.kb ?? null,
+          knowledgeHints: ji.signals?.kb ?? null, sharedFailures: this.sharedFailures.records(),
           fixResultFile: this.nextResultFile(key),
           worker: 'team_fixer' };
         // Brief do helper viết (BTZNI69E: root tự soạn brief, đọc skill của worker, tra Company Tools trước khi spawn;
@@ -303,6 +304,7 @@ export class Workflow {
       ...block('requirements', s.requirements ?? null),
       ...block('required_evidence', s.requiredEvidence ?? null),
       ...block('baseline_failures', s.baselineFailures ?? null),
+      ...block('shared_failures', s.sharedFailures?.length ? s.sharedFailures : null),
       ...block('recent_changes', s.remote?.recentChanges ?? null),
       ...block('company_facts', [`dir: ${s.companyFactsDir}`, ...(s.companyFacts ?? []).map(f => `${f.tool}${f.note ? ` (${f.note})` : ''}: ${f.savedTo}`),
         'More lookups: company_lookup {name, arguments, backlogItemKey} (kb_search, search_logs, get_test_data); results are saved in this dir.'].join('\n')),
@@ -432,7 +434,7 @@ export class Workflow {
     return { file, warnings: notes };
   }
   async candidateCheckpoint(args) {
-    const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
+    const key = args.backlogItemKey, owner = this.baselineOwnerFor(key);
     const caught = await this.baselineCatchUp(key);
     const composed = args.result !== undefined ? await this.composeResult(key, args.result) : null;
     if (composed?.problems) {
@@ -440,6 +442,14 @@ export class Workflow {
         hint: 'Not handed off: correct the result argument and call worker_checkpoint candidate again (nothing was written).' };
     }
     const { problems, warnings } = await this.handoffCheck(key);
+    const environment = await this.sharedFailures.environmentRefresh(key);
+    if (environment) problems.unshift(`${environment.id}: environment correction was reported; apply it in this copy, run_checks {force:true}, then candidate with the actual result. Earlier checks do not verify this correction`);
+    else {
+      const ji = this.item(key);
+      for (const issue of this.sharedFailures.records().filter(i => i.state === 'resolved' && i.kind === 'environment' && this.sharedFailures.affects(i, key))) {
+        (ji.sharedEnvironmentSeen ??= {})[issue.id] = issue.endedAt;
+      }
+    }
     if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
     if (caught?.synced) {
       problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
@@ -518,7 +528,8 @@ export class Workflow {
     const r = this.rt, ji = this.item(key);
     if (!r.liveWorktree(key)) return yielded;
     let synced;
-    const hadBaseline = ji.baselineFixIn;
+    const hadBaseline = JSON.stringify([ji.baselineFixIn, ji.sharedBaselineFixes]);
+    const baselineOwner = this.baselineOwnerFor(key);
     try {
       stopApp(r.teamWorkspace, key);
       synced = await r.worktree({ action: 'sync', backlogItemKey: key });
@@ -527,8 +538,8 @@ export class Workflow {
         hint: 'Helper could not sync: stay yielded and end your turn with this error as your reply; root gets sync_before_evidence from the helper and sends a followup to resume.' };
     }
     // Sync vừa mang bản sửa baseline về: kết quả cả bộ test chạy trước đó không còn đúng với commit sẽ nộp.
-    const baseline = !hadBaseline && ji.baselineFixIn && this.baselineApplies(key)
-      ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
+    const baseline = hadBaseline !== JSON.stringify([ji.baselineFixIn, ji.sharedBaselineFixes]) && this.baselineApplies(key)
+      ? ` This sync brought ${baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
@@ -560,22 +571,38 @@ export class Workflow {
   // 14:20, trước bản sửa của chủ baseline (BUG-01, 14:27): commit của BUG-02 còn 2 test fail sẵn, mất 20 điểm. Chủ sửa
   // baseline trước việc của nó rồi báo baseline_fixed; helper đưa đúng các file đó lên main thành một commit riêng.
   // Item khác cần cả bộ test lấy commit đó qua sync và chưa được publish khi worktree chưa có nó.
-  baselineFix() { return this.rt.journal?.data.preparation?.baselineFix ?? null; }
-  baselineApplies(key) {
-    const r = this.rt, prep = r.journal?.data.preparation ?? {}, ji = r.journal?.data.items[key];
-    return Boolean(prep.baseline?.failing?.length && prep.baselineOwner && prep.baselineOwner !== key && ji?.needsSuite
-      && typeOf(key) !== 'PI' && !r.answerOnlyItem(key));
+  baselineContexts() { return [this.rt.journal?.data.preparation ?? {}, ...this.sharedFailures.productContexts()]; }
+  baselineFix(context = this.rt.journal?.data.preparation) { return context?.baselineFix ?? null; }
+  baselineApplies(key, context = null) {
+    if (!context) return this.baselineContexts().some(c => this.baselineApplies(key, c));
+    const r = this.rt, prep = context, ji = r.journal?.data.items[key];
+    return Boolean(prep.baseline?.failing?.length && prep.baselineOwner && prep.baselineOwner !== key && ji
+      && (prep.id ? this.sharedFailures.affects(prep, key) : ji.needsSuite && typeOf(key) !== 'PI' && !r.answerOnlyItem(key)));
+  }
+  baselineOwnerFor(key) {
+    const contexts = this.baselineContexts();
+    return (contexts.find(c => this.baselineWait(key, null, c) === 'sync')
+      ?? contexts.find(c => this.baselineWait(key, null, c)))?.baselineOwner ?? this.rt.journal.data.preparation?.baselineOwner;
   }
   // Vì sao publish của item phải chờ: 'owner' (chủ còn làm, chưa đưa bản sửa lên main), 'sync' (đã lên main, worktree
   // của item chưa có). null: không chờ (không áp dụng, đã có, chủ bỏ hay xong mà không báo, sync hỏng, phút cuối).
-  baselineWait(key, row = null) {
-    if (!this.baselineApplies(key) || (row && lastCallOf(row))) return null;
-    const r = this.rt, ji = r.journal.data.items[key], fix = this.baselineFix();
-    if (ji.baselineFixIn || ji.baselineSyncError || ji.baselineSynced) return null;
+  baselineWait(key, row = null, context = null) {
+    if (!context) {
+      const waits = this.baselineContexts().map(c => this.baselineWait(key, row, c));
+      return waits.includes('sync') ? 'sync' : waits.includes('conflict') ? 'conflict' : waits.includes('owner') ? 'owner' : null;
+    }
+    if (!this.baselineApplies(key, context) || (row && lastCallOf(row))) return null;
+    const r = this.rt, ji = r.journal.data.items[key], fix = this.baselineFix(context);
+    const seen = context.id ? ji.sharedBaselineFixes?.[context.id] : ji.baselineFixIn;
+    if (fix?.revision && seen === fix.revision) return null;
+    if (context.id && ji.sharedBaselineSyncErrors?.[context.id]) return 'conflict';
+    if (!context.id && (ji.baselineSyncError || ji.baselineSynced)) return null;
     if (fix?.state === 'landed') return 'sync';
     if (fix?.state === 'pending') return 'owner';
+    if (context.id && fix?.state === 'failed') return 'owner';
     if (fix) return null;
-    const ownerKey = r.journal.data.preparation.baselineOwner, owner = r.journal.data.items[ownerKey] ?? {};
+    if (context.id) return 'owner'; // Chủ nghỉ/bàn giao: root phải giao lại hoặc defer có lý do.
+    const ownerKey = context.baselineOwner, owner = r.journal.data.items[ownerKey] ?? {};
     const returnBy = Date.parse(owner.prepared?.timeBox?.returnBy ?? '');
     const active = owner.startedAt && !owner.endedAt && !owner.receipt && !owner.candidate && !this.latestResult(ownerKey) && !(returnBy <= Date.now());
     return active ? 'owner' : null;
@@ -587,13 +614,19 @@ export class Workflow {
   }
   // Ghi worktree của item đã chứa commit baseline (gọi sau create/sync).
   async noteBaselineFix(key) {
-    const r = this.rt, fix = this.baselineFix(), ji = r.journal?.data.items[key];
-    if (fix?.state !== 'landed' || !ji?.worktreeBase || ji.baselineFixIn === fix.revision) return false;
-    const res = await git(['rev-list', '--count', `${ji.worktreeBase}..${fix.revision}`], { cwd: r.session.paths.checkoutRoot, allowFail: true });
-    if (res.code !== 0 || res.out !== '0') return false;
-    ji.baselineFixIn = fix.revision;
-    r.journal.save();
-    return true;
+    const r = this.rt, ji = r.journal?.data.items[key];
+    let changed = false;
+    for (const context of this.baselineContexts()) {
+      const fix = this.baselineFix(context), seen = context.id ? ji?.sharedBaselineFixes?.[context.id] : ji?.baselineFixIn;
+      if (fix?.state !== 'landed' || !ji?.worktreeBase || seen === fix.revision) continue;
+      const res = await git(['rev-list', '--count', `${ji.worktreeBase}..${fix.revision}`], { cwd: r.session.paths.checkoutRoot, allowFail: true });
+      if (res.code !== 0 || res.out !== '0') continue;
+      if (context.id) { (ji.sharedBaselineFixes ??= {})[context.id] = fix.revision; delete ji.sharedBaselineSyncErrors?.[context.id]; }
+      else ji.baselineFixIn = fix.revision;
+      changed = true;
+    }
+    if (changed) r.journal.save();
+    return changed;
   }
   // File của bản BTC phát (đường dẫn từ gốc repo); không biết bản phát thì null.
   async issuedFiles() {
@@ -607,14 +640,16 @@ export class Workflow {
   }
   // baseline_fixed {files}: chủ baseline báo các file (đường dẫn trong matchRoot) làm test fail sẵn pass. Helper chép
   // lại ngay (bản đóng băng) và poller commit chúng lên main. files rỗng: chủ không sửa được, item khác thôi chờ.
-  async baselineCheckpoint({ backlogItemKey: key, files }) {
-    const r = this.rt, ji = this.item(key), prep = r.journal.data.preparation ?? {};
+  async baselineCheckpoint({ backlogItemKey: key, files, failureId }) {
+    const r = this.rt, ji = this.item(key), prep = failureId ? this.sharedFailures.get(failureId) : r.journal.data.preparation ?? {};
+    if (failureId && (prep.kind !== 'product' || prep.state !== 'assigned')) fail('INVALID_ARGUMENT', 'shared_failure_fixed needs an assigned product failure');
     if (!prep.baseline?.failing?.length) fail('NO_BASELINE_FAILURES', 'the issued tests had no failures to fix');
     if (prep.baselineOwner !== key) fail('NOT_BASELINE_OWNER', `${prep.baselineOwner ?? 'nobody'} owns the baseline failures`);
     if (['pending', 'landed'].includes(prep.baselineFix?.state)) fail('BASELINE_ALREADY_REPORTED', `the baseline fix is already ${prep.baselineFix.state}`);
     if (!r.liveWorktree(key) || !ji.worktreeBase) fail('WORKTREE_MISSING', `${key} has no worktree`);
     const folder = r.session.descriptor.matchId, wt = r.wtPaths(key), at = new Date().toISOString();
     const list = [...new Set((Array.isArray(files) ? files : []).map(f => String(f).trim().replace(/\\/g, '/').replace(/^\.\//, '')).filter(Boolean))];
+    if (failureId && !list.length) fail('INVALID_ARGUMENT', 'a shared repair needs product files; ask root to defer or reassign an unresolved failure with a concrete reason');
     if (!list.length) {
       prep.baselineFix = { owner: key, state: 'abandoned', at };
       r.journal.save();
@@ -629,12 +664,16 @@ export class Workflow {
       const full = `${folder}/${p}`;
       if (isAbsolute(p) || /^[a-z]:/i.test(p) || p.split('/').includes('..')) bad.push(`${p}: give a path relative to ${wt.matchRoot}`);
       else if (/^answers\//.test(p) || /(^|\/)\.env(\.|$)/.test(p)) bad.push(`${p}: not part of a product fix`);
+      else if (/^(env-require\/|exam-info\.json$)/i.test(p)) bad.push(`${p}: protected exam/environment requirements never change`);
       else if (TEST_CONFIG.test(p)) bad.push(`${p}: test configuration never changes`);
       else if (TEST_FILE.test(p) && (!issued || issued.has(full))) bad.push(`${p}: graders restore issued tests, so the fix belongs in the product (code, migration, data)`);
       else if (!changed.has(full)) bad.push(`${p}: not changed in your worktree`);
     }
     if (bad.length) fail('INVALID_ARGUMENT', bad.join('; '));
-    const dir = join(r.session.paths.teamWork, 'baseline', key);
+    const baselineRoot = resolve(r.session.paths.teamWork, 'baseline');
+    const dir = resolve(baselineRoot, key, failureId ?? 'prepare');
+    const within = relative(baselineRoot, dir);
+    if (!within || within.startsWith('..') || isAbsolute(within)) fail('PATH_NOT_ALLOWED', 'frozen fix must stay in the baseline directory');
     rmSync(dir, { recursive: true, force: true });
     const entries = list.map(p => {
       const deleted = changed.get(`${folder}/${p}`) === 'D';
@@ -642,15 +681,15 @@ export class Workflow {
       if (frozen) { mkdirSync(dirname(frozen), { recursive: true }); copyFileSync(join(wt.matchRoot, p), frozen); }
       return { path: p, deleted, frozen };
     });
-    prep.baselineFix = { owner: key, state: 'pending', files: entries, at, attempts: 0 };
+    prep.baselineFix = { owner: key, state: 'pending', files: entries, baseRevision: ji.worktreeBase, at, attempts: 0 };
     r.journal.save();
-    r.events.push('BASELINE_FIX_READY', { key, files: list });
-    return { key, phase: 'baseline_fixed', accepted: true, state: 'pending', files: list, writesAllowed: ji.workerState === 'writing',
+    r.events.push('BASELINE_FIX_READY', { key, files: list, ...(failureId ? { failureId } : {}) });
+    return { key, phase: failureId ? 'shared_failure_fixed' : 'baseline_fixed', ...(failureId ? { failureId } : {}), accepted: true, state: 'pending', files: list, writesAllowed: ji.workerState === 'writing',
       hint: 'The helper commits exactly these files to main within seconds, as a separate commit; other items pick it up when they sync. Keep these files as they are (your own commit carries the same content) and continue with your own item.' };
   }
   // Poller: commit bản sửa baseline đã đóng băng lên main (giữ khoá publish trong lúc đó, như một integrate).
-  async landBaseline() {
-    const r = this.rt, fix = this.baselineFix();
+  async landBaseline(context = this.rt.journal.data.preparation) {
+    const r = this.rt, fix = this.baselineFix(context);
     if (fix?.state !== 'pending' || this.publishOwner || Object.values(r.journal.data.items).some(x => x.integratePlan)) return null;
     this.publishOwner = 'BASELINE';
     const { checkoutRoot, matchRoot } = r.session.paths, folder = r.session.descriptor.matchId;
@@ -658,6 +697,13 @@ export class Workflow {
     let wrote = false;
     try {
       if ((await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out) fail('WORKTREE_CONFLICT', 'main has uncommitted changes');
+      if (fix.baseRevision) {
+        const moved = new Set((await git(['diff', '--name-only', '--no-renames', fix.baseRevision, 'HEAD', '--', ...paths], { cwd: checkoutRoot })).out.split(/\r?\n/).filter(Boolean));
+        const clashes = fix.files.filter(f => moved.has(`${folder}/${f.path}`) && (f.deleted
+          ? existsSync(join(matchRoot, f.path))
+          : !existsSync(join(matchRoot, f.path)) || digest(readFileSync(join(matchRoot, f.path))) !== digest(readFileSync(f.frozen))));
+        if (clashes.length) fail('WORKTREE_CONFLICT', `main changed shared repair files ${clashes.map(f => f.path).join(', ')} since the owner base; reconcile and verify the repair before handing it off again`);
+      }
       wrote = true;
       for (const f of fix.files) {
         const dst = join(matchRoot, f.path);
@@ -695,21 +741,24 @@ export class Workflow {
   // Poller, sau khi bản sửa lên main: sync worktree của item đã bàn giao mà còn thiếu nó (worker đã nghỉ). Candidate
   // cũ thành stale; actions() đưa refresh_candidate để root nhờ worker chạy lại cả bộ test.
   async syncHeldItems() {
-    const r = this.rt, fix = this.baselineFix();
-    if (fix?.state !== 'landed') return [];
+    const r = this.rt;
+    if (!this.baselineContexts().some(c => this.baselineFix(c)?.state === 'landed')) return [];
     const out = [];
     for (const [key, ji] of Object.entries(r.journal.data.items)) {
       if (this.baselineWait(key) !== 'sync' || ji.endedAt || ji.receipt || ji.workerState === 'writing' || ji.checkpoint === 'ready_for_evidence') continue;
       if (this.publishOwner || ji.integratePlan || r.jobs.jobs.get(ji.publishJobId)?.state === 'running' || !r.liveWorktree(key)) continue;
       const resultFile = this.latestResult(key);
       if (!resultFile) continue;
+      const context = this.baselineContexts().find(c => this.baselineWait(key, null, c) === 'sync');
+      const fix = this.baselineFix(context);
       try {
         stopApp(r.teamWorkspace, key);
         await r.worktree({ action: 'sync', backlogItemKey: key });
-        ji.baselineSynced = { revision: fix.revision, resultFile, at: new Date().toISOString() };
+        ji.baselineSynced = { revision: fix.revision, owner: fix.owner, resultFile, at: new Date().toISOString() };
         r.events.push('BASELINE_SYNCED', { key });
       } catch (e) {
         ji.baselineSyncError = { code: e.code ?? 'INTERNAL_ERROR', message: oneLine(e.message ?? e, 300) };
+        if (context.id) (ji.sharedBaselineSyncErrors ??= {})[context.id] = ji.baselineSyncError;
         r.events.push('BASELINE_SYNC_FAILED', { key, code: ji.baselineSyncError.code });
       }
       r.journal.save();
@@ -721,8 +770,8 @@ export class Workflow {
   autoBaseline() {
     const r = this.rt;
     if (this.baselineRun || r.session.phase !== 'GAME' || !r.session.paths?.teamWork || !r.journal) return null;
-    if (!['pending', 'landed'].includes(this.baselineFix()?.state)) return null;
-    this.baselineRun = (async () => { await this.landBaseline(); return this.syncHeldItems(); })()
+    if (!this.baselineContexts().some(c => ['pending', 'landed'].includes(this.baselineFix(c)?.state))) return null;
+    this.baselineRun = (async () => { for (const context of this.baselineContexts()) await this.landBaseline(context); return this.syncHeldItems(); })()
       .catch(e => { r.events.push('POLL_ERROR', { code: e.code ?? 'ERROR', message: oneLine(e.message ?? e, 160) }); return []; })
       .finally(() => { this.baselineRun = null; });
     return this.baselineRun;
@@ -732,8 +781,9 @@ export class Workflow {
   async baselineCatchUp(key) {
     const r = this.rt, ji = this.item(key);
     if (!this.baselineApplies(key) || !r.liveWorktree(key) || ji.workerState !== 'writing') return null;
-    for (let i = 0; i < 30 && this.baselineWait(key) === 'owner' && this.baselineFix()?.state === 'pending'; i++) await sleep(500);
+    for (let i = 0; i < 30 && this.baselineWait(key) === 'owner' && this.baselineContexts().some(c => this.baselineWait(key, null, c) && this.baselineFix(c)?.state === 'pending'); i++) await sleep(500);
     if (this.baselineWait(key) !== 'sync') return null;
+    const shared = this.baselineContexts().filter(c => c.id && this.baselineWait(key, null, c) === 'sync');
     ji.workerState = 'yielded';
     try {
       stopApp(r.teamWorkspace, key);
@@ -741,6 +791,7 @@ export class Workflow {
       return { synced: true, setupJobId: s.setupJobId ?? null };
     } catch (e) {
       ji.baselineSyncError = { code: e.code ?? 'INTERNAL_ERROR', message: oneLine(e.message ?? e, 300) };
+      for (const context of shared) (ji.sharedBaselineSyncErrors ??= {})[context.id] = ji.baselineSyncError;
       return { error: `${ji.baselineSyncError.code}: ${ji.baselineSyncError.message}` };
     } finally {
       ji.workerState = 'writing';
@@ -818,8 +869,12 @@ export class Workflow {
     let job = r.jobs.jobs.get(ji.publishJobId);
     if (job?.state === 'running') return r.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
     if (this.publishOwner) fail('PUBLISH_BUSY', `publish ${this.publishOwner} first`);
+    if (!lastCallOf(r.itemRows().find(x => x.key === key)) && this.sharedFailures.ownerPending(key)) fail('SHARED_FAILURE_PENDING', 'finish your assigned shared repair, or ask root to reassign/defer it with a concrete reason before publishing');
     if (this.baselineWait(key, r.itemRows().find(x => x.key === key))) {
-      fail('BASELINE_PENDING', `${r.journal.data.preparation.baselineOwner} is fixing the tests that already fail in the issued code, and graders run this item's suite on its own commit: the helper lands that fix, syncs this worktree and then offers refresh_candidate (in the last minutes it publishes as is)`);
+      fail('BASELINE_PENDING', `${this.baselineOwnerFor(key)} is fixing shared/baseline failures: the helper lands that fix, syncs this worktree and then offers refresh_candidate (in the last minutes it publishes as is)`);
+    }
+    if (!lastCallOf(r.itemRows().find(x => x.key === key)) && (this.sharedFailures.environmentWait(key) || await this.sharedFailures.environmentRefresh(key))) {
+      fail('SHARED_ENVIRONMENT_PENDING', 'the assigned environment correction or its checks are still pending; resolve the correction and refresh the affected worktree, or explicitly defer with the observed failure');
     }
     // Root đưa fix-result vừa bàn giao, helper ghi candidate rồi nộp trong cùng lời gọi.
     let warnings = [];
@@ -887,7 +942,7 @@ export class Workflow {
     if (r.session.phase !== 'GAME' || !r.gm.view || !r.session.paths?.teamWork) return { nextActions: [], waitMs: 55_000 };
     const rows = r.itemRows(), items = r.journal?.data.items ?? {};
     const order = r.matchState().suggestedOrder;
-    const nextActions = [];
+    const nextActions = [...this.sharedFailures.actions()];
     const add = (key, action, args = {}, extra = {}) => nextActions.push({ key, action, arguments: { backlogItemKey: key, ...args }, ...extra });
     const fresh = r.newResults();
     const freshKeys = new Set(fresh.map(u => u.key));
@@ -927,10 +982,31 @@ export class Workflow {
         held.add(key);
         if (ji.workerState === 'writing') continue;
         if (lastCallOf(row)) add(key, 'publish_item', { fixResultFile: ji.baselineSynced.resultFile }, { lastCall: true, minutesLeft: row.minutesLeft });
-        else add(key, 'refresh_candidate', {}, { reason: 'baseline_fix', workerThread: ji.workerThread ?? null, followup: baselineFollowup(r.journal.data.preparation?.baselineOwner ?? 'the baseline owner') });
+        else add(key, 'refresh_candidate', {}, { reason: 'baseline_fix', workerThread: ji.workerThread ?? null, followup: baselineFollowup(ji.baselineSynced.owner ?? this.baselineOwnerFor(key) ?? 'the baseline owner') });
         continue;
       }
-      if (this.baselineWait(key, row)) { held.add(key); continue; }
+      const owned = this.sharedFailures.ownerPending(key);
+      if (owned && !lastCallOf(row)) {
+        held.add(key);
+        if (ji.workerState !== 'writing') add(key, 'refresh_candidate', {}, { reason: 'shared_failure_owner', failureId: owned.id,
+          workerThread: ji.workerThread ?? null, followup: this.sharedFailures.assignment(owned).followup });
+        continue;
+      }
+      if (this.baselineWait(key, row)) {
+        held.add(key);
+        if (this.baselineWait(key, row) === 'conflict' && ji.workerState !== 'writing') add(key, 'refresh_candidate', {}, {
+          reason: 'shared_sync_conflict', workerThread: ji.workerThread ?? null,
+          followup: `Call worker_checkpoint resume and inspect the shared fix sync conflict: ${ji.baselineSyncError?.message ?? 'worktree conflict'}. Keep your own changes, reconcile the affected product files against the shared fix, then ready_for_evidence for a safe sync and rerun checks. Do not claim the shared fix is already present.` });
+        continue;
+      }
+      const environment = this.sharedFailures.records().find(i => i.kind === 'environment' && i.state === 'resolved'
+        && this.sharedFailures.affects(i, key) && ji.sharedEnvironmentSeen?.[i.id] !== i.endedAt);
+      if (!lastCallOf(row) && (this.sharedFailures.environmentWait(key) || environment)) {
+        held.add(key);
+        if (environment && ji.workerState !== 'writing') add(key, 'refresh_candidate', {}, { reason: 'shared_environment', failureId: environment.id,
+          workerThread: ji.workerThread ?? null, followup: `Call worker_checkpoint resume, apply ${environment.id}'s environment correction in this copy: ${environment.resolution}. Run run_checks {force:true}, record actual results, then candidate again. Existing results do not verify the corrected environment.` });
+        continue;
+      }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
       if (c && !freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id });
     }
