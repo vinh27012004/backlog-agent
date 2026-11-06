@@ -2,9 +2,10 @@
 // Repo của BTC có thể kèm env-require/ (README, doctor.ps1...): khi có thì doctor.ps1 là thước đo READY.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { run, runPwsh } from '../core/jobs.mjs';
+import { run } from '../core/jobs.mjs';
 import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from '../core/util.mjs';
+import { packageCache, preparedStep } from './setup-cache.mjs';
 
 export { failingTests, parseTestCounts } from './testreport.mjs';
 
@@ -26,6 +27,29 @@ export function findAppRoot(matchRoot) {
 }
 
 const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+const quote = value => `'${String(value).replaceAll("'", "''")}'`;
+
+// Yarn của repo không cần Corepack/global shim. Giữ tên manager riêng để chọn cờ reporter của npm.
+function yarnCommand(root, packageManager) {
+  let yarnPath;
+  try {
+    const scalar = readFileSync(join(root, '.yarnrc.yml'), 'utf8').match(/^yarnPath:[ \t]*(.*)$/m)?.[1]?.trim();
+    if (scalar?.startsWith('"')) yarnPath = JSON.parse(scalar.match(/^"(?:[^"\\]|\\.)*"/)?.[0] ?? 'null');
+    else if (scalar?.startsWith("'")) yarnPath = scalar.match(/^'((?:[^']|'')*)'/)?.[1]?.replaceAll("''", "'");
+    else if (scalar && !/^(?:false|null|~)(?:\s|$)/.test(scalar)) yarnPath = scalar.replace(/\s+#.*$/, '').trim();
+  } catch { /* Không có yarnrc hoặc scalar không hợp lệ: tìm release được đóng gói. */ }
+  if (!yarnPath) {
+    try {
+      const releases = readdirSync(join(root, '.yarn', 'releases')).filter(f => /^yarn-.*\.(?:cjs|js)$/.test(f));
+      const pinned = packageManager?.match(/^yarn@([^+]+)/)?.[1];
+      const file = releases.find(f => f === `yarn-${pinned}.cjs` || f === `yarn-${pinned}.js`)
+        ?? releases.sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
+      if (file) yarnPath = `.yarn/releases/${file}`;
+    } catch { /* Repo dùng Yarn trên PATH. */ }
+  }
+  const major = Number(yarnPath?.match(/yarn-(\d+)\./)?.[1] ?? packageManager?.match(/^yarn@(\d+)/)?.[1] ?? 1);
+  return { command: yarnPath ? `node ${quote(yarnPath.replaceAll('\\', '/'))}` : 'yarn', major };
+}
 
 export function detectProfile(matchRoot) {
   const root = findAppRoot(matchRoot);
@@ -34,27 +58,33 @@ export function detectProfile(matchRoot) {
   const pkg = readJson(join(root, 'package.json'));
   if (pkg) {
     const pm = pkg.packageManager?.split('@')[0] ??
-      (existsSync(join(root, 'pnpm-lock.yaml')) ? 'pnpm' : existsSync(join(root, 'yarn.lock')) ? 'yarn' : 'npm');
+      (existsSync(join(root, 'pnpm-lock.yaml')) ? 'pnpm'
+        : ['yarn.lock', '.yarnrc.yml', '.yarn/releases'].some(p => existsSync(join(root, p))) ? 'yarn' : 'npm');
     const scripts = pkg.scripts ?? {};
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-    const install = pm === 'pnpm' ? 'pnpm install --frozen-lockfile' : pm === 'yarn' ? 'yarn install --frozen-lockfile' : 'npm ci';
+    const yarn = pm === 'yarn' ? yarnCommand(root, pkg.packageManager) : null;
+    const manager = yarn?.command ?? pm;
+    const install = pm === 'pnpm' ? `${manager} install --frozen-lockfile`
+      : pm === 'yarn' ? `${manager} install ${yarn.major >= 2 ? '--immutable' : '--frozen-lockfile'}` : 'npm ci';
+    const prepareSource = join(matchRoot, 'env-require', 'prepare-source.ps1');
     const runner = deps.vitest ? 'vitest' : deps.jest ? 'jest' : null;
     return {
-      root, relRoot: rel, stack: 'node', packageManager: pm, testRunner: runner, testScript: scripts.test ?? null,
+      root, relRoot: rel, stack: 'node', packageManager: pm, packageManagerCommand: manager, testRunner: runner, testScript: scripts.test ?? null,
       prisma: Boolean(deps.prisma || deps['@prisma/client']),
       // Gate chạy build song song với test, trừ khi script test tự build (pretest, "build && jest") hay đọc thứ build ra.
       parallelBuild: Boolean(scripts.build) && !scripts.pretest && !/\bbuild\b|\bdist\b/.test(scripts.test ?? ''),
       commands: {
         install,
-        build: scripts.build ? `${pm} run build` : null,
-        typecheck: scripts.typecheck ? `${pm} run typecheck` : null,
-        test_all: scripts.test ? `${pm} test` : null,
-        test_one: runner === 'vitest' ? `${pm} exec vitest run {target}` : runner === 'jest' ? `${pm} exec jest {target}` : null,
-        run_app: scripts.start ? `${pm} run start` : scripts.dev ? `${pm} run dev` : null,
+        prepare_source: existsSync(prepareSource) ? `& ${quote(`./${relative(root, prepareSource).replaceAll('\\', '/')}`)}` : null,
+        build: scripts.build ? `${manager} run build` : null,
+        typecheck: scripts.typecheck ? `${manager} run typecheck` : null,
+        test_all: scripts.test ? `${manager} test` : null,
+        test_one: runner === 'vitest' ? `${manager} exec vitest run {target}` : runner === 'jest' ? `${manager} exec jest {target}` : null,
+        run_app: scripts.start ? `${manager} run start` : scripts.dev ? `${manager} run dev` : null,
         // postinstall của @prisma/client có thể chạy trước khi CLI được link (pnpm), nên generate riêng.
-        generate: deps.prisma ? `${pm} exec prisma generate` : null,
-        migrate: deps.prisma ? `${pm} exec prisma migrate deploy` : null,
-        seed: scripts['db:seed'] ? `${pm} run db:seed` : null
+        generate: deps.prisma ? `${manager} exec prisma generate` : null,
+        migrate: deps.prisma ? `${manager} exec prisma migrate deploy` : null,
+        seed: scripts['db:seed'] ? `${manager} run db:seed` : null
       },
       forbiddenSkip: ['.skip(', '.only(', 'xit(', 'xdescribe(', 'test.todo(']
     };
@@ -158,23 +188,19 @@ export function readMachineConfig(localDir) {
   return readJson(join(localDir, 'machine.json')) ?? {};
 }
 
-const step = async (job, name, command, opts) => {
-  job.progress.push(`${name}: running`);
-  const res = await runPwsh(command, opts);
-  job.progress.push(`${name}: ${res.code === 0 ? 'ok' : `exit ${res.code}`} (${Math.round(res.ms / 1000)}s)`);
-  return res;
-};
-
 const lastLines = (text, n = 8) => String(text).trim().split(/\r?\n/).slice(-n).join('\n');
 
 // Môi trường cho worktree của một item: .env chép từ checkout chính (gitignored nên worktree không có) với test DB
 // và (khi stack có lệnh migrate) database dev riêng theo trận và item, rồi cài dependency + generate, rồi migrate +
 // seed database riêng đó (`prisma migrate deploy` tự tạo database chưa có). Probe chỉ chạy test: `appDatabase: false`.
-export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir, appDatabase = true }) {
+export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir, appDatabase = true, cacheDir = join(logDir, 'package-cache') }) {
   const profile = detectProfile(wtMatchRoot);
   const main = detectProfile(mainMatchRoot);
   const out = { profile: { stack: profile.stack, root: profile.relRoot }, steps: [] };
   if (!profile.root) return { ...out, ok: false, failure: 'no application manifest in worktree' };
+  const cache = packageCache(profile, cacheDir);
+  out.packageCache = cache.directory;
+  const context = { profile, matchRoot: wtMatchRoot, logDir, cacheDirectory: cache.directory };
   const c = profile.commands;
   const mainEnv = main.root ? join(main.root, '.env') : null;
   const wtEnv = join(profile.root, '.env');
@@ -189,12 +215,13 @@ export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key,
   }
   const own = dedicatedAppDatabase(wtMatchRoot, mainMatchRoot);
   out.database = own ? { name: own, dedicated: true } : { dedicated: false };
-  const names = ['install', 'generate', ...(own ? ['migrate', 'seed'] : [])];
+  const names = [c.prepare_source ? 'prepare_source' : 'install', 'generate', ...(own ? ['migrate', 'seed'] : [])];
   for (const name of names) {
     // Seed khi .env vừa tạo hoặc migrate vừa tạo database (đã bị dropWorktreeDatabases xoá sau push rồi dùng lại).
     if (!c[name] || name === 'seed' && !fresh && !out.steps.some(s => s.name === 'migrate' && s.created)) continue;
-    const res = await step(job, name, c[name], { cwd: profile.root, timeoutMs: 300_000, logFile: join(logDir, `${key}-worktree-${name}.log`) });
-    out.steps.push({ name, code: res.code, seconds: Math.round(res.ms / 1000), ...(res.code && name === 'seed' ? { tail: lastLines(res.tail, 4) } : {}),
+    const res = await preparedStep(job, name, c[name], { cwd: profile.root, env: cache.env,
+      timeoutMs: name === 'prepare_source' ? 600_000 : 300_000, logFile: join(logDir, `${key}-worktree-${name}.log`) }, context);
+    out.steps.push({ name, code: res.code, seconds: Math.round(res.ms / 1000), ...(res.cached ? { cached: true } : {}), ...(res.code && name === 'seed' ? { tail: lastLines(res.tail, 4) } : {}),
       ...(name === 'migrate' && /database\b.*\bcreated\b/i.test(res.tail) ? { created: true } : {}) });
     // Seed lỗi không chặn worktree (như setupEnvironment): MVS thường có seed riêng của BTC.
     if (res.code !== 0 && name !== 'seed') return { ...out, ok: false, failure: lastLines(res.tail) };
@@ -239,7 +266,7 @@ export function dedicatedAppDatabase(wtMatchRoot, mainMatchRoot) {
 }
 
 // Job setup_environment. `report(stage, status, summary)` ghi PREPARATION_STATUS.
-export async function setupEnvironment(job, { matchRoot, localDir, logDir, report, deadlineAt, baselineMs = 240_000 }) {
+export async function setupEnvironment(job, { matchRoot, localDir, logDir, report, deadlineAt, baselineMs = 240_000, cacheDir = join(localDir, 'package-cache') }) {
   const profile = detectProfile(matchRoot);
   const out = { profile: { stack: profile.stack, root: profile.relRoot, packageManager: profile.packageManager ?? null,
     testRunner: profile.testRunner ?? null, commands: profile.commands }, steps: [], build: 'FAIL', baseline: null, doctor: null };
@@ -252,21 +279,27 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
     return out;
   }
   const cwd = profile.root;
+  const cache = packageCache(profile, cacheDir);
+  out.packageCache = cache.directory;
+  const step = (name, command, opts) => preparedStep(job, name, command, { ...opts, env: cache.env },
+    { profile, matchRoot, logDir, cacheDirectory: cache.directory });
   const machine = readMachineConfig(localDir);
   const env = fillEnvFile(cwd, machine, { testDbSuffix: dbSuffix(basename(matchRoot)) });
   out.steps.push({ name: 'env-file', ...env });
 
   const c = profile.commands;
-  const install = await step(job, 'install', c.install, { cwd, timeoutMs: Math.min(remaining(), 300_000), logFile: log('install') });
-  out.steps.push({ name: 'install', code: install.code, seconds: Math.round(install.ms / 1000) });
+  const installStep = c.prepare_source ? 'prepare-source' : 'install';
+  const install = await step(installStep, c.prepare_source ?? c.install,
+    { cwd, timeoutMs: Math.min(remaining(), c.prepare_source ? 600_000 : 300_000), logFile: log(installStep) });
+  out.steps.push({ name: installStep, code: install.code, seconds: Math.round(install.ms / 1000), ...(install.cached ? { cached: true } : {}) });
   if (install.code !== 0) {
     out.failure = lastLines(install.tail);
-    report('ENVIRONMENT', 'FAILED', 'Dependency installation failed.');
+    report('ENVIRONMENT', 'FAILED', c.prepare_source ? 'env-require prepare-source failed.' : 'Dependency installation failed.');
     return out;
   }
   for (const name of ['generate', 'migrate', 'seed']) {
     if (!c[name]) continue;
-    const res = await step(job, name, c[name], { cwd, timeoutMs: 120_000, logFile: log(name) });
+    const res = await step(name, c[name], { cwd, timeoutMs: 120_000, logFile: log(name) });
     out.steps.push({ name, code: res.code, seconds: Math.round(res.ms / 1000), ...(res.code ? { tail: lastLines(res.tail, 4) } : {}) });
     if (res.code !== 0 && name !== 'seed') {
       out.failure = lastLines(res.tail);
@@ -274,13 +307,24 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
       return out;
     }
   }
+  // Doctor có thể kiểm tra cả artifact build: script BTC (hoặc build suy ra) phải chạy trước.
+  report('BUILD', 'IN_PROGRESS', c.prepare_source ? 'Application built by env-require prepare-source.' : 'Building the application.');
+  if (!c.prepare_source && c.build) {
+    const build = await step('build', c.build, { cwd, timeoutMs: Math.min(remaining(), 300_000), logFile: log('build') });
+    out.steps.push({ name: 'build', code: build.code, seconds: Math.round(build.ms / 1000), ...(build.cached ? { cached: true } : {}) });
+    if (build.code !== 0) {
+      out.failure = lastLines(build.tail);
+      report('BUILD', 'FAILED', 'Build failed.');
+      return out;
+    }
+  }
   const doctor = join(matchRoot, 'env-require', 'doctor.ps1');
   if (existsSync(doctor)) {
     // -Output ra ngoài repo: mặc định doctor ghi env-require/environment-report.json, gate coi là thay đổi cấm.
     const reportFile = join(logDir, 'environment-report.json').replaceAll("'", "''");
-    const res = await step(job, 'doctor', `& '${doctor.replaceAll("'", "''")}' -SourceDir '${cwd.replaceAll("'", "''")}' -Output '${reportFile}'`,
+    const res = await step('doctor', `& '${doctor.replaceAll("'", "''")}' -SourceDir '${cwd.replaceAll("'", "''")}' -Output '${reportFile}'`,
       { cwd: join(matchRoot, 'env-require'), timeoutMs: 120_000, logFile: log('doctor') });
-    out.doctor = /Environment status:\s*READY/.test(res.tail) ? 'READY' : 'NOT_READY';
+    out.doctor = res.code === 0 && /Environment status:\s*READY/.test(res.tail) ? 'READY' : 'NOT_READY';
     out.steps.push({ name: 'doctor', code: res.code, status: out.doctor, ...(out.doctor !== 'READY' ? { tail: lastLines(res.tail, 10) } : {}) });
     if (out.doctor !== 'READY') {
       report('ENVIRONMENT', 'FAILED', 'env-require doctor reports NOT_READY.');
@@ -289,16 +333,6 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
   }
   report('ENVIRONMENT', 'COMPLETED', `${profile.stack} toolchain and dependencies ready${out.doctor ? '; doctor READY' : ''}.`);
 
-  report('BUILD', 'IN_PROGRESS', 'Building the application.');
-  if (c.build) {
-    const build = await step(job, 'build', c.build, { cwd, timeoutMs: Math.min(remaining(), 300_000), logFile: log('build') });
-    out.steps.push({ name: 'build', code: build.code, seconds: Math.round(build.ms / 1000) });
-    if (build.code !== 0) {
-      out.failure = lastLines(build.tail);
-      report('BUILD', 'FAILED', 'Build failed.');
-      return out;
-    }
-  }
   out.build = 'PASS';
   if (c.test_all) {
     const budget = Math.min(baselineMs, Math.max(30_000, deadlineAt - Date.now() - 60_000));

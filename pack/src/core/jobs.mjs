@@ -52,10 +52,17 @@ export function run(cmd, args, { cwd, env, timeoutMs = 120_000, logFile = null, 
 }
 
 // Lệnh của package manager / script: chạy qua PowerShell 7 với chuỗi lệnh do helper dựng.
+export function pwshScript(command) {
+  // CommandNotFound không đặt LASTEXITCODE; exit $null từng biến install/check hỏng thành PASS (OMZJW0S0).
+  return `$ErrorActionPreference='Stop'; $LASTEXITCODE=0; try { ${command}\n`
+    + `if (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }; exit $LASTEXITCODE `
+    + `} catch { Write-Error -ErrorRecord $_ -ErrorAction Continue; exit 1 }`;
+}
+
 export function runPwsh(command, options = {}) {
   const shell = process.platform === 'win32' ? 'pwsh' : 'sh';
   const args = process.platform === 'win32'
-    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$ErrorActionPreference='Continue'; ${command}; exit $LASTEXITCODE`]
+    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', pwshScript(command)]
     : ['-c', command];
   return run(shell, args, options);
 }

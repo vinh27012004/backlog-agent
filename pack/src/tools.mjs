@@ -11,6 +11,7 @@ import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
 import { dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
+import { setupInputFile } from './env/setup-cache.mjs';
 import { modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
 import { EventQueue } from './core/events.mjs';
@@ -119,6 +120,7 @@ export class Runtime {
     this.poller = null;
     this.preGame = null;          // poll trước START_GAME (startPreGameWatch)
     this.prewarming = new Map();  // key → promise dựng sẵn worktree trước START_GAME
+    this.worktreeCreating = new Map(); // gộp prewarm/create cùng item đang chạy
     this.closingWarned = new Set();
     this.resultWarned = new Set();
     this.configuredAt = 0;
@@ -194,7 +196,7 @@ export class Runtime {
         handler: async a => { const out = this.configureSession(a); const boot = await this.bootGame(); return { ...out, ...(boot ? { boot, next: boot.next } : {}), proxy: await this.ensureProxy() }; } },
       { name: 'prepare_checkout', description: 'PREPARE: verify Git access, clone the assigned branch into checkoutRoot (or verify an existing checkout) and return the revision. Writes GIT_AUTH and REPOSITORY stages.',
         inputSchema: obj({}), handler: () => this.prepareCheckout() },
-      { name: 'setup_environment', description: 'PREPARE: background job. Detects the stack, fills .env from .env.example, installs dependencies, runs migrations/seed and env-require doctor, builds and runs baseline tests. Writes ENVIRONMENT and BUILD stages.',
+      { name: 'setup_environment', description: 'PREPARE: background job. Detects the stack, fills .env from .env.example, uses env-require/prepare-source.ps1 for initial install/build when provided (otherwise inferred commands), runs migrations/seed, then doctor after the build and baseline tests. Bundled Yarn is used without a global shim. Writes ENVIRONMENT and BUILD stages.',
         inputSchema: obj({ waitSeconds: num('Seconds to wait for completion in this call (max 45).') }), handler: a => this.setupEnvironment(a) },
       { name: 'login_match', description: 'Log in to the match portal, read /match/<matchId> data and verify team, repository and API endpoints. In PREPARE writes the MATCH_LOGIN stage.',
         inputSchema: obj({}), handler: () => this.loginMatch() },
@@ -963,9 +965,20 @@ export class Runtime {
   // checkout chính (index chỉ đọc source, vài giây). Index vẫn xong trước khi trả về: fixer gọi codegraph lên worktree
   // chưa index thì bị bảo thôi dùng cả phiên. Không đụng Game Master nên chạy được cả trước START_GAME (prewarmWorktree).
   async createWorktree(key) {
+    if (this.worktreeCreating.has(key)) return this.worktreeCreating.get(key);
+    const promise = this.createWorktreeOnce(key).finally(() => this.worktreeCreating.delete(key));
+    this.worktreeCreating.set(key, promise);
+    return promise;
+  }
+
+  async createWorktreeOnce(key) {
     const { checkoutRoot, matchRoot, teamWork } = this.session.paths;
     const wt = this.wtPaths(key);
     const ji = this.journal.item(key);
+    const active = this.jobs.jobs.get(ji.worktreeSetupJob);
+    if (this.liveWorktree(key) && active?.state === 'running') {
+      return { job: active, codegraph: await this.refreshCodegraph(key, wt.matchRoot) };
+    }
     if (!this.liveWorktree(key)) {
       if (existsSync(wt.worktreeRoot)) {
         rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
@@ -998,12 +1011,15 @@ export class Runtime {
     // Cài lỗi (mạng, file bị khoá) thì job tự chạy lại một lần: từ khi fixer được spawn trước khi setup xong, không còn
     // prepare_item hỏng để root thử lại.
     const job = this.jobs.start('worktree_setup', async job => {
-      const opts = { wtMatchRoot: wt.matchRoot, mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') };
+      const opts = { wtMatchRoot: wt.matchRoot, mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs'),
+        cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache') };
       const first = await prepareWorktreeEnv(job, opts);
       if (first.ok) return first;
       job.progress.push(`retry after: ${String(first.failure ?? '').split(/\r?\n/).pop()}`);
       return { ...await prepareWorktreeEnv(job, opts), retriedAfter: first.failure ?? null };
     }, { key });
+    ji.worktreeSetupJob = job.id;
+    this.journal.save();
     const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
       logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
     return { job, codegraph };
@@ -1024,8 +1040,11 @@ export class Runtime {
     if (action === 'create') {
       // Worktree dựng sẵn trước START_GAME (prewarmWorktree): dùng lại job setup và index của nó thay vì chạy lại.
       const warm = await this.prewarming.get(key)?.catch(() => null);
+      this.prewarming.delete(key); // chỉ nhận prewarm một lần; các lần sau kiểm tra lại proof setup
       let job = warm && this.liveWorktree(key) ? this.jobs.jobs.get(warm.jobId) : null;
       if (job?.state === 'failed') job = null;
+      const skip = this.reportOnlyPI(key) ? 'report-only PI' : this.answerOnlyTask(key) ? 'answer-only TASK' : null;
+      if (job?.result?.skipped && job.result.skipped !== skip) job = null;
       let codegraph = job ? warm.codegraph : null;
       if (!job) ({ job, codegraph } = await this.createWorktree(key));
       // Template của Start Work → answers/<ID>/submit.json trong worktree (nếu chưa có).
@@ -1124,11 +1143,12 @@ export class Runtime {
       if (ji.candidate) ji.candidate.state = 'stale';
       const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);
       // Dependency hay schema đổi: cài lại và generate trong worktree (.env đã có nên giữ nguyên).
-      const deps = changed.filter(f => /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pom\.xml|build\.gradle(\.kts)?|requirements\.txt|pyproject\.toml|go\.(mod|sum)|composer\.(json|lock)|[^/]+\.prisma)$/.test(f));
+      const deps = changed.filter(f => setupInputFile(f) || /(^|\/)(pom\.xml|build\.gradle(\.kts)?|requirements\.txt|pyproject\.toml|go\.(mod|sum)|composer\.(json|lock)|[^/]+\.prisma)$/.test(f));
       let setupJobId = null;
-      if (deps.length) {
+      if (deps.length && !this.reportOnlyPI(key) && !this.answerOnlyTask(key)) {
         const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
-          mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs') }), { key });
+          mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs'),
+          cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache') }), { key });
         ji.worktreeSetupJob = setupJobId = job.id;
       }
       j.save();

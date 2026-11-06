@@ -10,7 +10,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { digest, sourceSnapshot } from '../core/candidates.mjs';
 import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
-import { childEnv, killTree } from '../core/jobs.mjs';
+import { childEnv, killTree, pwshScript } from '../core/jobs.mjs';
 import { redact } from '../core/redact.mjs';
 import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 
@@ -109,7 +109,7 @@ export function appCommand(matchRoot, port, mode = 'production') {
   let pkg = {};
   try { pkg = JSON.parse(readFileSync(join(profile.root, 'package.json'), 'utf8')); } catch { /* detectProfile đã đọc được */ }
   const scripts = pkg.scripts ?? {};
-  const pm = profile.packageManager;
+  const pm = profile.packageManagerCommand ?? profile.packageManager;
   const viaNext = script => (/^next (start|dev)\b/.test(script ?? '') ? `${pm} exec ${script} -p ${port}` : null);
   const dev = scripts.dev ? viaNext(scripts.dev) ?? `${pm} run dev` : null;
   if (mode === 'dev') return dev ? { profile, build: null, start: dev, mode: 'dev' } : { profile, error: 'package.json has no dev script' };
@@ -271,7 +271,7 @@ async function launch(teamWorkspace, key, where, mode, build, retries, carry = n
   // pwsh chạy detached (không console) không ghi gì ra file log, còn pwsh con của một node detached thì ghi được.
   const shell = process.platform === 'win32'
     ? ['pwsh', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-      `$ErrorActionPreference='Continue'; ${steps.map(s => `${s}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`).join('; ')}`]
+      pwshScript(steps.map(s => `${s}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`).join('; '))]
     : ['sh', '-c', steps.join(' && ')];
   mkdirSync(where.logDir, { recursive: true });
   const log = join(where.logDir, `${key}-app.log`);

@@ -139,8 +139,11 @@ E1OOHQ5U/
 - `env-require/` là quy trình chuẩn bị BTC đưa kèm, xong khi `doctor.ps1` in `Environment status: READY`
   (xem [09 §7](09-dong-goi-va-van-hanh.md#7-chuẩn-bị-máy-thi-làm-một-lần-trước-2610)). Phần cần quyền admin
   (cài PostgreSQL 16 cổng **5433**, chạy `db-setup.sql` bằng superuser) phải làm tay **trước** trận;
-  `setup_environment` chỉ làm phần còn lại: `src/.env`, `prepare-source.ps1` (`pnpm install --frozen-lockfile`
-  + `pnpm run build`), `pnpm prisma migrate deploy`, `pnpm db:seed`, `doctor.ps1`.
+  `setup_environment` chỉ làm phần còn lại: `src/.env`, script `prepare-source.ps1` của BTC (install + build),
+  generate/migrate/seed theo profile, rồi `doctor.ps1` và baseline tests. Khi không có script prepare, helper dùng
+  lệnh suy ra nhưng vẫn build trước doctor. Worktree cũng chạy script prepare riêng, không dùng chung `node_modules`.
+  Yarn có `yarnPath` hoặc release đóng gói trong repo được gọi bằng `node <yarnPath>` ở mọi lệnh, gồm app start;
+  Yarn 2+ dùng `install --immutable`, Yarn 1 giữ `--frozen-lockfile`. Lệnh không tồn tại phải trả exit khác 0.
 - Test làm rỗng test DB trước mỗi case: mỗi worktree chạy test song song phải có `TEST_DATABASE_URL` riêng
   (chỉ đổi tên database, vd `.../freelanceos_test_task02`). Gate đặt biến này theo lane.
 - "Bẫy" đã thấy: Prisma in thông báo nâng lên bản major pre-release, không được làm theo; `package.json`

@@ -15,6 +15,28 @@ J56ZZWSS bỏ cả worker evidence riêng của item tier strong: một fixer l�
 Mỗi item một team_fixer. Root thực hiện native agent operations và Company Tools lookup; helper không thêm agent CLI.
 Proxy của worker có read_item, job_status, worktree status, worker_checkpoint và company_lookup (tra cứu chỉ đọc, từ 04/11), không company_call/publish.
 
+## Cache package và setup worktree (06/11/2026)
+
+- Main và worktree dùng kho tải package trong `team-sdlc-pack/local/package-cache/<manager>-<major>/`.
+  Yarn 2+ dùng global folder/mirror, giữ cấu hình cache local của repo; Yarn 1 và npm dùng cache folder,
+  pnpm dùng store với tên biến môi trường tương ứng phiên bản. Không sửa lockfile hay chia sẻ `node_modules`.
+- `env/setup-cache.mjs` ghi proof thành công của install/prepare-source/build vào
+  `.team-work/logs/setup-cache/`, riêng theo đường dẫn bản sao. Gọi lại chỉ bỏ qua bước đã thành công khi
+  input, dependency hiện có và (với build/prepare-source) nội dung artifact vẫn khớp. Proof chứa hash, không ghi secret.
+  File manifest của workspace, lockfile, cấu hình manager, release/plugin/patch, script BTC, env và runtime tham gia input.
+  Script prepare-source, build, install hook và file dependency có thể đọc source nên dùng input source đầy đủ.
+  Nếu không chứng minh được dependency/artifact (ví dụ Yarn PnP), chạy thật thay vì đoán PASS.
+- Source thông thường đổi không buộc install lại khi dự án không có install hook/file dependency.
+  Thiếu package, đổi lock/config hoặc artifact bị xóa/sửa sẽ làm proof hết hiệu lực. Lỗi/timeout xóa proof cũ.
+  Doctor, baseline và các bước database vẫn chạy theo quy trình; không dùng proof setup làm kết quả test.
+- Prewarm/create đồng thời cùng item được gộp; setup đang chạy được dùng lại. START_GAME nhận job prewarm một lần,
+  các lần create sau kiểm tra lại setup. Nếu template thật đòi test thì không nhận kết quả prewarm đã bỏ qua setup.
+  Không Start Work trước GAME. TASK chỉ trả lời và PI report-only bỏ setup cả khi sync kéo dependency mới từ main.
+- `run_checks` và app tiếp tục dùng cache source/environment hiện có. Một lượt model/followup mới không phải lý do
+  cài lại hay build lại; source hoặc môi trường thay đổi thì kiểm tra lại như bình thường.
+
+Kiểm tra: `setup-cache.test.mjs`, các ca prewarm/create/sync trong `workflow.test.mjs`, và luồng thật trong `e2e.test.mjs`.
+
 ## Candidate và phiên bản
 
 Mỗi bàn giao là <ID>-fixer-<version>.json mới, tách số spawn. Ghi tạm rồi rename. Runtime validate strict schema, path

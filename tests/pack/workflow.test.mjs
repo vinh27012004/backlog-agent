@@ -744,6 +744,65 @@ test('sync waits for a setup job that is still running before it resets the work
   assert.deepEqual(order, ['setup done', 'synced']);
 });
 
+test('concurrent prewarm/create calls share one worktree setup job', async () => {
+  const f = fixture();
+  const [a, b] = await Promise.all([f.rt.createWorktree(f.key), f.rt.createWorktree(f.key)]);
+  assert.equal(a.job.id, b.job.id);
+  await a.job.promise;
+  assert.equal([...f.rt.jobs.jobs.values()].filter(j => j.kind === 'worktree_setup').length, 1);
+});
+
+test('create joins a still-running setup instead of starting another installation', async () => {
+  const f = fixture();
+  let release;
+  const job = f.rt.jobs.start('worktree_setup', () => new Promise(r => { release = r; }), { key: f.key });
+  f.ji.worktreeSetupJob = job.id;
+  f.rt.refreshCodegraph = async () => ({ name: 'codegraph', skipped: 'test' });
+  try {
+    const result = await f.rt.createWorktree(f.key);
+    assert.equal(result.job.id, job.id);
+    assert.equal([...f.rt.jobs.jobs.values()].filter(j => j.kind === 'worktree_setup').length, 1);
+  } finally { release({ ok: true }); await job.promise; }
+});
+
+test('claiming a prewarmed worktree consumes its setup once without running preparation again', async () => {
+  const f = fixture();
+  const job = f.rt.jobs.start('worktree_setup', async () => ({ ok: true }), { key: f.key });
+  await job.promise;
+  f.rt.prewarming.set(f.key, Promise.resolve({ jobId: job.id, codegraph: { skipped: 'test' } }));
+  f.rt.createWorktree = async () => { throw new Error('prewarm must be reused'); };
+  const result = await f.rt.worktree({ action: 'create', backlogItemKey: f.key });
+  assert.equal(result.setupJobId, job.id);
+  assert.equal(f.rt.prewarming.has(f.key), false);
+});
+
+test('answer-only prewarm cannot skip code setup once the actual template requires tests', async () => {
+  const f = fixture('TASK-02');
+  const warm = f.rt.jobs.start('worktree_setup', async () => ({ ok: true, skipped: 'answer-only TASK' }), { key: f.key });
+  await warm.promise;
+  f.rt.prewarming.set(f.key, Promise.resolve({ jobId: warm.id, codegraph: { skipped: 'test' } }));
+  const code = f.rt.jobs.start('worktree_setup', async () => ({ ok: true }), { key: f.key });
+  f.rt.createWorktree = async () => ({ job: code, codegraph: { skipped: 'test' } });
+  const result = await f.rt.worktree({ action: 'create', backlogItemKey: f.key });
+  assert.equal(result.setupJobId, code.id);
+  assert.notEqual(result.setupJobId, warm.id);
+});
+
+test('dependency changes on main do not install or build answer-only worktrees during sync', async () => {
+  for (const key of ['TASK-01', 'PI-01']) {
+    const f = fixture(key, true);
+    writeFileSync(join(f.rt.session.paths.matchRoot, 'src', 'package.json'), '{"name":"updated dependency inputs"}');
+    sh('git', ['add', 'M1/src/package.json'], f.checkout);
+    sh('git', ['commit', '-q', '-m', 'dependency inputs'], f.checkout);
+    f.rt.refreshCodegraph = async () => ({ name: 'codegraph', skipped: 'test' });
+    const result = await f.rt.worktree({ action: 'sync', backlogItemKey: key });
+    assert.equal(result.synced, true);
+    assert.equal(result.setupJobId, undefined);
+    assert.equal([...f.rt.jobs.jobs.values()].some(j => j.kind === 'worktree_setup'), false);
+    assert.equal(existsSync(join(f.wt.matchRoot, 'src', 'node_modules')), false);
+  }
+});
+
 test('final evidence survives test/document-only syncs, not a later change to the item\'s own files', async () => {
   const f = fixture(), shot = join(f.dir, 'evidence', 'final.png'); writeFileSync(shot, 'png');
   const head = sh('git', ['rev-parse', 'HEAD'], f.wt.worktreeRoot), snapshot = await f.rt.workflow.snapshot(f.key);

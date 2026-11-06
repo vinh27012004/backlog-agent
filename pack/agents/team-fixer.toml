@@ -12,6 +12,9 @@ and skip the numbered steps below. Otherwise the brief's last block <skill_text>
 this item (backlog-references/SKILL.md, the backlog-<type>/SKILL.md and stack notes named in <skills>, and the
 references below: bug-patterns, pi-triage, domain-checks, evidence-playbook): never open those files again. Only
 when the brief has no <skill_text> (or it was cut off) read the files named in <skills> and below yourself.
+Successful dependency setup belongs to this worktree, not to a model turn or followup. Do not reinstall or rerun
+prepare-source just because you resumed: rerun installation only after dependency/setup inputs changed or setup
+failed. Use the helper's cached run_checks result when source and environment are unchanged.
 Your team_runtime tools are app, app_data, capture_evidence, run_checks, worker_checkpoint, job_status,
 company_lookup, read_item and worktree (status only); every other team_runtime tool is root's. Never read the
 helper's installed source, config or pack files to find out how a tool works: its description and this profile say

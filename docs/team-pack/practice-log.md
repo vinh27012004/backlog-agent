@@ -473,3 +473,25 @@ Helper giao BUG-01 làm chủ baseline. Nguồn: `.team-work/journal.json`, `ans
 |---|---|---|---|
 | L92 | Grader chạy cả bộ test trên commit nộp của **từng** item (BUG-02: 12 test gốc + 19 test mới = 31). BUG-02 (`youFix:false`) nộp DONE lúc 14:20 với TC-04 FAIL; bản sửa của chủ BUG-01 lên main lúc 14:27 | BUG-02-TC-04 0/20 (29 đạt, 2 hỏng), BUG-02 80/100 | **Đã** sửa: chủ sửa baseline trước, báo `worker_checkpoint baseline_fixed`, helper commit lên main; item cần cả bộ test chờ bản sửa khi publish (`BASELINE_PENDING`), sync rồi chạy lại (13 §Test fail sẵn) |
 | L93 | Chủ BUG-01 viết lại assertion của `cascade.test.ts` ("cascades invoices per the owner-requested migration") thay vì thêm migration trả lại RESTRICT; `existing tests changed` chỉ là cảnh báo | Grader khôi phục test gốc: test cascade vẫn hỏng ở commit BUG-01 và mọi commit sau (BUG-03, BUG-04, CR-01..03), cần đối chiếu kết quả chấm các item đó | **Đã** sửa: `worker_checkpoint candidate` chặn mọi thay đổi ở file test BTC phát; `baseline_fixed` từ chối file test |
+
+## #18 · 06/11/2026 · kiểm tra prepare của trận `OMZJW0S0` (chạy ngày 05/11)
+
+BUG-09 đạt 55/80: TC-02 khai NOT_RUN do thiếu ảnh xác minh cặp +14/+15 sau reload. Fixer có 52 lượt gọi model,
+trung bình 16,9 giây/lượt; code/test 2m51s, giai đoạn evidence 11m29s. Kiểm tra prepare phát hiện các lỗi nền sau;
+việc sửa chúng không thay đổi hồ sơ hay điểm của trận đã nộp.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L94 | Profile dựng `yarn` trần dù repo có `.yarn/releases/yarn-4.17.1.cjs`; Yarn không có trên PATH | Install không chạy, worktree thiếu dependency, fixer phải cài và kiểm tra lại bằng bundled Yarn | **Đã** sửa: dùng `node <yarnPath>` theo yarnrc hoặc release đóng gói cho mọi lệnh profile và app; Yarn 2+ dùng `--immutable`, Yarn 1 dùng `--frozen-lockfile` |
+| L95 | `runPwsh` dùng `Continue` rồi `exit $LASTEXITCODE`; command không tồn tại để lại `$null`, trả exit 0 | Install/checks báo PASS giả; metadata cũ tiếp tục được đưa vào fix-result | **Đã** sửa: bắt lỗi PowerShell, kiểm tra trạng thái lệnh, giữ native exit code; app dùng chung wrapper. Test thiếu command cả trước/sau native success, exception và native failure |
+| L96 | Helper bỏ qua `env-require/prepare-source.ps1` và chạy doctor trước build; `lage build` không tạo bản browser mà doctor đòi | Doctor NOT_READY dù đã sửa install | **Đã** sửa: chạy script BTC (install + build) trên main và từng worktree; không build suy ra lần nữa trong prepare. Không có script thì build suy ra trước doctor; READY còn phải có exit 0. Tests trong `environment.test.mjs` |
+
+Kiểm tra: 30 test liên quan PASS; toàn pack 187/194 PASS, 7 lỗi còn lại tái hiện nguyên trạng trên bản `HEAD` riêng
+(codegraph: regex chỉ nhận LF; model/effort, mô tả signals và slot: expectation lệch cấu hình/hành vi hiện có).
+Máy kiểm tra thiếu PowerShell 7; dùng host Windows PowerShell 5.1 qua bootstrap chỉ dành cho test, không đổi shell
+của helper. Log ở `runs/verify-omzjw0s0/`; chưa chạy lại toàn bộ install/build của repo Actual hay replay TC-02.
+
+Tối ưu worktree tiếp theo: thêm cache tải package dùng chung, proof install/prepare-source/build riêng theo worktree,
+gộp create/prewarm đồng thời, và bỏ setup của answer-only cả khi sync đổi dependency. 84 test tích hợp liên quan PASS.
+Kiểm tra thêm bằng Yarn 4.17.1 thật trong hai bản sao nhỏ, tắt mạng: cache trống fail đúng YN0080; cache đã có archive
+cho phép cả hai install `--immutable` exit 0, `node_modules` riêng và module chạy được. Không sửa checkout trận cũ.
