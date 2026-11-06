@@ -20,7 +20,7 @@ provenance, not correct UI.
 - **Non-UI reports, logs and text files (e.g. *.txt, *.json, *.csv, *.log)**: NEVER use the browser for these.
   Generate them directly by running the test/script command and piping output to `answers/<ID>/evidence/<name>`
   (e.g. `node script.js > answers/<ID>/evidence/report.txt`). Only PNG screenshots and browser downloads use `capture_evidence`.
-- **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. If a step fails, the helper takes a fail-safe snapshot so the file exists; report unfinished scenarios honestly and proceed to publish.
+- **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. On failure the helper returns completed artifacts and a separately named diagnostic PNG (`*.failed-<attemptId>.png`); it does not fill a missing scenario image or replace an earlier success. Report unfinished scenarios honestly and proceed to publish.
 
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
 of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
@@ -72,14 +72,19 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 → goto <the screen> → <TC-01 steps> → assertText <TC-01 value> → screenshot answers/<ID>/evidence/<TC-01 file>.png
 → <TC-02 steps, e.g. change the filter> → assertText <TC-02 value> → download / screenshot <TC-02 files>
 ```
-Files already written stay when a later step fails (`stepsDone` lists them): retry in a new call from the failed
+Files already written stay when a later step fails (`stepsDone` and `screenshots`/`downloads` list them): retry in a new call from the failed
 scenario only, starting with `goto` and the steps that rebuild its state. A different viewport or app mode, or a
 scenario that needs fresh seed data, starts a new call.
-- Each call opens a new blank page: only cookies carry over, never the page, its filters or a dialog. Start every
+- Each call opens a new blank page: the DOM, dialogs and in-memory UI state do not carry over. Start every
   call with `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls
   to `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
-- Give every call the same `browserProfile` (e.g. `"<id>-admin"`): the login cookie is kept, so later calls may start
-  at the screen, and parallel calls may share it. A failed step whose `error.details.url` is `/login` means the
+- Give related calls the same `browserProfile` (e.g. `"<id>-admin"`) and context: snapshots keep cookies,
+  localStorage, IndexedDB and OPFS, scoped to the item/worktree. `browserState` reports restore/save status and
+  stores not persisted (sessionStorage, page memory, service workers and CacheStorage). Use a distinct profile
+  for independent data. Calls sharing a profile or evidence resources are serialized; independent items remain parallel.
+  Keep the same origin (scheme/host/port) to reuse local data; `originRestored:false` means no stored origin data
+  applies to this URL. `BROWSER_PROFILE_RESTORE_FAILED` or `BROWSER_PROFILE_SAVE_FAILED` needs repair or a new
+  profile, not an assumption that the session survived. A failed step whose `error.details.url` is `/login` means the
   session is gone: put the `login` step back in (it returns `alreadySignedIn` when the cookie still holds).
 - `NAVIGATION_FAILED` (connection refused): the app is not running on that url; check `app status`, never retry blindly.
 - `LOGIN_FAILED`: the app refused the seeded account; `error.details.visibleText` has its message. Seeding again
@@ -89,10 +94,19 @@ scenario that needs fresh seed data, starts a new call.
   mark only the scenarios that needed it `NOT_RUN` with the stated reason, and return; never ask for approval
   (nobody answers during the match).
 - File names: exactly what the MVS lists under "Required evidence"; a `PASS` that misses one is not a pass.
-- `assertText` before `screenshot`: a picture of the wrong state is worse than none.
+- For scenario result images use `assertText`/`waitFor` after the last UI change, then `screenshot {requireAssertion:true}`.
+  The helper rechecks these conditions before capture; a state-changing action clears earlier conditions.
+  Raw layout/before-fix images may omit this flag; an artifact being captured does not itself prove scenario PASS.
   `assertText` waits up to 5 s; `screenshot` waits until requests and loading indicators are gone. A step with
   `unsettled` was captured while still loading: `waitFor` the loaded content and capture again. Paths may be
   relative to `context.matchRoot` (`answers/<ID>/evidence/<name>.png`).
+- When a scenario requires persistence, select the app's persistent mode from its README/QA data. Before
+  `reload {}` or navigation, wait for an observable save-completed condition; then verify the required data again
+  after reload. Network idle and a visible optimistic row alone do not prove durable storage. Do not repair an
+  application save failure by changing the expectation or by assuming a delay was enough.
+- Use only artifacts returned as completed evidence for that scenario. A diagnostic image is for debugging,
+  never PASS evidence. `attemptId`, `role` and `assertionSteps` identify each artifact's origin; old files left
+  in the directory do not prove that the latest attempt completed their steps.
 
 ## 3. Selectors
 - `selector` is CSS or Playwright selector syntax (`text=Invoices`, `[role=tab]:has-text("Invoices")`,

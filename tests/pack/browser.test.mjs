@@ -232,7 +232,7 @@ test('capture_evidence browserProfile keeps the login cookie across calls', { sk
   try {
     await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/login` }] });
     assert.ok(existsSync(join(tw, 'team-sdlc-pack', 'local', 'browser', 'solova-admin.json')));
-    // CR-01 ở 3OCNFC54 chụp bốn kịch bản song song: cùng profile không khoá nhau.
+    // Các lời gọi vẫn có thể gửi đồng thời; helper tuần tự hóa cùng profile để không ghi đè snapshot.
     const all = await Promise.all([1, 2, 3].map(() =>
       captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] })));
     for (const res of all) assert.match(res.visibleText, /Accounting/);

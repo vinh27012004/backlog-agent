@@ -12,6 +12,7 @@ import { digest, sourceSnapshot } from '../core/candidates.mjs';
 import { revParse, treeChanges } from '../core/git.mjs';
 import { detectProfile } from './environment.mjs';
 import { recordEvidence } from './evidence.mjs';
+import { browserProfileFile, SNAPSHOT_STORES, UNSAVED_STORES, withBrowserLocks } from './browser-profile.mjs';
 
 const MAX_TOTAL_MS = 50_000;
 const SETTLE_MS = 12_000;
@@ -169,7 +170,8 @@ export function failureHint(step, state, code) {
 
 // Mỗi lần gọi mở một trang trắng: bước thao tác trước goto/login chắc chắn hỏng sau khi chờ hết giờ (NBDB5U0O BUG-02:
 // click "New invoice" trên about:blank). Báo ngay, không mở trình duyệt.
-const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download']);
+const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download', 'reload']);
+const STATE_CHANGES = new Set(['goto', 'reload', 'login', 'click', 'fill', 'select', 'press', 'drag', 'route', 'unroute']);
 
 // Chỉ báo đang tải còn hiện: aria-busy, progressbar không xác định, skeleton/spinner phổ biến. null = không có.
 const BUSY = `() => {
@@ -209,8 +211,27 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const cssString = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const describeQuery = q => q.selector ? `${q.selector}${q.text ? ` "${q.text}"` : ''}` : `text "${q.text}"`;
 
-export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
-  timeoutMs = 45_000, context = null }) {
+export async function captureEvidence(args) {
+  const stateFile = browserProfileFile(args.teamWorkspace, args.browserProfile, args.context);
+  const locks = [stateFile], output = { key: args.context?.backlogItemKey, base: null };
+  const resource = id => join(args.teamWorkspace, 'team-sdlc-pack', 'local', 'browser', `evidence-${digest(
+    process.platform === 'win32' ? Object.fromEntries(Object.entries(id).map(([k, v]) => [k, v.toLowerCase()])) : id)}.json`);
+  if (args.context?.matchRoot) {
+    const where = locateMatchRoot(args.teamWorkspace, args.context.matchRoot);
+    output.base = where.matchRoot;
+    locks.push(resource({ manifest: dirname(where.logDir), key: output.key }));
+  }
+  for (const step of Array.isArray(args.steps) ? args.steps : []) {
+    if (!['screenshot', 'download'].includes(step?.action)) continue;
+    const path = evidencePath(args.teamWorkspace, step.path, { ...output, pngOnly: step.action === 'screenshot' });
+    locks.push(resource({ folder: dirname(path) }));
+  }
+  return withBrowserLocks(locks, lock => captureInProfile(args, stateFile, lock), Math.min(50_000, args.timeoutMs ?? 45_000));
+}
+
+async function captureInProfile({ teamWorkspace, steps: requestedSteps, viewport = { width: 1366, height: 900 }, browserProfile = null,
+  timeoutMs = 45_000, context = null }, stateFile, lock) {
+  const steps = Array.isArray(requestedSteps) ? requestedSteps.map(s => ({ ...s })) : requestedSteps;
   if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
   const browser = findBrowser();
   if (!browser) fail('BROWSER_NOT_FOUND', 'no Edge or Chrome installation found');
@@ -265,10 +286,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     provenance = { ...snapshot, base, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
       teamWork: dirname(where.logDir), key: context.backlogItemKey };
   }
-  // browserProfile giữ cookie và localStorage giữa các lần gọi trong một file storageState (không dùng thư mục profile của
-  // Edge: hai lần gọi song song cùng profile không khoá nhau, và đóng trình duyệt không phải chờ ghi profile).
-  const stateFile = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
-    ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', `${browserProfile}.json`) : null;
+  const attemptId = randomUUID();
+  const browserState = { mode: stateFile ? 'snapshot' : 'ephemeral', profile: browserProfile, scope: context ? 'worktree' : 'workspace',
+    restored: false, saved: false, waitedMs: lock.waitedMs, stores: stateFile ? [...SNAPSHOT_STORES] : [], notPersisted: [...UNSAVED_STORES] };
   const deadline = Date.now() + Math.min(MAX_TOTAL_MS, timeoutMs);
   const left = (cap = Infinity) => Math.max(100, Math.min(cap, deadline - Date.now()));
   const { chromium } = await loadPlaywright();
@@ -287,19 +307,30 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const consoleErrors = [];
   const shots = [];
   const downloads = [];
+  const diagnostics = [];
   let ctx;
   let page;
+  let captureError;
+  let at = -1;
+  let observations = [];
   try {
     const options = { viewport: vp, deviceScaleFactor: 1, acceptDownloads: true };
-    ctx = stateFile && existsSync(stateFile)
-      ? await instance.newContext({ ...options, storageState: stateFile }).catch(() => instance.newContext(options))
-      : await instance.newContext(options);
+    if (stateFile && existsSync(stateFile)) {
+      try {
+        const stored = JSON.parse(readFileSync(stateFile, 'utf8'));
+        ctx = await instance.newContext({ ...options, storageState: stored });
+        browserState.restored = true;
+        const firstUrl = steps.find(s => ['goto', 'login'].includes(s.action))?.url;
+        browserState.originRestored = !!firstUrl && !!stored.origins?.some(o => o.origin === new URL(firstUrl).origin);
+      } catch { fail('BROWSER_PROFILE_RESTORE_FAILED', 'saved browser state could not be restored; it was not replaced; use a new profile or repair the saved state'); }
+    } else ctx = await instance.newContext(options);
     page = await ctx.newPage();
     page.setDefaultTimeout(5000);
     page.setDefaultNavigationTimeout(15_000);
-    const saved = (path, kind) => {
+    const saved = (path, kind, extra = {}) => {
       const bytes = readFileSync(path), sha256 = digest(bytes);
-      const record = { path, bytes: bytes.length, sha256 };
+      const record = { path, bytes: bytes.length, sha256, attemptId, step: at + 1, role: 'evidence',
+        assertionSteps: observations.map(o => o.step), ...extra };
       if (provenance) {
         const { teamWork, key, ...origin } = provenance;
         recordEvidence(teamWork, key, { ...origin, ...record, name: basenamePath(path), kind, capturedAt: new Date().toISOString() });
@@ -340,7 +371,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const evaluate = (expression, arg) => page.evaluate(arg === undefined ? expression : `(${expression})(${JSON.stringify(arg)})`);
     // goto: lỗi kết nối (app chưa chạy, sai cổng) báo ngay; trang tải chậm quá 15 s thì vẫn đi tiếp như trước.
     const navigate = async url => {
-      try { await page.goto(url, { waitUntil: 'load', timeout: left(15_000) }); }
+      try {
+        const options = { waitUntil: 'load', timeout: left(15_000) };
+        if (url === null) await page.reload(options);
+        else await page.goto(url, options);
+      }
       catch (error) {
         if (/net::ERR_(CONNECTION|NAME|ADDRESS|EMPTY_RESPONSE|UNSAFE_PORT)/.test(error.message)) fail('NAVIGATION_FAILED', firstLine(error));
         if (error.name !== 'TimeoutError' && !/net::ERR_ABORTED|interrupted by another navigation/.test(error.message)) throw error;
@@ -462,15 +497,29 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       }
     };
 
-    let at = -1;
+    const conditionMet = async s => {
+      if (s.action === 'assertText') return evaluate(`(t) => !!document.body && document.body.innerText.includes(t)`, String(s.text)).catch(() => false);
+      const q = { selector: s.selector, text: s.text, index: s.index };
+      if (s.state === 'hidden') return !(await findNow(q));
+      if (s.state === 'enabled') {
+        const loc = await findNow(q);
+        return !!loc && await loc.isEnabled().catch(() => false) && await loc.getAttribute('aria-disabled').catch(() => null) !== 'true';
+      }
+      if (s.selector || s.state === 'visible') return !!(await findNow(q));
+      return evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, String(s.text).toLowerCase()).catch(() => false);
+    };
     try {
       for (const [i, s] of steps.entries()) {
         at = i;
         if (Date.now() > deadline) fail('CAPTURE_TIMEOUT', `stopped before step ${i + 1}`);
+        if (STATE_CHANGES.has(s.action)) observations = [];
         const q = { selector: s.selector, text: s.text, index: s.index };
         switch (s.action) {
           case 'goto':
             await navigate(s.url);
+            break;
+          case 'reload':
+            await navigate(null);
             break;
           case 'click': {
             const r = await click(q, { timeoutMs: s.timeoutMs });
@@ -585,20 +634,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           case 'waitFor': {
             if (s.state && !['visible', 'hidden', 'enabled'].includes(s.state)) fail('INVALID_ARGUMENT', 'waitFor state is visible, hidden or enabled');
             const until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 10_000));
-            const want = String(s.text ?? '').toLowerCase();
-            const ready = async () => {
-              if (s.state === 'hidden') return !(await findNow(q));
-              if (s.state === 'enabled') {
-                const loc = await findNow(q);
-                return !!loc && await loc.isEnabled().catch(() => false) && await loc.getAttribute('aria-disabled').catch(() => null) !== 'true';
-              }
-              if (q.selector || s.state === 'visible') return !!(await findNow(q));
-              return evaluate(`(t) => !!document.body && document.body.innerText.toLowerCase().includes(t)`, want).catch(() => false);
-            };
-            while (!(await ready())) {
+            while (!(await conditionMet(s))) {
               if (Date.now() >= until) fail('ELEMENT_NOT_FOUND', s.selector ? describeQuery(q) : `text "${s.text}"`);
               await sleep(150);
             }
+            observations.push({ ...s, step: i + 1 });
             break;
           }
           case 'wait':
@@ -619,6 +659,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
               && Date.now() < until) await sleep(150);
             log.push({ step: i + 1, action: 'assertText', text: s.text, found });
             if (!found && s.required !== false) fail('ASSERT_FAILED', `text not on page: ${s.text}`);
+            if (found && s.required !== false) observations.push({ ...s, step: i + 1 });
             break;
           }
           case 'screenshot': {
@@ -626,12 +667,16 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             // idle:false chụp ngay (bằng chứng trạng thái đang tải, vd sau route delayMs). Chờ tối đa 12 s: app dev biên dịch
             // route ở lần mở đầu, dashboard J56ZZWSS còn đợi tRPC sau 6 s ở 9/27 lần chụp, mỗi lần worker phải chụp lại.
             const unsettled = s.idle === false ? null : await settle(SETTLE_MS);
+            if (s.requireAssertion && !observations.length) fail('ASSERTION_REQUIRED', 'screenshot requires a successful assertText or waitFor after the last state-changing action');
+            for (const observation of observations) {
+              if (!await conditionMet(observation)) fail('ASSERTION_STALE', `condition from step ${observation.step} no longer holds before screenshot`);
+            }
             const png = await page.screenshot({ fullPage: !!s.fullPage, timeout: left(15_000) });
+            const bytes = png.length;
+            if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
             mkdirSync(dirname(s.path), { recursive: true });
             writeFileSync(s.path, png);
-            const bytes = statSync(s.path).size;
-            if (bytes > 5 * 1024 * 1024) fail('SCREENSHOT_TOO_LARGE', `${s.path} is ${bytes} bytes`);
-            shots.push(saved(s.path, 'screenshot'));
+            shots.push(saved(s.path, 'screenshot', { ...(unsettled ? { unsettled } : {}) }));
             log.push({ step: i + 1, action: 'screenshot', ...(unsettled ? { unsettled,
               hint: `still loading after ${SETTLE_MS / 1000} s: if the screenshot shows the loaded content it is valid; otherwise waitFor that content and capture again (idle:false only for loading-state evidence)` } : {}) });
             break;
@@ -671,18 +716,17 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       // Lỗi của Playwright (trang đóng, phím không tồn tại...) cũng tới agent như lỗi của bước, kèm trạng thái trang.
       const error = caught instanceof HelperError ? caught
         : new HelperError(caught?.name === 'TimeoutError' ? 'STEP_TIMEOUT' : 'BROWSER_STEP_FAILED', firstLine(caught));
-      // Fail-safe snapshot: chụp ngay màn hình hiện tại cho các screenshot còn thiếu để không bị mất điểm oan
-      for (const s of steps.filter(s => s && s.action === 'screenshot')) {
-        if (s.path && !existsSync(s.path)) {
-          try {
-            const png = await page.screenshot({ timeout: 5000 }).catch(() => null);
-            if (png) {
-              mkdirSync(dirname(s.path), { recursive: true });
-              writeFileSync(s.path, png);
-              saved(s.path, 'screenshot');
-            }
-          } catch { /* fallback best effort */ }
-        }
+      // Ảnh lỗi thuộc attempt riêng, không lấp tên evidence và không ghi đè ảnh đã chụp thành công.
+      const target = steps.slice(at).find(s => s.action === 'screenshot') ?? steps.findLast(s => s.action === 'screenshot');
+      const requested = target?.path ?? (context ? join(output.base, 'answers', context.backlogItemKey, 'evidence', 'capture.png') : null);
+      if (requested) {
+        try {
+          const path = evidencePath(teamWorkspace, requested.replace(/\.png$/i, `.failed-${attemptId}.png`), output);
+          const png = await page.screenshot({ timeout: 5000 });
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, png);
+          diagnostics.push(saved(path, 'screenshot', { role: 'diagnostic', assertionSteps: [], requestedPath: requested }));
+        } catch { /* chẩn đoán best effort; lỗi thao tác bên dưới luôn được giữ */ }
       }
       if (at >= 0) {
         const step = steps[at];
@@ -696,22 +740,32 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const finalUrl = page.url();
     const title = await page.title().catch(() => null);
     const text = await evaluate('(document.body && document.body.innerText || "").slice(0, 600)').catch(() => '');
-    return { screenshots: shots, downloads, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
+    return { attemptId, browserState, screenshots: shots, downloads, finalUrl, title, visibleText: text, consoleErrors: consoleErrors.slice(0, 10), steps: log,
       ...(rules.size ? { routed: routed.slice(0, 30),
         note: 'Responses in `routed` were simulated by the browser, not produced by the server: say so in the scenario note and engineeringRecord.' } : {}) };
+  } catch (error) {
+    captureError = error;
+    error.details = { ...error.details, attemptId, browserState, screenshots: shots, downloads, diagnostics, stepsDone: log };
+    throw error;
   } finally {
-    // Lưu cookie cả khi bước lỗi (Practice #5: mất đăng nhập ở lần gọi sau thì fixer tưởng tab Invoices không tồn tại).
-    // Ghi file tạm rồi đổi tên: lần gọi song song cùng profile không đọc phải file dở.
+    let storageError = null;
+    // Snapshot cả IndexedDB/OPFS. Khóa profile giữ đến khi lưu xong và browser đã đóng.
     if (stateFile && ctx) {
       try {
         mkdirSync(dirname(stateFile), { recursive: true });
         const tmp = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
-        writeFileSync(tmp, JSON.stringify(await ctx.storageState()));
+        writeFileSync(tmp, JSON.stringify(await ctx.storageState({ indexedDB: true, opfs: true })));
         renameSync(tmp, stateFile);
-      } catch { /* trình duyệt đã đóng */ }
+        browserState.saved = true;
+      } catch {
+        browserState.saveError = 'BROWSER_PROFILE_SAVE_FAILED';
+        storageError = new HelperError('BROWSER_PROFILE_SAVE_FAILED', 'capture artifacts are available but browser state could not be saved; do not assume the next call restores this data');
+        storageError.details = { attemptId, browserState, screenshots: shots, downloads, diagnostics, stepsDone: log };
+      }
     }
     await Promise.race([instance.close().catch(() => null), sleep(2000)]);
     await server.kill().catch(() => null);
+    if (storageError && !captureError) throw storageError;
   }
 }
 

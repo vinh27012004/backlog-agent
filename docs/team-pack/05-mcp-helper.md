@@ -671,7 +671,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Engine tự viết trên CDP (lớp `Cdp`, tìm phần tử, click/gõ phím, download, `Fetch`) được thay bằng `playwright-core`
   (ghim ở `config/playwright.json`), vì phải vá sau mỗi trận: 31/167 lần chụp lỗi qua 6 trận (PXWV53VC → 3OCNFC54).
   Interface `steps`, kiểm tra trước khi mở trình duyệt, URL loopback, đường dẫn `answers/<ID>/evidence/`, provenance,
-  `EVIDENCE_STALE_APP`, login bằng tài khoản seed, `route`, `drag`, chờ trang yên trước khi chụp, ảnh dự phòng khi
+  `EVIDENCE_STALE_APP`, login bằng tài khoản seed, `route`, `drag`, chờ trang yên trước khi chụp, ảnh chẩn đoán khi
   bước lỗi và `error.details` (`candidates`, `hint`, `preGateFailed`) giữ nguyên.
 - Không tải trình duyệt: `executablePath` là Edge/Chrome đã cài (`findBrowser`). Installer cài `playwright-core` vào
   `team-sdlc-pack/playwright/` (cạnh `runtime/`, như codegraph) trước khi thay `runtime/`; cài lỗi thì dừng
@@ -679,9 +679,19 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `check-distribution` mở thử trình duyệt (mục `playwright`) để phát hiện trước trận khi Edge tự cập nhật lên bản mà
   phiên bản đã ghim chưa điều khiển được.
 - `launchServer` + `kill` thay cho `launch` + `close`: Edge đóng êm mất khoảng 2 s mỗi lần gọi, kill khoảng 0,4 s.
-  `browserProfile` là một file `storageState` (`local/browser/<profile>.json`, cookie và localStorage) thay cho thư mục
-  profile của Edge: các lần gọi song song cùng profile không khoá nhau (CR-01 của 3OCNFC54 chụp bốn kịch bản song song),
-  hết lỗi profile bị Edge mồ côi giữ (`BROWSER_START_FAILED`, 4D895OVI).
+  `browserProfile` là snapshot cookie, localStorage, IndexedDB và OPFS thay cho thư mục profile của Edge.
+  Khi có `context`, tên file trong `local/browser/` gắn scope item/worktree; thiếu context giữ scope workspace.
+  Không lưu sessionStorage, bộ nhớ trang, service worker hay CacheStorage. Dữ liệu origin chỉ áp dụng đúng origin
+  (gồm cổng); trả `browserState` để biết restore/save, phạm vi hỗ trợ và thời gian chờ khóa.
+  Cùng profile, thư mục output hoặc manifest evidence được khóa giữa các helper process; tài nguyên riêng vẫn chạy
+  song song. Restore/save lỗi báo rõ, không âm thầm mở phiên trắng hoặc báo lưu thành công.
+- `reload` tải lại trang hiện tại. Kịch bản kiểm tra dữ liệu bền vững phải chờ ứng dụng xác nhận lưu xong rồi reload
+  và kiểm tra lại; chờ network idle không chứng minh dữ liệu đã lưu.
+- `screenshot.requireAssertion: true` đòi `assertText`/`waitFor` thành công sau thao tác thay đổi trạng thái gần nhất,
+  kiểm tra lại điều kiện ngay trước chụp. Artifact có `attemptId`, bước và `assertionSteps`; screenshot tự nó không
+  kết luận PASS. Khi bước hỏng, trả artifact đã hoàn thành và ảnh riêng `.failed-<attemptId>.png` có role `diagnostic`,
+  không điền/ghi đè tên ảnh kịch bản. Ảnh cũ tồn tại không chứng minh lần chạy mới thành công; diagnostic không hỗ trợ PASS.
+  Provenance phân biệt cùng tên ảnh giữa các worktree bằng đường dẫn, hoặc hash bytes khi publish sang checkout chính.
 - Selector: CSS hoặc cú pháp Playwright (`text=`, `:has-text()`, `role=`, `>> nth=`), bỏ chặn `INVALID_SELECTOR` của
   Practice #5; sai cú pháp vẫn báo ngay. `{selector, text}` lọc theo chữ hiển thị hoặc `aria-label`, khớp đúng trước,
   chứa chữ sau. Bước cần đích mà không có selector lẫn text bị từ chối trước khi mở trình duyệt.

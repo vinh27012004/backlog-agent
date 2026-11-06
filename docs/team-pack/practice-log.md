@@ -495,3 +495,13 @@ Tối ưu worktree tiếp theo: thêm cache tải package dùng chung, proof ins
 gộp create/prewarm đồng thời, và bỏ setup của answer-only cả khi sync đổi dependency. 84 test tích hợp liên quan PASS.
 Kiểm tra thêm bằng Yarn 4.17.1 thật trong hai bản sao nhỏ, tắt mạng: cache trống fail đúng YN0080; cache đã có archive
 cho phép cả hai install `--immutable` exit 0, `node_modules` riêng và module chạy được. Không sửa checkout trận cũ.
+
+Phần evidence được sửa ở helper chung, không gắn với ngày, dữ liệu hay TC-02 của Actual: snapshot giữ thêm IndexedDB
+(kể cả binary) và OPFS; scope theo item/worktree; khóa profile, thư mục output và manifest giữa các helper process.
+Restore/save lỗi được trả rõ. Mỗi attempt có định danh, artifact hoàn thành và ảnh diagnostic riêng; lỗi không điền
+tên ảnh còn thiếu hay ghi đè ảnh thành công cũ. Screenshot có thể đòi và kiểm tra lại hậu điều kiện, provenance phân biệt
+cùng tên file ở nhiều worktree. Skill yêu cầu chờ lưu hoàn tất, reload và xác minh lại khi kịch bản đòi dữ liệu bền vững.
+Regression độc lập tái hiện trên commit `7fd07aa`: lần chụp thứ hai còn 0 thay vì 2 bản ghi IndexedDB, cookie/localStorage
+vẫn còn. Bản sửa giữ đủ dữ liệu; chưa replay TC-02 và không thay đổi điểm trận đã nộp. Log kiểm tra:
+`runs/verify-omzjw0s0/evidence-red.log` và `evidence-final.log`.
+Kiểm tra cuối: 89/89 test browser-state, browser và workflow PASS; skill validator và kiểm tra cú pháp/diff PASS.
