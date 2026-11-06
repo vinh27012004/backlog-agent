@@ -1,11 +1,11 @@
 ---
 name: implement-task
-description: Implement a TASK item in any stack. No MVS exists, so derive acceptance criteria, follow existing patterns, and prove each criterion with a test.
+description: Handle TASK items in any stack, including answer-only questions, features and specification-driven integration suites. Derive checks from the full stated scope and use the project's existing patterns.
 ---
 
 # TASK
 
-## 0. Fast-Path Classification (Answer-Only vs Feature)
+## 0. Classify the TASK
 Check the item description immediately upon opening:
 - **Form A: Answer-Only / Calculation TASK** (e.g. "Which value does...", "Trace the ledger...", "Question(s)...", or Out of scope states "changing application source is out of scope"):
   - **DO NOT build or run the web app**.
@@ -17,9 +17,21 @@ Check the item description immediately upon opening:
   - Checkpoint candidate without writing a fix-result (the helper writes it from submit.json and validates submit.json) and hand off within 2-3 minutes!
 - **Form B: Code Feature / Endpoint TASK**:
   - Follow the sections below to derive criteria, locate nearest template, and implement minimal service + tests.
+- **Form C: Integration suite / Specification-driven testing TASK** (the deliverable is a suite that checks server modules together):
+  - Read the referenced specification in full, including its introduction, shared conditions and exclusions. Global
+    conditions such as "any number", "every line" or "each change" apply to the rule cases even without their own IDs.
+    A list covering every rule ID does not by itself establish coverage of those conditions.
+  - Follow the project's integration pattern and the entry points/database the item requires. Trace calls through
+    shared query, chunking and post-processing helpers; a suite of isolated mocked modules cannot establish the
+    required cross-module behavior. Keep test helpers and case manifests in the locations the item specifies.
+  - For collection-wide conditions use **Batch, import and pagination** in `backlog-references/domain-checks.md`.
+    Exercise a representative real entry point across its actual processing boundary and check the records beyond it.
+  - Demonstrate observed specification violations on unfixed code, fix production behavior, and verify green without
+    relaxing the expected result. If reference/mutant builds are unavailable, report only the detection you observed.
 
 ## 1. Acceptance criteria & test viewpoints
-Derive criteria from the description. Cover the 4 core test viewpoint dimensions without inventing unrequested features:
+Derive criteria from the complete description and referenced spec, including conditions shared across rule IDs.
+Cover the 4 core test viewpoint dimensions without inventing unrequested features:
 - **Normal (Happy path)**: standard valid inputs, expected successful outcomes, correct HTTP status and data formats.
 - **Boundary**: limits and edge values (0, empty string `""`, max size/length, page boundary 0/1, empty list, first/last element).
 - **Error**: invalid payloads, missing mandatory fields, not found (404), unauthenticated/unauthorized (401/403), duplicate records.
@@ -40,6 +52,9 @@ Do not introduce a new framework, library or architectural layer unless the task
 - **Refactor/technical task**: behaviour unchanged — existing tests pass before and after.
 - **UI task** (if frontend is in scope): component + state + API call + basic test if the project
   has UI tests.
+- **Integration suite**: real module interactions and specified persistence; rule cases plus their shared scope
+  conditions, including collection size when applicable. Passing small batches is insufficient evidence for a
+  collection-wide requirement. Run the item's required suite and existing tests within its stated scope.
 
 ## 4. Test data isolation & hygiene
 To prevent flaky failures and broken regression (`test_all` failure):
@@ -47,11 +62,13 @@ To prevent flaky failures and broken regression (`test_all` failure):
 - Always clean up created records or wrap DB tests in transactional rollbacks/teardown.
 
 ## 5. Tests first, then implement
-One test per criterion, named after the criterion. Implement until they pass. Run related existing
-tests. Clean up all debug output (`console.log`, `print`, `debugger`, stubs) before reporting completion.
+Use enough cases to establish each criterion, including its applicable boundaries and shared conditions; one case
+can cover several rule IDs. Implement until they pass. Run related existing tests. Clean up all debug output
+(`console.log`, `print`, `debugger`, stubs) before reporting completion.
 
 ## Report
-`tests_added` lists one test per criterion; `summary` maps criteria → where implemented.
+`tests_added` lists the new test files as runner targets; `summary` maps criteria and applicable shared conditions
+to the cases that exercise them. Include exact case titles/rule IDs when the submission contract asks for them.
 
 ## Done when
 Each criterion has a passing test · existing tests of touched modules pass · no debug leftovers · no gold-plating beyond

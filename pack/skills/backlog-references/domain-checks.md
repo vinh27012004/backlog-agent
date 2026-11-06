@@ -28,6 +28,22 @@ the existing callers you re-ran as `[regression] ...`, next to the red and green
 - Gap collapse triggers the existing rebalance; empty list; single item.
 - Order persists: reload the page or read back from the database, not only the optimistic UI.
 
+## Batch, import and pagination
+- When the item requires collection-wide behavior, trace its entry point through chunk/page reads, parameter
+  limits, deduplication and post-processing. Take the boundary N from the actual code or stated contract, not a
+  convenient fixture size. Check N-1, N and N+1 where relevant; exercise another page when loop advancement matters.
+  At an explicit public size cap, assert the specified rejection or continuation rather than assuming an oversized
+  request must succeed.
+- Include a focused integration case crossing the real boundary. Verify the identity and required state of every
+  resulting record, missing/duplicate records, totals and dependent effects (for example transfer counterparts),
+  including records after the first page. A correct first record or a successful exit does not prove completeness.
+- If additions, updates and deletions share one fetch/chunk path, test a mixed change whose combined size crosses
+  its boundary, even when each individual list is smaller. Include duplicates/order variations only where the
+  specification constrains them; do not assert unspecified matching or ordering choices.
+- Keep this targeted: use focused helper boundary checks and representative module interactions rather than every
+  rule at every size. Do not shrink production limits or change issued test configuration to simulate a crossing.
+  If the actual boundary cannot be exercised within the allowed resources, report that coverage as unverified.
+
 ## File export (CSV and similar)
 - Exact header names and column order from the item or company standard; BOM and line endings (CRLF) as specified.
 - Quote fields that contain comma, quote or newline; double inner quotes; keep Unicode (Vietnamese diacritics) intact.
