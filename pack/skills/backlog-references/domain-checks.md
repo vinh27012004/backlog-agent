@@ -13,6 +13,11 @@ the existing callers you re-ran as `[regression] ...`, next to the red and green
   formatted.
 - Zero, negative (void, refund, credit) and overpayment (paid > total) amounts.
 - Full payment at exactly the total (`>=`, not `>`), partial payment, several payments summed.
+- Derive numerical expectations from the applicable standard and original fixture independently of the function
+  under test. For allocations, show fixed amounts, percentage base, rounding and remainder; when distributing the
+  whole parent, verify that parts conserve its total. Reconcile category/boundary totals with their eligible transactions and units/signs. A failed new
+  assertion may have a wrong expected value even when an earlier failing assertion hid it; inspect the actual diff
+  after each fix. Keep issued assertions intact and never change expected values merely to accept implementation output.
 
 ## Dates, times and status by date
 - Compare calendar dates when the rule is per day (due date, aging bucket, "today"): the whole due day is not

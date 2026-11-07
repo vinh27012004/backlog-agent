@@ -167,6 +167,7 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
 | 5.27 | `run_checks` | A | mọi | Typecheck, build, cả bộ test của worktree, song song, log vào evidence (05/11) |
 | 5.28 | `shared_failure` | R | GAME | Phân loại/giao chủ lỗi chung phát hiện muộn; worker báo qua `worker_checkpoint shared_failure` |
+| 5.29 | `item_dependency` | A | GAME | Khai báo dependency giữa item, replay có hạn và ràng buộc artifact/summary cùng report |
 
 ### 5.1 `configure_session`
 
@@ -771,3 +772,25 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   reason,evidence}` với log của chủ. Mỗi copy phải chạy checks mới sau resolve và trên source/môi trường hiện tại;
   resolve không biến FAIL thành PASS. Cơ chế đầy đủ và xử lý conflict nằm ở mục "Lỗi chung chỉ phát hiện trong GAME"
   của `13-workflow-toi-uu.md`.
+
+### 5.29 `item_dependency`: dependency làm đổi dữ liệu/evidence (07/11)
+
+- `declare {backlogItemKey,dependsOn,reason,scenarios,artifacts,summaries,csvBindings,replayData,refreshSeconds}`:
+  chỉ khai quan hệ đã xác định từ đề/source; không suy ra từ tên file trùng hay mọi lần main đổi. `needs_dependency`
+  trong fix-result vẫn dành cho package/artifact bên ngoài. Helper từ chối vòng dependency và key không thuộc đề đã thấy.
+- `summaries` = `[{answerField,reportFile,reportPointer}]`: field top-level của submit.json phải là projection đúng
+  của JSON report; array giữ đủ số lượng và thứ tự. `csvBindings` = `[{artifact,reportFile,reportPointer}]` kiểm bytes
+  CSV thật khớp string trong report, kể cả BOM/CRLF. Các path bắt đầu `evidence/` trong đúng item.
+- `begin`: khi revision dependency đã integrate và có trong worktree, trả replayId/source/environment. Sau safe sync,
+  rebuild/start đúng bản, dùng fixture mới nếu replayData, chạy phần bị ảnh hưởng, download và cập nhật summary.
+- `complete {replayId,result,evidence}`: chỉ sau khi log/job kết thúc; artifact/report phải được tạo trong lượt replay,
+  source/environment/revision giữ nguyên, app do helper quản lý không được phục vụ bản cũ. Ghi hash/provenance cho
+  cả artifact do script ngoài helper tạo; retry cùng receipt không bắt replay lại. Đây là kiểm tính nhất quán, không
+  thay phép suy luận expected từ chuẩn nghiệp vụ.
+- `status` đọc trạng thái; `defer {reason}` giữ phần chưa xác minh ở FAIL/NOT_RUN và PARTIAL/BLOCKED. Chỉ consumer
+  bị giữ publish khi thiếu replay; các kiểm tra độc lập và item khác tiếp tục.
+- Mặc định refresh tối đa 180 s (khai 15–300 s theo thời gian thực), luôn chừa 60 s submit. Một bộ revision có một
+  cửa sổ chung, không gia hạn vì polling/retry hay hoàn thành bớt dependency. Revision dependency thực sự mới có thể
+  mở cửa sổ mới trong hạn trận. Root gửi thông báo đến worker một lần khi fix lên main, không sync khi worker đang ghi.
+- Checkpoint của consumer có dependency chưa xác minh chỉ tự yêu cầu build, dùng lại cache hợp lệ; worker chạy test
+  fixture liên quan. Không tự chạy full suite vì replay. Yêu cầu kiểm suite của bản sửa baseline riêng vẫn áp dụng.

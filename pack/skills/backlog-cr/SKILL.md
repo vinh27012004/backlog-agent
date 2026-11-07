@@ -32,6 +32,9 @@ Do not patch only the UI or only the service. Walk the full call chain outward:
 5. **Serialization / Mapping**: DTO $\leftrightarrow$ Entity mappers, date formatting, enum serializations.
    - *Forbidden*: Renaming or omitting existing response fields unless specifically mandated.
 6. **Frontend / UI (if monorepo)**: Consume the updated API, add requested controls (buttons, modals, dropdowns).
+When the item explicitly depends on another item's fix, declare item_dependency before producing affected fixture
+evidence. Work on independent layers meanwhile. A clean merge of different files is not proof that the dependent
+parser/rules/data path was verified on the final source; use the replay protocol from the evidence playbook.
 
 ---
 
@@ -52,12 +55,14 @@ For every feature or modification introduced in the CR, write tests covering 4 k
 
 ## 4. Focused Loop & Evidence Acquisition (Speed Maximizer)
 1. **Focused Testing**:
-   - Loop using `test_one` on your new CR test suite (takes 2–4 seconds per run).
+   - Loop using `test_one` on your new CR test suite; use observed runtime to budget a targeted final replay.
    - Only after all 4 test dimensions pass, run the touched module tests to confirm zero regressions.
 2. **Required Evidence Pre-Flight**:
    - Check the Submission section of the item description:
      - CSV exports, data dumps, JSON/TXT reports must be generated and saved into `answers/<ID>/evidence/`.
-     - *Golden Rule*: Generate data exports and reports directly via backend scripts or API calls, ensuring exact row counts, byte sizes, and BOM/CRLF standards.
+     - Generate logs/API-only reports through scripts or API calls. When the scenario requires a browser export,
+       download through the actual control and check its bytes; do not substitute a file serialized from source.
+       Bind the structured summary and CSV to the same replay report, including row order and BOM/CRLF.
      - For UI screenshots, verify controls (e.g. export buttons, new columns) are clearly visible.
 3. **Diff Hygiene (J3)**:
    - Verify `git diff`: ensure zero leftover debug statements (`console.log`, `print`, temporary stubs), no unrelated file touches, and no formatting churn.

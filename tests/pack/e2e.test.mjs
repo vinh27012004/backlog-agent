@@ -227,6 +227,7 @@ test('prepare and play items in worktrees end to end', { skip: !hasPlayer, timeo
       await assert.rejects(sub.call('report_progress', { event: { type: 'BACKLOG_STATUS', backlogId: 'TASK-02', status: 'FAILED', summary: 'x' } }), /NOT_CONFIGURED/);
       assert.equal((await sub.call('read_item', { backlogItemKey: 'TASK-02' })).untrusted, true);
       assert.equal((await sub.call('worktree', { action: 'status', backlogItemKey: 'TASK-02' })).exists, true);
+      assert.deepEqual((await sub.call('item_dependency', { action: 'status', backlogItemKey: 'TASK-02' })).dependencies, []);
       writeFileSync(join(wt2.evidenceDir, 'shared-runtime.log'), 'standalone fixture runtime mismatch\n');
       const shared = await sub.call('worker_checkpoint', { backlogItemKey: 'TASK-02', phase: 'shared_failure', failure: {
         summary: 'A runtime check failed independently of this item', failingTests: ['runtime fixture check'], evidence: ['evidence/shared-runtime.log']

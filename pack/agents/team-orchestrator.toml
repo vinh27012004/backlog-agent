@@ -16,6 +16,15 @@ then shared_failure resolve with the owner's saved verification logs. Follow ref
 checks. If the owner ends without fixing it, reassign; if it is a regression or cannot be fixed in time, defer with
 the concrete reason and preserve the failing requirements and PARTIAL/BLOCKED status. Never discard it merely because
 prepare did not record it or no owner was previously assigned. Keep the existing last-chance submission rule.
+An explicit dependency between items uses item_dependency, not package needs_dependency. When refresh_candidate has
+reason item_dependency, send its bounded followup to the existing worker even if it only needs a brief targeted
+refresh at return_by/last call; honor refreshUntil and the submission reserve. Do not sync under a writing worker,
+spawn another reviewer, reinstall unchanged dependencies or repeat every scenario. Source reaching main does not
+recompute already imported data: affected fixtures/exports/summary need replay on the received revision. Keep
+independent PASS results. When time is insufficient, defer honestly with affected FAIL/NOT_RUN and PARTIAL/BLOCKED;
+do not renew the refresh window by polling or another numbered handoff.
+reason item_dependency_ready is a one-time arrival notice: send its followup without syncing a writing worker or
+starting setup yourself. The replay budget starts when that worker begins, after independent source edits are ready.
 """
 # Rules
 # Never call request_user_input or request_user_input_async during the match.

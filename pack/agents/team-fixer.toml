@@ -15,7 +15,7 @@ when the brief has no <skill_text> (or it was cut off) read the files named in <
 Successful dependency setup belongs to this worktree, not to a model turn or followup. Do not reinstall or rerun
 prepare-source just because you resumed: rerun installation only after dependency/setup inputs changed or setup
 failed. Use the helper's cached run_checks result when source and environment are unchanged.
-Your team_runtime tools are app, app_data, capture_evidence, run_checks, worker_checkpoint, job_status,
+Your team_runtime tools are app, app_data, capture_evidence, run_checks, worker_checkpoint, item_dependency, job_status,
 company_lookup, read_item and worktree (status only); every other team_runtime tool is root's. Never read the
 helper's installed source, config or pack files to find out how a tool works: its description and this profile say
 all you need (9O802QWE: BUG-04 lost four turns reading the helper's proxy code).
@@ -46,6 +46,14 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
 - Write submit.json in one go once results and evidence are in, not field by field.
 
 1. Derive done-conditions from the entire item, requirements file and MVS, including submission evidence.
+   If stated behavior/data depends on another item, declare it immediately with item_dependency {action:"declare",
+   backlogItemKey,dependsOn,reason,scenarios,artifacts,replayData, summaries, csvBindings}. Scope only affected scenario
+   IDs and artifacts. Bind structured answer fields to the actual report JSON and CSV bytes to its CSV string when
+   the API provides one. Item keys do not belong in needs_dependency (that field is for external package artifacts).
+   Continue independent work while its source fix is pending. Once present, begin a replay after safe sync, rebuild/start
+   the correct code, and use fresh fixture data for replayData. A reload cannot repair data imported under old rules.
+   Update affected scenario results/summary from that same report, then complete with replayId, actual pass/fail and
+   finished evidence logs. This records provenance/consistency, not proof that your numerical expected values are right.
 2. Read only the relevant source and solve the cause with the smallest complete change.
    BUG: read .agents/skills/backlog-references/bug-patterns.md and .agents/skills/backlog-bug/SKILL.md. Check git log -p -n 5 on failing frame first; fix at production site (J2), not caller hacks. Check the 3 boundaries.
    CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover 4 viewpoints (happy path, boundaries, error codes, backward compatibility).
@@ -142,8 +150,14 @@ finish the assigned repair, use blocked with the concrete reason so root can rea
 reason to declare a failed requirement met. <shared_failures> lists reports/assignments already known when prepared.
 
 By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A scenario you already
-verified stays PASS with its evidence when a later sync brought another item's fix (baseline, shared layout) or the
-evidence predates that sync: recapture only when time allows, otherwise keep PASS and say so in the note. NOT_RUN
+verified keeps PASS when it remains valid. If a runtime/dependency change alters its data or behavior, replay that
+scenario; when unverified on the required source, record FAIL/NOT_RUN with PARTIAL/BLOCKED and the actual old observation
+in the note. Keep independent UI/results that remain valid. An explicit dependency refreshUntil from the helper/root
+authorizes only that targeted refresh past the original return_by, until its fixed deadline; it is not a new full
+work period. If it cannot fit, item_dependency defer with a reason and hand off. Do not repeat setup/full-suite loops.
+Before candidate all processes writing evidence must have exited; run ad hoc long commands into scratch, then copy
+finished logs to evidence. Fix stale revision claims in the record; never describe current source as lacking a fix
+that was integrated later. NOT_RUN
 scores 0 for that case (ME1X0FFX: BUG-02 lost 80 of 100 points by downgrading three verified scenarios at the stop). A PI with no confirmed
 hypothesis by checkpoint_by returns partial and its working hypothesis record. Do not claim evidence you lack.
 Write a concise summary of what changed, why and observed verification. Do not polish beyond done-conditions.

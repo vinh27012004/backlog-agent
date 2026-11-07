@@ -58,6 +58,14 @@ followup_task to that worker, then call worker_checkpoint resume {backlogItemKey
 Never sync under a writing worker; a sync conflict leaves the worktree intact, return it to the
 worker with the error. Never sync only to pick up another item's fix.
 
+Explicit item dependencies have a scoped refresh protocol. For refresh_candidate reason item_dependency_ready,
+send its one-time arrival notice to the existing worker; no root sync under writes. For reason item_dependency,
+send the returned followup and refreshUntil: this authorizes only affected fixture/tests/exports past the original
+return_by, with a fixed budget and time reserved for submission. Reuse valid setup/builds and keep independent
+PASS results. Do not add a reviewer or repeat the entire item. A source fix does not repair old imported data;
+the worker must replay from fresh data when required and bind summary/download to that report. If it cannot fit,
+defer with the actual affected FAIL/NOT_RUN and PARTIAL/BLOCKED; polling or another handoff does not extend the budget.
+
 ## Publish
 PI and answer-only items: the helper publishes the handoff itself the moment the worker checkpoints candidate, so
 their publish_item never reaches you unless that automatic publish failed (event AUTO_PUBLISH_FAILED or a failed
@@ -73,6 +81,8 @@ On failure act on code/hint, then call publish_item again: successful steps/rece
 - BASELINE_PENDING: the baseline owner has not put its fix for the tests that already fail in the issued code on main;
   graders run this item's suite on its own commit. Do nothing: the helper lands the fix, syncs the yielded worktree
   and then offers refresh_candidate (reason baseline_fix): send its `followup` text as the one followup_task.
+- DEPENDENCY_REPLAY_REQUIRED: follow the explicit item dependency's scoped refresh, or record a justified deferral
+  with PARTIAL/BLOCKED and affected FAIL/NOT_RUN. Do not relabel old fixture data as current to get past the error.
 A worker that returns without a fix-result gets one followup to write it and checkpoint candidate. Never hold an
 item's publish yourself to wait for another item; the helper holds the ones that must wait (BASELINE_PENDING). Do not call git, edit main, kill arbitrary processes or delete helper state
 by hand. After SUBMITTED, worktree remove stops the app; locked leftover folders may remain.

@@ -229,6 +229,36 @@ PARTIAL. Luồng mới tách báo cáo trong GAME khỏi baseline lịch sử, k
   Luật cơ hội cuối vẫn áp dụng, nộp kết quả quan sát được và giữ PARTIAL/BLOCKED khi điều kiện đề chưa đạt.
 - Luồng baseline PREPARE dùng cơ chế cũ; thư mục đóng băng riêng của nó là `.team-work/baseline/<owner>/prepare/`.
 
+## Dependency giữa item và replay dữ liệu có hạn (07/11, sau CR-07/OMZJW0S0)
+
+CR-07 nộp source đã có BUG-11, nhưng CSV/summary vẫn từ lượt import trước bản sửa; test tự viết còn có expected
+Nguyên liệu sai. Cơ chế commit/sync chỉ biết file không nhận ra tác động parser/rules tới report của item khác.
+
+- Worker khai `item_dependency declare` ngay khi biết quan hệ, chỉ rõ scenarios/artifacts và binding report–summary–CSV.
+  Quan hệ lưu ở `ji.itemDependencies`, tách khỏi `needs_dependency` dành cho package/artifact. Không tự nối mọi item
+  hoặc suy ra dependency chỉ vì thấy một ID trong văn bản. Chặn cycle trước khi ghi.
+- Khi item nguồn lên main, `refresh_candidate {reason:item_dependency_ready}` thông báo một lần; worker tiếp tục
+  phần độc lập, sync qua checkpoint an toàn khi sẵn sàng. Không cài lại package, tự sync khi worker đang ghi hay thêm
+  agent review. Cửa sổ mở khi helper giao lượt refresh có hạn hoặc worker gọi `begin`; thông báo sớm chưa mở cửa sổ.
+  `begin` ghi revision/source/environment của lượt replay.
+- Worker rebuild/start đúng bản, chạy lại pipeline trên dữ liệu mới khi đề yêu cầu bắt đầu rỗng; reload không sửa
+  transaction/split đã lưu sai. Chạy kiểm tra bị ảnh hưởng, tải CSV thật, cập nhật summary từ cùng report rồi `complete`.
+  Helper kiểm mtime/hash, projection summary theo đúng thứ tự, bytes CSV, app snapshot nếu có và fingerprint source/env;
+  thay đổi sau complete làm receipt stale. Artifact ngoài capture_evidence cũng có provenance. Receipt không phải
+  oracle xác định số đúng; skill money yêu cầu suy ra expected độc lập và kiểm bảo toàn tổng.
+- Checkpoint có dependency chưa xác minh chỉ tự yêu cầu build; worker chạy test fixture bị ảnh hưởng. Không tự chạy
+  lại typecheck/full suite cho lượt refresh này. Nếu có bản sửa baseline riêng thì vẫn tuân theo yêu cầu kiểm suite;
+  kết quả suite từ source cũ chỉ là lịch sử. Checkpoint không có dependency giữ luồng checks hiện tại.
+- Giữ publish của consumer cho tới receipt hợp lệ hoặc defer có lý do với affected FAIL/NOT_RUN và PARTIAL/BLOCKED.
+  Phần UI/kiểm tra độc lập còn đúng vẫn PASS. Source tới main, một handoff mới hay merge khác file không tự xác minh dữ liệu.
+- Mặc định 180 s cho một lượt refresh có mục tiêu (khai 15–300 s theo chi phí), tối đa đến thời điểm còn 60 s submit;
+  nếu chỉ còn <=75 s thì không mở lượt mới. Cửa sổ không trượt theo polling/retry/hoàn thành bớt dependency. Cùng bộ
+  revision chia sẻ cửa sổ; revision nguồn thực sự mới có thể có lượt mới nhưng vẫn trong hạn trận.
+  Khi cần, followup cho phép chỉ phần refresh này qua return_by cũ; hết hạn thì defer và nộp đúng trạng thái quan sát.
+- Candidate đợi job/checks còn đang ghi evidence. Lệnh ad hoc dài ghi scratch rồi chép log đã đóng vào evidence;
+  tránh candidate hash đổi khi full-suite vẫn chạy. Verification helper có fingerprint cũ/không biết chuyển thành
+  NOT_RUN cho source hiện tại, giữ PASS/FAIL lịch sử trong note; không tự chèn PASS cũ cạnh kết quả direct FAIL mới.
+
 ## Spawn fixer không chờ setup, TASK chỉ trả lời không cài gì (04/11, sau EIOR38SI)
 
 EIOR38SI: helper thấy → fixer bắt đầu trung bình 1m24s. Ngoài đợt đầu (36 s chờ root xử lý START_GAME), phần lớn là

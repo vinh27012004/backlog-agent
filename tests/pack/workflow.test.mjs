@@ -1,7 +1,7 @@
 // Kiểm workflow với git/worktree thật; không gọi LLM hay mạng ngoài.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
@@ -347,8 +347,8 @@ test('in the last minutes the worker is stopped and the candidate published firs
   f.ji.workerState = 'writing';
   const stop = f.rt.workflow.actions().nextActions[0];
   assert.equal(stop.action, 'stop_worker');
-  // ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt xuống NOT_RUN khi bị dừng. Lời dừng do helper soạn, giữ PASS đã kiểm.
-  assert.match(stop.followup, /Keep every scenario you already verified as PASS/);
+  // Giữ PASS độc lập; dependency đổi dữ liệu phải replay, không giữ PASS cũ vô điều kiện (CR-07/OMZJW0S0).
+  assert.match(stop.followup, /Keep independent verified scenarios PASS/);
 });
 
 // ME1X0FFX: candidate {result} ghi BUG-02-fixer-1.json rồi trả problems; root thấy publish_item, publish hỏng và nhắn
@@ -431,7 +431,7 @@ test('worker_checkpoint candidate {result} writes the fix-result from the worker
   writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'value.test.js'), 'it("value", () => {});\n');
   const checks = join(f.rt.session.paths.teamWork, 'items', f.key, 'checks.json');
   mkdirSync(dirname(checks), { recursive: true });
-  writeFileSync(checks, JSON.stringify({ runId: 'r1', key: f.key, state: 'done', matchRoot: f.wt.matchRoot, results: [
+  writeFileSync(checks, JSON.stringify({ runId: 'r1', key: f.key, state: 'done', matchRoot: f.wt.matchRoot, snapshot: await f.rt.workflow.snapshot(f.key), results: [
     { name: 'typecheck', command: 'pnpm run typecheck', state: 'passed', exitCode: 0, log: 'evidence/typecheck.log' },
     { name: 'test', command: 'pnpm test', state: 'failed', exitCode: 1, log: 'evidence/full-suite.log', counts: { total: 3, passed: 2, failed: 1 }, failing: ['tests/old.test.js > old'] }] }));
   f.rt.journal.data.preparation.baseline = { failing: ['tests/old.test.js > old'] };
@@ -1205,4 +1205,230 @@ test('late shared repairs do not hold answer-only items or require a prepare-tim
   f.rt.answerOnlyItem = key => key === 'BUG-02';
   assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
   assert.throws(() => f.report(), /active code item/);
+});
+
+// CR-07: dependency đổi pipeline; output và summary phải thuộc cùng một replay, không chỉ cùng tên file.
+function dependencyFixture() {
+  const f = fixture('CR-01', false, { 'src/import-pipeline.js': 'export const sign = 1;\n' });
+  const depKey = 'BUG-02', dep = f.rt.journal.item(depKey);
+  dep.startedAt = new Date().toISOString(); f.ji.workerThread = '/root/cr01';
+  f.rt.gm.view.items.push({ key: depKey, title: 'Import sign', raw: { descriptionMd: 'Fix import sign.' } });
+  const template = { status: 'NOT_STARTED', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }, { id: 'TC-UI', result: 'NOT_RUN', evidence: [] }] };
+  writeFileSync(join(f.rt.session.paths.teamWork, 'items', f.key, 'template.json'), JSON.stringify(template));
+  const answer = { status: 'PARTIAL', testResults: [{ id: 'TC-1', result: 'FAIL', evidence: ['evidence/audit.csv'] }, { id: 'TC-UI', result: 'PASS', evidence: [] }],
+    auditSummary: { month: '2025-10', net: 50, rows: [{ name: 'A', value: 30 }, { name: 'B', value: 20 }] } };
+  const saveAnswer = () => writeFileSync(join(f.dir, 'submit.json'), JSON.stringify(answer)); saveAnswer();
+  const api = args => f.rt.proxyCall('item_dependency', { backlogItemKey: f.key, ...args });
+  const declare = () => api({ action: 'declare', dependsOn: depKey, scenarios: ['TC-1'], artifacts: ['evidence/audit.csv'],
+    summaries: [{ answerField: 'auditSummary', reportFile: 'evidence/report.json', reportPointer: '' }],
+    csvBindings: [{ artifact: 'evidence/audit.csv', reportFile: 'evidence/report.json', reportPointer: '/csv' }],
+    replayData: true, reason: 'Import correction changes the persisted fixture and exported report', refreshSeconds: 180 });
+  const land = () => {
+    writeFileSync(join(f.checkout, 'M1', 'src', 'import-pipeline.js'), 'export const sign = -1;\n');
+    sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'BUG-02: correct import sign'], f.checkout);
+    dep.integratedRevision = sh('git', ['rev-parse', 'HEAD'], f.checkout); f.rt.journal.save();
+  };
+  const report = { month: '2025-10', net: -50, rows: [{ id: 'a', name: 'A', value: -30 }, { id: 'b', name: 'B', value: -20 }], csv: '\uFEFFA;Value\r\nA;-30\r\nB;-20\r\n' };
+  const outputs = () => {
+    writeFileSync(join(f.dir, 'evidence', 'report.json'), JSON.stringify(report));
+    writeFileSync(join(f.dir, 'evidence', 'audit.csv'), report.csv);
+    writeFileSync(join(f.dir, 'evidence', 'replay.log'), 'Completed actual fixture replay\n');
+    answer.auditSummary = { month: report.month, net: report.net, rows: report.rows.map(({name,value})=>({name,value})) };
+    answer.status = 'DONE'; answer.testResults[0].result = 'PASS'; saveAnswer();
+  };
+  const complete = replayId => api({ action: 'complete', dependsOn: depKey, replayId, result: 'pass', evidence: ['evidence/replay.log'] });
+  return { ...f, depKey, dep, api, declare, land, report, outputs, complete, answer, saveAnswer };
+}
+
+test('item dependencies are explicit, reject cycles, and do not install or sync under writing workers', async () => {
+  const f = dependencyFixture(); f.ji.workerState = 'writing';
+  const before = f.ji.worktreeBase;
+  const a = await f.declare(), b = await f.declare();
+  assert.equal(a.requiredRevision, null); assert.equal(b.duplicate, true);
+  assert.equal(f.ji.worktreeBase, before); assert.equal(f.rt.jobs.jobs.size, 0);
+  await assert.rejects(f.api({ action: 'begin', dependsOn: f.depKey }), /DEPENDENCY_NOT_SYNCED/);
+  await assert.rejects(f.api({ action: 'declare', dependsOn: f.key, scenarios: ['TC-1'], reason: 'self' }), /another visible/);
+  f.dep.itemDependencies = { [f.key]: { dependsOn: f.key } };
+  await assert.rejects(f.declare(), /DEPENDENCY_CYCLE/); delete f.dep.itemDependencies;
+  f.land();
+  await assert.rejects(f.api({ action: 'begin', dependsOn: f.depKey }), /DEPENDENCY_NOT_SYNCED/);
+  assert.equal(f.ji.worktreeBase, before);
+  assert.equal(f.rt.jobs.jobs.size, 0, 'no automatic package setup or new agent');
+});
+
+test('dependency evidence checkpoint requests only build while retaining the affected replay requirement', async () => {
+  const f = dependencyFixture(); await f.declare(); f.land();
+  const calls = [];
+  f.rt.runChecks = async args => { calls.push(args); return { state: 'running', runId: 'scoped-build' }; };
+  const res = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(res.writesAllowed, true, JSON.stringify(res));
+  assert.deepEqual(calls, [{ backlogItemKey: f.key, matchRoot: f.wt.matchRoot, waitSeconds: 0, checks: ['build'] }]);
+  assert.equal(f.ji.worktreeBase, f.dep.integratedRevision);
+  assert.match(res.hint, /affected fixture checks/);
+  assert.match(res.hint, /full-suite results are historical/);
+  assert.equal(f.rt.workflow.dependencies.pending(f.key).length, 1, 'a build cannot certify a data replay');
+  assert.equal(f.rt.jobs.jobs.size, 0, 'no package setup or additional job outside requested build');
+});
+
+test('dependency replay binds source, actual CSV bytes, ordered summary and external provenance', async () => {
+  const f = dependencyFixture(); await f.declare(); f.land();
+  await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+  const replay = await f.api({ action: 'begin', dependsOn: f.depKey });
+  assert.equal(replay.replayData, true);
+  f.outputs();
+  const independent = structuredClone(f.answer.testResults[1]);
+  const complete = await f.complete(replay.replayId);
+  assert.equal(complete.verified, true);
+  assert.equal((await f.complete(replay.replayId)).replay, true, 'lost complete responses do not force another fixture replay');
+  assert.deepEqual(await f.rt.workflow.dependencies.problems(f.key), []);
+  assert.deepEqual(f.answer.testResults[1], independent);
+  assert.deepEqual(await evidenceProblems(f.rt.session.paths.teamWork, f.key, f.wt.matchRoot, await f.rt.workflow.snapshot(f.key)), []);
+  f.answer.engineeringRecord = { analysis: 'Imported using the revision now present; other UI observations are unchanged' }; f.saveAnswer();
+  assert.deepEqual(await f.rt.workflow.dependencies.problems(f.key), [], 'independent notes do not force another replay');
+  const value = JSON.parse(readFileSync(join(f.rt.session.paths.teamWork, 'evidence', `${f.key}.json`), 'utf8'));
+  assert.ok(value.entries.every(e => e.attemptId === replay.replayId && e.source === replay.snapshot.source));
+  writeFileSync(join(f.dir, 'evidence', 'audit.csv'), 'overwritten');
+  assert.match((await f.rt.workflow.dependencies.problems(f.key)).join(), /fresh artifacts\/summary/);
+});
+
+test('old fixture artifacts, stale summary, reordered rows and byte-mismatched CSV cannot complete a replay', async () => {
+  const f = dependencyFixture(); await f.declare(); f.land(); await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+  const { replayId } = await f.api({ action: 'begin', dependsOn: f.depKey }); f.outputs();
+  const csv = join(f.dir, 'evidence', 'audit.csv'); utimesSync(csv, new Date(0), new Date(0));
+  await assert.rejects(f.complete(replayId), /DEPENDENCY_ARTIFACT_STALE/);
+  f.outputs(); f.answer.auditSummary.net = 50; f.saveAnswer();
+  await assert.rejects(f.complete(replayId), /DEPENDENCY_OUTPUT_MISMATCH.*auditSummary/);
+  f.outputs(); f.answer.auditSummary.rows.reverse(); f.saveAnswer();
+  await assert.rejects(f.complete(replayId), /DEPENDENCY_OUTPUT_MISMATCH/);
+  f.outputs(); writeFileSync(csv, f.report.csv.replaceAll('\r\n', '\n'));
+  await assert.rejects(f.complete(replayId), /CSV bytes/);
+  f.outputs(); assert.equal((await f.complete(replayId)).verified, true);
+});
+
+test('source or environment changes during dependency replay require a new run', async () => {
+  const f = dependencyFixture(); await f.declare(); f.land(); await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+  let replay = await f.api({ action: 'begin', dependsOn: f.depKey }); f.outputs();
+  writeFileSync(join(f.wt.matchRoot, '.env'), 'LOCAL_REVISION=new\n');
+  await assert.rejects(f.complete(replay.replayId), /DEPENDENCY_REPLAY_STALE/);
+  replay = await f.api({ action: 'begin', dependsOn: f.depKey }); f.outputs();
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=3;\n');
+  await assert.rejects(f.complete(replay.replayId), /DEPENDENCY_REPLAY_STALE/);
+});
+
+test('a ready dependency gets one bounded refresh before stop, with submission reserve and no polling extension', async () => {
+  const f = dependencyFixture(); await f.declare(); f.land();
+  f.result(1, fix({ status: 'partial' })); f.ji.checkpoint = 'candidate';
+  f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: 'started', minutesLeft: 4, deadlineMinutes: 20 }];
+  const first = f.rt.workflow.actions().nextActions.find(a=>a.key===f.key);
+  assert.equal(first.reason, 'item_dependency'); assert.match(first.followup, /fresh fixture data/);
+  const until = f.ji.dependencyRefreshUntil;
+  assert.ok(Date.parse(until) <= Date.now()+180_000 && Date.parse(until) > Date.now()+170_000);
+  f.rt.workflow.actions(); assert.equal(f.ji.dependencyRefreshUntil, until);
+  f.ji.dependencyRefreshUntil = new Date(Date.now()-1000).toISOString();
+  const expired = f.rt.workflow.actions().nextActions.find(a=>a.key===f.key);
+  assert.equal(expired.action, 'publish_item');
+  await f.api({ action: 'defer', dependsOn: f.depKey, reason: 'Refresh budget exhausted; data scenario remains unverified' });
+  assert.deepEqual(await f.rt.workflow.dependencies.problems(f.key), []);
+  f.answer.status = 'DONE'; f.answer.testResults[0].result='PASS'; f.saveAnswer();
+  assert.ok((await f.rt.workflow.dependencies.problems(f.key)).length, 'deferral cannot turn old failed/unverified data into PASS');
+});
+
+test('pending dependencies hold only their consumer and reject a false current PASS at publish', async () => {
+  const f = dependencyFixture(); await f.declare();
+  f.result(1, fix({ status: 'partial' })); f.ji.checkpoint='candidate';
+  assert.equal(f.rt.workflow.actions().nextActions.filter(a=>a.key===f.key && a.action==='publish_item').length, 0);
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey:f.key, fixResultFile:join(f.results, `${f.key}-fixer-1.json`) }), /DEPENDENCY_REPLAY_REQUIRED/);
+  f.answer.status='DONE'; f.answer.testResults[0].result='PASS'; f.saveAnswer();
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey:f.key, fixResultFile:join(f.results, `${f.key}-fixer-1.json`), lastChance:{reason:'hard deadline'} }), /DEPENDENCY_REPLAY_REQUIRED/);
+  assert.deepEqual(f.rt.workflow.dependencies.records(f.depKey), [], 'the source item does not wait on its consumer');
+});
+
+test('handoff waits for a known evidence writer and stale helper checks never contribute current PASS', async () => {
+  const f = fixture(); f.ji.workerState='writing';
+  const file = join(f.rt.session.paths.teamWork,'items',f.key,'checks.json'); mkdirSync(dirname(file),{recursive:true});
+  writeFileSync(file,JSON.stringify({state:'running',matchRoot:f.wt.matchRoot}));
+  f.result(1);
+  let res=await f.rt.workerCheckpoint({backlogItemKey:f.key,phase:'candidate'});
+  assert.equal(res.handedOff,false); assert.match(res.problems.join(),/still writing evidence/);
+  const snapshot=await f.rt.workflow.snapshot(f.key);
+  writeFileSync(file,JSON.stringify({state:'done',matchRoot:f.wt.matchRoot,snapshot,results:[{name:'test',state:'passed',command:'runner',log:'evidence/full-suite.log'}]}));
+  writeFileSync(join(f.wt.matchRoot,'.env'),'LOCAL_REVISION=changed\n');
+  const composed=await f.rt.workflow.composeResult(f.key,{status:'partial',summary:'Actual tests need a new run'});
+  const value=JSON.parse(readFileSync(composed.file,'utf8'));
+  assert.equal(value.verification[0].result,'not_run'); assert.match(value.verification[0].note,/historical result pass/);
+});
+
+test('dependency arrival notifies a writing worker once and starts its budget only at replay begin', async () => {
+  const f=dependencyFixture(); await f.declare(); f.ji.workerState='writing';
+  assert.equal(f.rt.workflow.actions().nextActions.length,0);
+  f.land();
+  const action=f.rt.workflow.actions().nextActions.find(a=>a.key===f.key);
+  assert.equal(action.reason,'item_dependency_ready');
+  assert.equal(f.ji.dependencyRefreshUntil,undefined);
+  assert.equal(f.rt.workflow.actions().nextActions.length,0,'no repeated root followup on polling');
+  assert.notEqual(f.ji.worktreeBase,f.dep.integratedRevision,'notification does not mutate the writing worktree');
+  f.ji.workerState='yielded'; await f.rt.worktree({action:'sync',backlogItemKey:f.key});
+  const replay=await f.api({action:'begin',dependsOn:f.depKey});
+  assert.ok(replay.deadline); f.outputs(); await f.complete(replay.replayId);
+});
+
+test('completing one of multiple dependencies does not extend their shared refresh window', async () => {
+  const f=dependencyFixture(); await f.declare(); f.land();
+  f.rt.journal.item('BUG-03').integratedRevision=f.dep.integratedRevision;
+  f.rt.gm.view.items.push({key:'BUG-03',title:'Other pipeline fix',raw:{}});
+  await f.api({action:'declare',dependsOn:'BUG-03',scenarios:['TC-1'],artifacts:['evidence/audit.csv'],reason:'Second fix affects the same replay',replayData:true});
+  await f.rt.worktree({action:'sync',backlogItemKey:f.key});
+  const replay=await f.api({action:'begin',dependsOn:f.depKey}), until=replay.deadline;
+  f.outputs(); await f.complete(replay.replayId);
+  assert.equal(f.rt.workflow.dependencies.opportunity(f.key,f.rt.itemRows()[0]).until,until);
+});
+
+test('dependency completion refuses a managed app still serving the old build', async () => {
+  const f=dependencyFixture(); await f.declare(); f.land(); await f.rt.worktree({action:'sync',backlogItemKey:f.key});
+  const replay=await f.api({action:'begin',dependsOn:f.depKey}); f.outputs();
+  const path=join(f.root,'team-sdlc-pack','local','apps',`${f.key}.json`); mkdirSync(dirname(path),{recursive:true});
+  writeFileSync(path,JSON.stringify({pid:process.pid,matchRoot:f.wt.matchRoot,snapshot:{...replay.snapshot,source:'old build'}}));
+  await assert.rejects(f.complete(replay.replayId),/DEPENDENCY_APP_STALE/);
+  writeFileSync(path,JSON.stringify({pid:process.pid,matchRoot:f.wt.matchRoot,snapshot:replay.snapshot}));
+  assert.equal((await f.complete(replay.replayId)).verified,true);
+});
+
+test('overlapping fixture dependencies wait for all fixes and detect a related revision changing mid-replay', async () => {
+  const f=dependencyFixture(); await f.declare(); f.land();
+  const other=f.rt.journal.item('BUG-03'); f.rt.gm.view.items.push({key:'BUG-03',title:'Allocation fix',raw:{}});
+  await f.api({action:'declare',dependsOn:'BUG-03',scenarios:['TC-1'],artifacts:['evidence/audit.csv'],reason:'Allocation also changes this fixture',replayData:true});
+  assert.deepEqual(f.rt.workflow.dependencies.ready(f.key),[]);
+  assert.equal(f.rt.workflow.dependencies.opportunity(f.key,f.rt.itemRows()[0]),null,'do not spend the replay budget waiting for another fix');
+  await f.rt.worktree({action:'sync',backlogItemKey:f.key});
+  await assert.rejects(f.api({action:'begin',dependsOn:f.depKey}),/DEPENDENCY_NOT_SYNCED/);
+  other.integratedRevision=f.dep.integratedRevision;
+  const replay=await f.api({action:'begin',dependsOn:f.depKey}); f.outputs();
+  writeFileSync(join(f.checkout,'M1','src','import-pipeline.js'),'export const sign=-2;\n');
+  sh('git',['add','M1'],f.checkout); sh('git',['commit','-q','-m','another dependency revision'],f.checkout);
+  other.integratedRevision=sh('git',['rev-parse','HEAD'],f.checkout);
+  await assert.rejects(f.complete(replay.replayId),/DEPENDENCY_REPLAY_STALE/);
+});
+
+test('dependency summary and CSV bindings cannot select different replay reports or escaped paths', async () => {
+  const f=dependencyFixture();
+  const fields={action:'declare',dependsOn:f.depKey,scenarios:['TC-1'],artifacts:['evidence/audit.csv'],reason:'Same report required',
+    summaries:[{answerField:'auditSummary',reportFile:'evidence/current.json',reportPointer:''}]};
+  await assert.rejects(f.api({...fields,csvBindings:[{artifact:'evidence/audit.csv',reportFile:'evidence/other.json',reportPointer:'/csv'}]}),/same replay report/);
+  await assert.rejects(f.api({...fields,summaries:[{answerField:'auditSummary',reportFile:'evidence/../../other.json',reportPointer:''}]}),/PATH_NOT_ALLOWED/);
+  assert.deepEqual(f.rt.workflow.dependencies.records(f.key),[]);
+});
+
+test('dependency replay also supports code TASK contracts without fixed testResults rows', async () => {
+  const f=dependencyFixture();
+  writeFileSync(join(f.rt.session.paths.teamWork,'items',f.key,'template.json'),JSON.stringify({status:'NOT_STARTED',auditSummary:{}}));
+  await f.declare();
+  delete f.answer.testResults; f.answer.status='PARTIAL'; f.saveAnswer();
+  await f.api({action:'defer',dependsOn:f.depKey,reason:'Required code not available yet; acceptance check unverified'});
+  assert.deepEqual(await f.rt.workflow.dependencies.problems(f.key),[]);
+  await f.declare(); // Same declaration retains the deferral until begin on a new received revision.
+  f.land(); await f.rt.worktree({action:'sync',backlogItemKey:f.key});
+  const replay=await f.api({action:'begin',dependsOn:f.depKey});
+  f.answer.testResults=[{id:'TC-1',result:'PASS',evidence:['evidence/audit.csv']}]; f.outputs();
+  delete f.answer.testResults; f.saveAnswer();
+  assert.equal((await f.complete(replay.replayId)).verified,true);
 });

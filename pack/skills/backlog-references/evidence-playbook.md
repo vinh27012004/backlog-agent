@@ -10,9 +10,10 @@ hint as your reply; root gets the sync from the helper and sends a followup to r
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
 outside the checkout. Before-fix evidence keeps its own phase. Final captures become stale when your own files or the
-environment change after capture; runtime changes synced from other items also invalidate them. Stale means
-recapture when time allows, never downgrade: a scenario you verified stays PASS (note that it was captured before the
-sync) unless the synced change alters what it shows. Only syncs limited to
+environment change after capture; runtime changes synced from other items also invalidate them. Keep an independent
+verified scenario PASS when its observed behavior remains valid; a scenario whose required data/pipeline changed
+needs fresh verification. If that cannot fit, retain the old observation in its note and report the affected current
+scenario FAIL/NOT_RUN with PARTIAL/BLOCKED. Only syncs limited to
 tests and non-runtime documentation keep them valid. A manifest proves
 provenance, not correct UI.
 
@@ -141,6 +142,13 @@ cause it. Write in the scenario note and `engineeringRecord` that the failure wa
 lists it in `routed`).
 
 ## 6. Scenario data
+If another item's fix changes parsing, allocation, migrations or derived data used by this fixture, declare the
+affected item dependency early. After safe sync and rebuild/start of the correct source, begin its replay and use
+fresh fixture data when the scenario requires starting empty. Loading a page with old stored transactions does not
+re-run import/rules. Generate the actual download and the structured submission summary from the same report/run;
+item_dependency summary/CSV bindings check fields, row order and exact CSV bytes. They do not prove the expected
+figures: derive those independently from the current standard. Complete after logs/downloads have finished writing.
+
 Organizer seeds wipe and recreate data (Practice #2: CR-01's seed deletes every invoice; a misclick voided BUG-02's
 invoice and the later scenarios ran on damaged data). An item worktree's app normally has its own database, migrated
 and seeded when the worktree was set up, so other items never see or change your data; `app_data lock` then returns

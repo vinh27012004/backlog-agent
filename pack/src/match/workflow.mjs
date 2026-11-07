@@ -10,6 +10,7 @@ import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
 import { SharedFailures } from './shared-failures.mjs';
+import { ItemDependencies } from './item-dependencies.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
@@ -49,7 +50,7 @@ const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUT
 const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
 // Lời root gửi worker ở stop_worker (hết giờ / cơ hội cuối). ME1X0FFX: BUG-02 đã chạy đạt cả 3 kịch bản UI rồi, khi bị
 // dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
-const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
+const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep independent verified scenarios PASS when they remain valid. A dependency/runtime change affecting their data requires a fresh replay: without it record the affected scenarios FAIL/NOT_RUN, PARTIAL/BLOCKED and a concrete reason. Update stale revision claims; do not label an old import/report as current. Settle processes still writing evidence, or keep unfinished logs in scratch. Do not start unrelated checks or captures.";
 // Lời root gửi worker khi helper vừa sync bản sửa baseline vào worktree đã bàn giao của nó.
 const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. Run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json, then call worker_checkpoint candidate with your updated result (or write the next numbered fix-result yourself). Change nothing else.`;
 // PI chỉ báo cáo: brief thay mọi skill (CA3WKX60: fixer PI-01 đọc 42K ký tự skill trong 22 s, rồi tự kéo log, tự chép
@@ -131,7 +132,7 @@ export function environmentText(setup, mainAppRoot = null) {
 }
 
 export class Workflow {
-  constructor(runtime) { this.rt = runtime; this.publishOwner = null; this.sharedFailures = new SharedFailures(this); }
+  constructor(runtime) { this.rt = runtime; this.publishOwner = null; this.sharedFailures = new SharedFailures(this); this.dependencies = new ItemDependencies(this); }
   item(key) {
     this.rt.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -352,6 +353,7 @@ export class Workflow {
   async handoffCheck(key) {
     const r = this.rt, ji = this.item(key), problems = [], warnings = [];
     const paths = this.paths(key);
+    problems.push(...this.writerProblems(key));
     const answer = answerCheck(paths.matchRoot, key, r.itemTemplate(key), r.itemSchema(key), r.itemMvs(key), r.itemEvidence(key));
     for (const p of answer.problems) (BLOCKING_ANSWER.test(p) ? problems : warnings).push(p);
     warnings.push(...answer.warnings);
@@ -379,6 +381,13 @@ export class Workflow {
       if (browser.length) problems.push(`test launches a browser: ${browser.join(', ')}; graders run the whole suite where no browser is installed, so the file errors and the suite exits 1 although no test fails. Test the logic without a browser (render the component or compute the CSS in node/jsdom) and keep browser checks as evidence scripts under answers/${key}/evidence/`);
     }
     return { problems, warnings };
+  }
+  writerProblems(key) {
+    const r = this.rt, out = [];
+    if (readChecks(r.session.paths.teamWork, key)?.state === 'running') out.push('run_checks is still writing evidence: wait for its status before candidate');
+    const writers = [...r.jobs.jobs.values()].filter(j => j.key === key && j.state === 'running' && !['publish_item', 'prepare_item', 'drop_databases'].includes(j.kind));
+    if (writers.length) out.push(`jobs still writing this item: ${writers.map(j => j.id).join(', ')}; wait for completion before candidate`);
+    return out;
   }
   // Test thêm/sửa của item (ngoài answers/) mở trình duyệt, khi bộ test phát ra chưa có file nào làm vậy (bộ test
   // vốn là e2e thì môi trường chấm có trình duyệt).
@@ -411,17 +420,17 @@ export class Workflow {
     const notes = [];
     const checks = readChecks(r.session.paths.teamWork, key);
     if (checks?.state === 'done' && samePath(checks.matchRoot, paths.matchRoot)) {
-      const current = checks.source ? (await this.snapshot(key, paths).catch(() => null))?.source : null;
-      const stale = Boolean(checks.source && current && checks.source !== current);
+      const current = await this.snapshot(key, paths).catch(() => null);
+      const stale = !checks.snapshot || !current || !equal(checks.snapshot, current);
       const baseline = new Set(r.journal.data.preparation?.baseline?.failing ?? []);
       for (const row of verificationRows(checks)) {
         if (verification.some(v => v?.check === row.check)) continue;
         const test = row.check === CHECK_LABEL.test ? checks.results.find(c => c.name === 'test') : null;
         const onlyBaseline = test?.failing?.length && test.failing.every(id => baseline.has(id));
-        verification.push({ ...row, note: [row.note, onlyBaseline ? 'every failing test is an issued baseline failure' : null,
-          stale ? 'ran before later source changes: run_checks again for the final result' : null].filter(Boolean).join('; ') });
+        verification.push({ ...row, ...(stale ? { result: 'not_run' } : {}), note: [row.note, onlyBaseline ? 'every failing test is an issued baseline failure' : null,
+          stale ? `historical result ${row.result}; source/environment snapshot is stale or unrecorded, not current verification` : null].filter(Boolean).join('; ') });
       }
-      if (stale) notes.push('run_checks results predate your last source change: call run_checks again, then candidate');
+      if (stale) notes.push('run_checks results predate or cannot verify the current source/environment; historical outcomes are retained in notes, not as current PASS');
     }
     const value = { status: part.status, summary: part.summary, criteria: part.criteria ?? [], suspects: part.suspects ?? [],
       root_cause: part.root_cause ?? null, hypotheses: part.hypotheses ?? [], changed_files: own.map(f => f.rel).slice(0, 300),
@@ -442,6 +451,10 @@ export class Workflow {
         hint: 'Not handed off: correct the result argument and call worker_checkpoint candidate again (nothing was written).' };
     }
     const { problems, warnings } = await this.handoffCheck(key);
+    const row = this.rt.itemRows().find(x => x.key === key);
+    const pending = this.dependencies.pending(key);
+    const refresh = pending.some(d => this.dependencies.revision(d)) ? this.dependencies.opportunity(key, row) : null;
+    problems.push(...await this.dependencies.problems(key, { partial: !refresh && (lastCallOf(row) || pending.every(d => !this.dependencies.revision(d))) }));
     const environment = await this.sharedFailures.environmentRefresh(key);
     if (environment) problems.unshift(`${environment.id}: environment correction was reported; apply it in this copy, run_checks {force:true}, then candidate with the actual result. Earlier checks do not verify this correction`);
     else {
@@ -452,7 +465,7 @@ export class Workflow {
     }
     if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
     if (caught?.synced) {
-      problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
+      problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Keep independent verified scenarios; replay affected data scenarios whose pipeline changed`);
     } else if (caught?.error) warnings.push(`could not sync ${owner}'s baseline fix into your worktree (${caught.error}); hand off as observed`);
     if (this.baselineWait(key) === 'owner') {
       warnings.push(`the baseline failures are not fixed on main yet: ${owner} lands that fix first. Hand off now as observed; publish waits for the fix, then the helper syncs your worktree and root asks you to rerun the full suite`);
@@ -543,11 +556,15 @@ export class Workflow {
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
-      const checks = await this.startChecks(key);
+      // Dependency dữ liệu chỉ cần build cho replay; test fixture do worker chạy có chọn lọc.
+      const scoped = this.dependencies.pending(key).length > 0;
+      const checks = await this.startChecks(key, scoped ? ['build'] : null);
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
         ...(checks ? { checks } : {}),
         hint: checks
-          ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call run_checks {action: "status", waitSeconds: 110} for its result (fix and run again only on a failure), then app start, which reuses that build, and capture final evidence.${baseline}`
+          ? scoped
+            ? `Helper synced this worktree to main, resumed you and requested run_checks for build only. Call run_checks {action: "status", waitSeconds: 110} for its result, then run the affected fixture checks and scoped data replay within refreshUntil. App start reuses that build. Prior full-suite results are historical until verified on this source.${baseline}`
+            : `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call run_checks {action: "status", waitSeconds: 110} for its result (fix and run again only on a failure), then app start, which reuses that build, and capture final evidence.${baseline}`
           : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}` };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
@@ -556,11 +573,11 @@ export class Workflow {
   // 08OQBPW8: worker chạy run_checks 3–4 lần, có lần trước sync rồi lại sau sync, và chụp evidence trên app tự build
   // trước khi run_checks build lần nữa. Sau sync là source cuối cùng: helper chạy luôn một lần ở đây (không đợi một
   // lượt model), app start chờ build đó rồi dùng lại. Tắt: "autoChecks": false trong runtime.json.
-  async startChecks(key) {
+  async startChecks(key, checks = null) {
     const r = this.rt;
     if (r.runtimeConfig().autoChecks === false || !r.liveWorktree(key)) return null;
     try {
-      const res = await r.runChecks({ backlogItemKey: key, matchRoot: r.wtPaths(key).matchRoot, waitSeconds: 0 });
+      const res = await r.runChecks({ backlogItemKey: key, matchRoot: r.wtPaths(key).matchRoot, waitSeconds: 0, ...(checks ? { checks } : {}) });
       return { state: res.state, runId: res.runId ?? null, ...(res.cached ? { cached: true } : {}) };
     } catch (e) {
       return null;   // stack không có app hay profile: worker tự chạy như trước
@@ -869,6 +886,10 @@ export class Workflow {
     let job = r.jobs.jobs.get(ji.publishJobId);
     if (job?.state === 'running') return r.settleJob(job.id, Math.min(45, waitSeconds) * 1000);
     if (this.publishOwner) fail('PUBLISH_BUSY', `publish ${this.publishOwner} first`);
+    const dependencyRow = r.itemRows().find(x => x.key === key);
+    const refresh = this.dependencies.opportunity(key, dependencyRow);
+    const dependencyProblems = await this.dependencies.problems(key, { partial: Boolean(lastChance) || lastCallOf(dependencyRow) && !refresh });
+    if (dependencyProblems.length) fail('DEPENDENCY_REPLAY_REQUIRED', dependencyProblems.join('; '));
     if (!lastCallOf(r.itemRows().find(x => x.key === key)) && this.sharedFailures.ownerPending(key)) fail('SHARED_FAILURE_PENDING', 'finish your assigned shared repair, or ask root to reassign/defer it with a concrete reason before publishing');
     if (this.baselineWait(key, r.itemRows().find(x => x.key === key))) {
       fail('BASELINE_PENDING', `${this.baselineOwnerFor(key)} is fixing shared/baseline failures: the helper lands that fix, syncs this worktree and then offers refresh_candidate (in the last minutes it publishes as is)`);
@@ -963,6 +984,37 @@ export class Workflow {
       if (r.jobs.jobs.get(ji.publishJobId)?.state === 'running') continue;
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
+      const dependencies = this.dependencies.pending(key);
+      if (dependencies.length) {
+        const due = ji.workerState !== 'writing' || Date.parse(returnBy) <= Date.now() || lastCallOf(row);
+        const ready = this.dependencies.ready(key);
+        if (!due && ready.length && ji.workerThread) {
+          const token = digest(ready.map(d => [d.dependsOn, this.dependencies.revision(d)]).sort());
+          if (ji.dependencyReadyNotified !== token) {
+            add(key, 'refresh_candidate', {}, { reason: 'item_dependency_ready', workerThread: ji.workerThread,
+              followup: `${ready.map(d => d.dependsOn).join(', ')} is now on main. Finish independent source edits, then ready_for_evidence for a safe sync before affected fixture evidence. Use item_dependency begin to start the bounded replay only when ready; it does not reinstall unchanged packages. Do not seed/export old pipeline results. No root sync under your writes.` });
+            ji.dependencyReadyNotified = token; r.journal.save();
+          }
+          held.add(key); continue;
+        }
+        const refresh = due ? this.dependencies.opportunity(key, row) : null;
+        if (refresh) {
+          held.add(key);
+          if (ji.workerState !== 'writing' || ji.dependencyRefreshNotified !== refresh.until) {
+            add(key, 'refresh_candidate', {}, { reason: 'item_dependency', workerThread: ji.workerThread ?? null,
+              refreshUntil: refresh.until, followup: this.dependencies.followup(key, refresh) });
+            ji.dependencyRefreshNotified = refresh.until; r.journal.save();
+          }
+          continue;
+        }
+        if (!lastCallOf(row)) {
+          held.add(key);
+          if (dependencies.some(d => this.dependencies.revision(d)) && ji.workerState !== 'writing') add(key, 'refresh_candidate', {}, {
+            reason: 'item_dependency', workerThread: ji.workerThread ?? null,
+            followup: 'Dependency refresh budget expired. Resume, record affected scenarios FAIL/NOT_RUN with PARTIAL/BLOCKED, item_dependency defer with a concrete reason for each unresolved dependency, then candidate. Do not restart refresh loops or claim old data is current.' });
+          continue;
+        }
+      }
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
       if (ji.startedAt && lastCallOf(row)) {
         // Cuối giờ: worker bàn giao ngay rồi nộp những gì đang có.
