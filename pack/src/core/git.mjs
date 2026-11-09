@@ -32,6 +32,29 @@ export async function revParse(cwd, ref = 'HEAD') {
   return sha;
 }
 
+// File đã track khác HEAD về nội dung (sau bộ lọc EOL), đường dẫn tính từ gốc repo. Câu hỏi "main có sạch không" phải
+// dùng hàm này, không dùng `status --porcelain`: với core.autocrlf=true, file text=auto bị công cụ ghi lại bằng LF
+// (vitest ghi lại *.snap khi chạy baseline tests) bị status báo M dù nội dung y hệt và git diff rỗng. Practice 85WTXFLQ:
+// sáu file .snap như vậy làm mọi publish dừng ở WORKTREE_CONFLICT, không item nào được nộp.
+export async function trackedChanges(cwd) {
+  return (await git(['diff', '--name-only', '--no-renames', 'HEAD'], { cwd })).out.split(/\r?\n/).filter(Boolean);
+}
+
+// File đã track mà `git status` coi là đã sửa (kể cả chỉ khác stat/EOL), đường dẫn tính từ gốc repo; null khi cwd
+// không nằm trong repo git.
+export async function statusChanged(cwd) {
+  const res = await git(['status', '--porcelain', '-z', '--no-renames', '--untracked-files=no'], { cwd, allowFail: true });
+  return res.code === 0 ? res.stdout.split('\0').filter(Boolean).map(e => e.slice(3)) : null;
+}
+
+// Trả các file đã track (đường dẫn tính từ gốc repo) về bản trong index. Chia lô để không vượt giới hạn dòng lệnh Windows.
+export async function restoreTracked(cwd, files) {
+  if (!files.length) return [];
+  const top = (await git(['rev-parse', '--show-toplevel'], { cwd })).out.split(/\r?\n/).pop().trim();
+  for (let i = 0; i < files.length; i += 100) await git(['checkout', '--', ...files.slice(i, i + 100)], { cwd: top });
+  return files;
+}
+
 // SHA tree của nội dung đang có trong <folder>/ (file đã track, file mới chưa track; trừ file bị ignore và `exclude`).
 // Dựng trên index tạm (GIT_INDEX_FILE) nên không đụng index thật. Cùng nội dung thì cùng SHA, dù ở worktree hay
 // checkout chính, dù đã commit hay chưa: gate lưu SHA này, integrate/commit_and_push so lại.

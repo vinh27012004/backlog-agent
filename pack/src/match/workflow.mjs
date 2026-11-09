@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { answerCheck, changedFiles, requirementsCheck } from './answers.mjs';
 import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
-import { contentTree, git, revParse } from '../core/git.mjs';
+import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
@@ -657,7 +657,8 @@ export class Workflow {
     const paths = fix.files.map(f => `${folder}/${f.path}`);
     let wrote = false;
     try {
-      if ((await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out) fail('WORKTREE_CONFLICT', 'main has uncommitted changes');
+      const dirty = await trackedChanges(checkoutRoot);
+      if (dirty.length) fail('WORKTREE_CONFLICT', `main has uncommitted changes (${dirty.slice(0, 5).join(', ')})`);
       wrote = true;
       for (const f of fix.files) {
         const dst = join(matchRoot, f.path);

@@ -1,13 +1,13 @@
 // Chuẩn bị repo/worktree bằng bundled Yarn và quy trình BTC, không tải dependency thật.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { appCommand } from '../../pack/src/env/app.mjs';
 import { detectProfile, prepareWorktreeEnv, setupEnvironment } from '../../pack/src/env/environment.mjs';
 import { runChecks } from '../../pack/src/env/checks.mjs';
 import { runPwsh } from '../../pack/src/core/jobs.mjs';
-import { tempDir } from './support.mjs';
+import { sh, tempDir } from './support.mjs';
 
 function project({ version = '4.17.1', yarnrc = 'yarnPath: .yarn/releases/yarn-4.17.1.cjs', releases = [version], organizer = false } = {}) {
   const tw = tempDir('mtm-env-');
@@ -162,4 +162,38 @@ test('worktree without an organizer script installs using bundled Yarn', async (
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(commands(wt)[0], ['install', '--immutable']);
   assert.ok(existsSync(join(wt.root, 'node_modules', 'vitest')));
+});
+
+// Practice 85WTXFLQ: baseline tests trên checkout chính ghi lại *.snap bằng LF trong repo core.autocrlf=true; git status
+// báo M dù nội dung y hệt, mọi publish dừng ở WORKTREE_CONFLICT. Setup trả các file test vừa ghi về bản phát, giữ nguyên
+// file đã bẩn từ trước.
+test('baseline tests leave the main checkout as issued: tracked files the tests rewrote are restored', { skip: process.platform !== 'win32' }, async () => {
+  const p = project();
+  const checkout = join(p.tw, 'matches', 'M1');
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
+  const snap = join(p.root, '__snapshots__', 'main.test.ts.snap');
+  mkdirSync(join(p.root, '__snapshots__'));
+  writeFileSync(snap, 'exports[`a`] = `1`;\n');
+  writeFileSync(join(p.root, 'notes.txt'), 'issued\n');
+  writeFileSync(join(checkout, '.gitattributes'), '* text=auto\n');
+  sh('git', ['init', '-q', '-b', 'main'], checkout, env);
+  sh('git', ['config', 'core.autocrlf', 'true'], checkout, env);
+  sh('git', ['add', '-A'], checkout, env);
+  sh('git', ['commit', '-q', '-m', 'seed'], checkout, env);
+  rmSync(snap); sh('git', ['checkout', '--', '.'], checkout, env);
+  assert.equal(readFileSync(snap, 'utf8'), 'exports[`a`] = `1`;\r\n', 'checkout writes CRLF');
+  writeFileSync(join(p.root, 'notes.txt'), 'edited before setup\n');
+  // Bộ test giả ghi lại snapshot bằng LF, như vitest.
+  const release = join(p.root, '.yarn', 'releases', 'yarn-4.17.1.cjs');
+  writeFileSync(release, `${readFileSync(release, 'utf8')}
+if (args[0] === 'test') fs.writeFileSync('__snapshots__/main.test.ts.snap', 'exports[\`a\`] = \`1\`;\\n');
+`);
+  const res = await setup(p);
+  assert.equal(res.build, 'PASS', JSON.stringify(res));
+  assert.deepEqual(res.restoredAfterTests, ["M1 source's copy/src/__snapshots__/main.test.ts.snap"]);
+  assert.equal(readFileSync(snap, 'utf8'), 'exports[`a`] = `1`;\r\n');
+  assert.equal(readFileSync(join(p.root, 'notes.txt'), 'utf8'), 'edited before setup\n', 'a file dirty before the tests is left alone');
+  const status = sh('git', ['status', '--porcelain', '--untracked-files=no'], checkout, env);
+  assert.match(status, /notes\.txt/);
+  assert.doesNotMatch(status, /\.snap/);
 });

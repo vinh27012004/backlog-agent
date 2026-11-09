@@ -17,7 +17,7 @@ import { answerOnlyText, itemSignals } from './decide/signals.mjs';
 import { EventQueue } from './core/events.mjs';
 import { GameMaster } from './match/game.mjs';
 import { answerCheck, changedFiles, itemEvidence, itemRequirements, scenarioCounts } from './match/answers.mjs';
-import { git, normalizeRepoUrl, revParse } from './core/git.mjs';
+import { git, normalizeRepoUrl, revParse, trackedChanges } from './core/git.mjs';
 import { HttpClient } from './core/http.mjs';
 import { Jobs } from './core/jobs.mjs';
 import { Journal } from './core/journal.mjs';
@@ -767,7 +767,7 @@ export class Runtime {
       if (out.fetched) out.newCommits = await commitList(checkoutRoot, ['-n', '10', `HEAD..origin/${branch}`], true);
       if (out.newCommits.length) {
         const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`], { cwd: checkoutRoot })).out.trim() || 0);
-        const dirty = (await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out;
+        const dirty = (await trackedChanges(checkoutRoot)).length;
         if (ahead || dirty || this.workflow.publishOwner) {
           out.note = `main has ${ahead ? `${ahead} unpushed commit(s)` : 'uncommitted changes to tracked files'}, so the new commits are not in main yet; the fixer can read them with git show`;
         } else {

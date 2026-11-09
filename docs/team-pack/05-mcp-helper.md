@@ -310,7 +310,10 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   `issuedRevision` (cả ở `status`) là revision lúc clone (`journal.initialRevision`): worker so file test với bản BTC phát,
   vì worktree tạo sau mang theo test item khác đã sửa trên main (J56ZZWSS, TASK-02-TC-04).
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
-  `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
+  `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. Main chỉ bị coi là bẩn
+  (`WORKTREE_CONFLICT: main has uncommitted changes (<file>…)`) khi nội dung file đã track khác HEAD
+  (`git diff --name-only HEAD`), không theo `status --porcelain`: practice 85WTXFLQ, vitest ghi lại `*.snap` bằng LF
+  trong checkout `core.autocrlf=true`, status báo M dù diff rỗng, và cả 12 item không publish được. **Output**:
   `{integrated, headRevision, baseChanged, hint}`. Không còn hard gate (bỏ 03/11): `publish_item` vẫn kiểm main chứa
   đúng nội dung đã bàn giao ở các file của item (`CANDIDATE_STALE`).
 - `sync {backlogItemKey}`: worktree chưa có commit riêng → lưu thay đổi file đã track bằng `git diff --binary HEAD`
