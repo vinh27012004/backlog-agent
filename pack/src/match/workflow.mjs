@@ -46,6 +46,23 @@ const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid J
 const LAST_CALL_MINUTES = 6;
 const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
 const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
+// Item mà đề của item khác nhắc tới (OMZJW0S0 CR-07: "The audit of that data is right only on source that also contains
+// the BUG-11 fixes"). BUG-11 lên main 05:11:26 sau lần sync cuối của CR-07, CR-07 bàn giao 05:14:55 với CSV/summary
+// của source cũ và mất 25 điểm. Làm mới chỉ cần sync rồi chạy lại script replay (~1 phút): còn từ chừng này phút trở
+// lên thì vẫn đòi làm mới, kể cả trong cửa sổ cơ hội cuối.
+const DEPENDENCY_REFRESH_MINUTES = 3;
+const ITEM_KEY = /\b(?:TASK|BUG|CR|PI)-\d{1,3}\b/g;
+export function itemDependencies(key, text) {
+  const out = [];
+  for (const m of String(text ?? '').matchAll(ITEM_KEY)) if (m[0] !== key && !out.includes(m[0])) out.push(m[0]);
+  return out;
+}
+const dependencyFollowup = dep => `${dep} is now on main. Call worker_checkpoint ready_for_evidence: the helper syncs it into your worktree and resumes you. Then rerun your replay script (backlog-cr §4.3) and everything whose result depends on ${dep} (official figures, CSV, summary fields, the tests that assert them), update submit.json from the new output and call worker_checkpoint candidate again. Change nothing else; screenshots of the page stay valid.`;
+const dependencyBlock = (deps, items) => deps.map(d => `${d} (${items[d]?.integratedAt ? 'already on main' : 'not on main yet'})`).join(', ')
+  + ': this item\'s text names it. When this item\'s data or behaviour needs that item\'s fix, its figures come out right only once that fix is in your worktree.\n'
+  + 'Build everything that does not depend on it now: code, tests of your own logic, page screenshots, and the replay script of backlog-cr §4.3 that writes the official figures, CSV and summary. '
+  + 'When it reaches main the helper tells you (candidate refuses a handoff made before your sync, root sends a followup after it): call worker_checkpoint ready_for_evidence (it syncs), rerun the replay, refresh submit.json, then candidate. '
+  + 'Never fix that item\'s defect yourself and never copy its code or figures. If it is still not on main at your last call, hand off as observed with PARTIAL and say so.';
 // Lời root gửi worker ở stop_worker (hết giờ / cơ hội cuối). ME1X0FFX: BUG-02 đã chạy đạt cả 3 kịch bản UI rồi, khi bị
 // dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
 const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
@@ -182,6 +199,7 @@ export class Workflow {
         const setup = await r.jobs.settle(worktree.setupJobId, 0);
         if (setup?.state === 'failed' || setup?.result?.ok === false) fail('SETUP_FAILED', setup.error?.message ?? setup.result?.failure ?? 'worktree setup failed');
         const template = r.itemTemplate(key);
+        ji.dependsOn = itemDependencies(key, item.item?.descriptionMd ?? item.item?.description);
         ji.verificationKind = r.answerOnlyItem(key) && !Array.isArray(template?.testResults) ? 'answer_only'
           : r.itemMvs(key) ? 'mvs' : 'acceptance';
         ji.workerState = 'writing';
@@ -300,6 +318,7 @@ export class Workflow {
       ...(s.reportOnly ? [] : block('profile', s.profile ?? null)),
       ...block('materials', [`dir: ${s.materialsDir ?? r.itemDir(key)}`, ...['template.json', 'mvs.json', 'requirements.json', 'start.json'].map(files).filter(Boolean),
         ...(s.files ?? []).map(f => join(s.materialsDir ?? r.itemDir(key), 'files', f))].join('\n')),
+      ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}) : null),
       ...block('requirements', s.requirements ?? null),
       ...block('required_evidence', s.requiredEvidence ?? null),
       ...block('baseline_failures', s.baselineFailures ?? null),
@@ -375,6 +394,13 @@ export class Workflow {
       if (tests.length) problems.push(`issued tests changed: ${tests.join(', ')}; graders restore every issued test file before they run the suite, so this edit is discarded and the original assertions decide. Restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>), make the product (code, migration, data) satisfy the original assertions and put new cases in a new test file`);
       const browser = await this.browserTests(paths.worktreeRoot, ji.worktreeBase, folder, changed);
       if (browser.length) problems.push(`test launches a browser: ${browser.join(', ')}; graders run the whole suite where no browser is installed, so the file errors and the suite exits 1 although no test fails. Test the logic without a browser (render the component or compute the CSS in node/jsdom) and keep browser checks as evidence scripts under answers/${key}/evidence/`);
+      // Test mới của chính item fail ở lần run_checks cuối: grader chạy test của đội trên revision nộp (OMZJW0S0 CR-07:
+      // cr-07-official.test.ts ghi tay expected -142000000, chuẩn ra -182000000, mất 4 điểm team-tests).
+      const added = changed.filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
+        .map(f => basename(f.path));
+      const suite = (readChecks(r.session.paths.teamWork, key)?.results ?? []).find(c => c.name === 'test');
+      const ownFailing = (suite?.failing ?? []).filter(id => added.some(name => String(id).replace(/\\/g, '/').split(' > ')[0].split('/').pop() === name));
+      if (ownFailing.length) problems.push(`your own new tests fail in the last run_checks: ${ownFailing.slice(0, 5).join('; ')}. Graders run the team's tests on the submitted revision: fix the test (expected values derived from the item or the company standard, not typed by hand) or the code, or leave the test out until what it needs is in your worktree; then run_checks again`);
     }
     return { problems, warnings };
   }
@@ -431,8 +457,28 @@ export class Workflow {
     writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
     return { file, warnings: notes };
   }
+  // Item được nhắc trong đề đã lên main sau lần worktree này lấy main (tạo hay sync): kết quả phụ thuộc nó đã cũ.
+  dependencyLanded(key) {
+    const items = this.rt.journal?.data.items ?? {}, ji = items[key] ?? {};
+    for (const d of ji.dependsOn ?? []) {
+      const at = items[d]?.integratedAt;
+      if (at && (!ji.baseAt || Date.parse(at) > Date.parse(ji.baseAt))) return { key: d, at };
+    }
+    return null;
+  }
+  // Còn đủ thời gian để sync và chạy lại script replay (null: trận không có hạn item).
+  dependencyRefreshFits(key) {
+    const row = this.rt.itemRows?.().find(x => x.key === key);
+    return !(row?.minutesLeft != null && row.minutesLeft < DEPENDENCY_REFRESH_MINUTES);
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
+    const landed = this.dependencyLanded(key);
+    if (landed && this.dependencyRefreshFits(key)) {
+      return { key, phase: 'candidate', handedOff: false, writesAllowed: true,
+        problems: [`${landed.key} reached main after your worktree last took main: results that depend on it (official figures, CSV, summary fields, tests asserting them) are from older source`],
+        warnings: [], hint: `Not handed off: call worker_checkpoint ready_for_evidence (it syncs ${landed.key} in and resumes you), rerun your replay script and update what depends on ${landed.key}, then call candidate again. Screenshots of the page stay valid.` };
+    }
     const caught = await this.baselineCatchUp(key);
     const composed = args.result !== undefined ? await this.composeResult(key, args.result) : null;
     if (composed?.problems) {
@@ -524,7 +570,9 @@ export class Workflow {
       synced = await r.worktree({ action: 'sync', backlogItemKey: key });
     } catch (e) {
       return { ...yielded, syncError: { code: e.code ?? 'INTERNAL_ERROR', message: e.message },
-        hint: 'Helper could not sync: stay yielded and end your turn with this error as your reply; root gets sync_before_evidence from the helper and sends a followup to resume.' };
+        hint: e.code === 'WORKTREE_SYNC_FAILED'
+          ? 'Helper could not sync although nothing conflicts: stop every test, build or server you started in this worktree (kill the sessions you opened; app stop for the app), then call worker_checkpoint ready_for_evidence again. If it fails once more, end your turn with this error as your reply.'
+          : 'Helper could not sync: stay yielded and end your turn with this error as your reply; root gets sync_before_evidence from the helper and sends a followup to resume.' };
     }
     // Sync vừa mang bản sửa baseline về: kết quả cả bộ test chạy trước đó không còn đúng với commit sẽ nộp.
     const baseline = !hadBaseline && ji.baselineFixIn && this.baselineApplies(key)
@@ -910,6 +958,17 @@ export class Workflow {
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
+      // Đã bàn giao, rồi item mà đề nhắc tới mới lên main: giữ publish, worker sync và chạy lại replay (~1 phút), kể cả
+      // trong cửa sổ cơ hội cuối khi còn ≥ DEPENDENCY_REFRESH_MINUTES. Ít hơn thì nộp như đang có (khối dưới).
+      const landed = (c || freshKeys.has(key)) ? this.dependencyLanded(key) : null;
+      if (landed && this.dependencyRefreshFits(key)) {
+        held.add(key);
+        if (ji.workerState !== 'writing') {
+          add(key, 'refresh_candidate', {}, { reason: 'dependency_landed', dependency: landed.key, workerThread: ji.workerThread ?? null,
+            followup: dependencyFollowup(landed.key), ...(lastCallOf(row) ? { lastCall: true, minutesLeft: row.minutesLeft } : {}) });
+        }
+        continue;
+      }
       if (ji.startedAt && lastCallOf(row)) {
         // Cuối giờ: worker bàn giao ngay rồi nộp những gì đang có.
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };

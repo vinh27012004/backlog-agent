@@ -29,7 +29,7 @@ import { integrateCandidate } from './core/integration.mjs';
 import { resultArtifact, digest } from './core/candidates.mjs';
 import { Workflow } from './match/workflow.mjs';
 import { trustedTeamWorkspace } from './core/paths.mjs';
-import { HelperError, fail, isId, oneLine, writeFileAtomic } from './core/util.mjs';
+import { HelperError, fail, isId, oneLine, sleep, writeFileAtomic } from './core/util.mjs';
 
 const PREPARE_BUDGET_MS = 8 * 60_000;
 // Sự kiện luôn đánh thức root dù chưa sinh nextActions: trận dừng/kết thúc, đề đổi, item đóng, lỗi poll Game Master.
@@ -994,6 +994,7 @@ export class Runtime {
       await git(['worktree', 'add', wt.worktreeRoot, wt.branch], { cwd: checkoutRoot, timeoutMs: 120_000 });
       forgetBuild(this.teamWorkspace, detectProfile(wt.matchRoot).root);   // worktree mới chưa có bản build nào
       ji.worktreeBase = base;
+      ji.baseAt = new Date().toISOString();
     }
     // PI chỉ báo cáo (cấm sửa source): không build, không test, không chạy app, không cần codegraph. CA3WKX60: PI-01
     // chờ install + generate + migrate + seed 43 s mới spawn được fixer, fixer không dùng tới bước nào.
@@ -1121,11 +1122,20 @@ export class Runtime {
         await git(['reset', '-q', '--hard', oldBase], { cwd, allowFail: true });
         if (tracked) await git(['apply', '--whitespace=nowarn', patch], { cwd, allowFail: true });
       };
-      let conflicts = null;
+      // OMZJW0S0 CR-07: ba lần sync liền báo "conflict ... unknown" dù main không đụng file nào của CR-07 (patch áp sạch
+      // khi thử lại trên bản clone): git apply hỏng vì lý do khác xung đột (file bị tiến trình đang chạy trong worktree giữ,
+      // index.lock), còn thông báo bỏ mất stderr. Không có file U thì reset rồi thử lại một lần, và báo đúng lời git.
+      let conflicts = null, gitError = '';
       try {
-        await git(['reset', '-q', '--hard', mainHead], { cwd });
-        if (tracked && (await git(['apply', '--3way', '--whitespace=nowarn', patch], { cwd, allowFail: true })).code !== 0) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await git(['reset', '-q', '--hard', mainHead], { cwd });
+          if (!tracked) break;
+          const applied = await git(['apply', '--3way', '--whitespace=nowarn', patch], { cwd, allowFail: true });
+          if (applied.code === 0) { conflicts = null; break; }
           conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], { cwd, allowFail: true })).out.split(/\r?\n/).filter(Boolean);
+          gitError = String(applied.tail ?? '').trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' | ').slice(0, 600);
+          if (conflicts.length) break;
+          await sleep(2000);
         }
       } catch (e) {
         await restore();
@@ -1133,11 +1143,13 @@ export class Runtime {
       }
       if (conflicts) {
         await restore();
-        fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ') || 'unknown'}; the worktree is unchanged (patch kept at ${patch})`);
+        if (conflicts.length) fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ')}; the worktree is unchanged (patch kept at ${patch})`);
+        fail('WORKTREE_SYNC_FAILED', `git could not re-apply ${key}'s changes on main although no file conflicts (${gitError || 'no message'}); usually a process still running in the worktree (a test, build or server you started) holds a file: stop it, then sync again. The worktree is unchanged (patch kept at ${patch})`);
       }
       // apply --3way ghi vào index; bỏ khỏi index để worktree giống lúc trước sync (thay đổi chưa stage).
       if (tracked) await git(['reset', '-q'], { cwd });
       ji.worktreeBase = mainHead;
+      ji.baseAt = new Date().toISOString();
       await this.workflow.noteBaselineFix(key);
       const codegraph = await this.refreshCodegraph(key, wt.matchRoot);
       for (const k of ['integratedRevision', 'integratedWorktreeHead', 'integratedCandidateId', 'publishedRevision', 'publishedCandidateId']) delete ji[k];

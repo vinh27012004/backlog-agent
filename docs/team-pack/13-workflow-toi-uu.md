@@ -321,6 +321,32 @@ Remote đổi mà rebase sạch thì push tiếp. Main phải khớp candidate �
 publishedCandidateId gắn revision đã push. Intent lưu trước POST và replay cùng body/key/SHA; chưa rõ kết quả chặn sửa
 candidate/sync, receipt có rồi không POST lại. Job ID có runId, thread/job RAM không được coi còn sống sau restart.
 
+## Item phụ thuộc item khác và số liệu official (09/11, sau OMZJW0S0 CR-07)
+
+CR-07 của OMZJW0S0 được 71/100. Code audit đạt mọi hidden test; mất 29 điểm ở dữ liệu official. Đề nói số liệu chỉ
+đúng trên source có bản sửa BUG-11. BUG-11 lên main lúc 05:11:26; ba lần sync của CR-07 trước đó (05:06–05:10) đều
+báo `WORKTREE_CONFLICT ... unknown`, nên fixer chụp evidence trên source cũ. CR-07 bàn giao 05:14:55 với CSV và
+`auditSummary` cũ (boundary -70M thay vì -180M: mất 11 + 14 điểm); root bảo bàn giao lại như cũ khi publish báo
+`CANDIDATE_STALE` (còn 5 phút). Test riêng `cr-07-official.test.ts` gõ tay expected Nguyên liệu -142M, chuẩn KB ra
+-182M (mất 4 điểm). Chạy lại test đó trên đúng commit đã nộp (298cca1, đã có BUG-11) ra đủ số đúng trong vài giây, chỉ
+dòng -142M fail: sync rồi chạy lại replay là đủ lấy lại 25 điểm.
+
+- Sync: patch của CR-07 áp sạch lên main lúc đó (thử lại trên bản clone), "unknown" không phải xung đột. `git apply`
+  không có file U thì reset rồi thử lại sau 2 s; vẫn hỏng thì `WORKTREE_SYNC_FAILED` kèm stderr của git, và hint
+  `ready_for_evidence` bảo fixer dừng tiến trình nó tự chạy trong worktree rồi gọi lại. Fixer dừng test/build/server tự
+  chạy trước `ready_for_evidence` (CR-07 để full suite và build chạy nền).
+- `dependsOn`: lúc prepare helper lấy các khoá item khác có trong đề (`TASK|BUG|CR|PI-<số>`) và viết khối
+  `<depends_on>` vào brief. `integratedAt` ghi khi một item lên main, `baseAt` khi worktree lấy main (tạo hay sync).
+  Phụ thuộc lên main sau `baseAt`: `worker_checkpoint candidate` từ chối bàn giao (sync rồi chạy lại replay), và với
+  candidate đã bàn giao thì `nextActions` giữ publish và đưa `refresh_candidate {reason: dependency_landed,
+  dependency, followup}`, cả trong cửa sổ cơ hội cuối khi còn ≥ 3 phút; ít hơn thì nộp như đang có. Không khoá, không
+  chờ: khác `18fd306` (requiredRevision, khoá app-data) làm UOMNKT6Z chậm.
+- Skill CR §4.3 và evidence-playbook: số liệu official (CSV, trường summary) ra bằng một script replay gọi đúng
+  handler của trang, ghi CSV bytes và JSON summary vào evidence, chạy lại sau mỗi lần sync. Root: `CANDIDATE_STALE`
+  còn ≥ 3 phút thì làm mới, không bàn giao lại như cũ.
+- Candidate từ chối khi test mới của chính item fail ở lần `run_checks` cuối (khớp tên file trong `failing`).
+  Expected của test số liệu official lấy từ phép tính theo chuẩn KB, không gõ tay.
+
 ## Đo và kiểm
 
 journal.metrics: prepare, code_test, evidence, handoff, publish; jobs: worktree_setup/publish_item/drop_databases.

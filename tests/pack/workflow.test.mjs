@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
-import { itemSkills } from '../../pack/src/match/workflow.mjs';
+import { itemDependencies, itemSkills } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
 import { digest, resultArtifact } from '../../pack/src/core/candidates.mjs';
@@ -665,6 +665,10 @@ test('a report-only PI is prepared without dependency setup, with every service 
 test('prepare hands the item to a worker while dependency setup still runs, and the brief says to wait for that job', async () => {
   const f = fixture('CR-01');
   Object.assign(f.ji, { workerState: undefined });
+  // Đề nhắc item khác (OMZJW0S0 CR-07 → BUG-11): brief có khối <depends_on>.
+  const raw = { descriptionMd: '## Context\nThe audit is right only on source that also contains the `BUG-11` fixes.\n## Acceptance criteria\n1. Correct value.' };
+  f.rt.gm.view.items[0].raw = raw;
+  writeFileSync(join(f.rt.session.paths.teamWork, 'items', f.key, 'page.json'), JSON.stringify(raw));
   let release;
   const setup = f.rt.jobs.start('worktree_setup', () => new Promise(r => { release = r; }), { key: f.key });
   f.rt.startWork = async () => ({ type: 'CR', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), timeBox: {} });
@@ -679,6 +683,8 @@ test('prepare hands the item to a worker while dependency setup still runs, and 
   const brief = readFileSync(done.result.briefFile, 'utf8');
   assert.match(brief, /<environment>\nDependency setup .* still running as job /);
   assert.ok(brief.includes(`job_status {jobId: "${setup.id}", waitSeconds: 110}`), brief);
+  assert.deepEqual(f.ji.dependsOn, ['BUG-11']);
+  assert.match(brief, /<depends_on>\nBUG-11 \(not on main yet\): this item's text names it/);
   release({ ok: true });
   await setup.promise;
 });
@@ -1002,4 +1008,50 @@ test('an owner that cannot fix the baseline releases the items waiting for it', 
   const res = await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: [] });
   assert.equal(res.state, 'abandoned');
   assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === 'BUG-02').map(a => a.action), ['publish_item']);
+});
+
+// OMZJW0S0 CR-07: đề nói dữ liệu official chỉ đúng trên source có bản sửa BUG-11; BUG-11 lên main sau lần sync cuối của
+// CR-07 và CR-07 nộp CSV/summary của source cũ (mất 25 điểm).
+test('items named in the item text are dependencies; one that lands after the last sync refuses the handoff and holds the publish', async () => {
+  assert.deepEqual(itemDependencies('CR-07', 'The official test data is the books of the customer of `BUG-11` ... contains the BUG-11 fixes; see CR-07 and TASK-8 and PI-02.'),
+    ['BUG-11', 'TASK-8', 'PI-02']);
+  const f = fixture('CR-07');
+  const minutes = { left: 10 };
+  f.rt.itemRows = () => [{ key: 'CR-07', type: 'CR', status: 'OPEN', local: 'started', minutesLeft: minutes.left, deadlineMinutes: 20 }];
+  f.ji.dependsOn = ['BUG-11'];
+  f.ji.baseAt = new Date(Date.now() - 60_000).toISOString();
+  f.rt.journal.item('BUG-11').integratedAt = new Date().toISOString();
+  const refused = await f.rt.workflow.candidateCheckpoint({ backlogItemKey: 'CR-07' });
+  assert.equal(refused.handedOff, false);
+  assert.match(refused.problems[0], /BUG-11 reached main after your worktree last took main/);
+  assert.match(refused.hint, /ready_for_evidence/);
+
+  // Đã bàn giao trước khi BUG-11 lên main: giữ publish, root gửi followup làm mới (cả trong cửa sổ cơ hội cuối).
+  await f.preflight(f.result(1));
+  minutes.left = 5;
+  const held = f.rt.workflow.actions().nextActions;
+  assert.deepEqual(held.map(a => [a.action, a.reason, a.dependency]), [['refresh_candidate', 'dependency_landed', 'BUG-11']]);
+  assert.match(held[0].followup, /BUG-11 is now on main\. Call worker_checkpoint ready_for_evidence/);
+  // Dưới 3 phút: không đủ thời gian làm mới, nộp như đang có.
+  minutes.left = 2;
+  assert.deepEqual(f.rt.workflow.actions().nextActions.map(a => a.action), ['publish_item']);
+
+  // Sync xong (worktree lấy main sau BUG-11): hết phụ thuộc.
+  minutes.left = 10;
+  f.ji.baseAt = new Date(Date.now() + 1000).toISOString();
+  assert.equal(f.rt.workflow.dependencyLanded('CR-07'), null);
+  assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.reason === 'dependency_landed'));
+});
+
+// OMZJW0S0 CR-07: cr-07-official.test.ts (test mới của đội) fail trên revision nộp, mất 4 điểm team-tests.
+test('handoff refuses own new tests that fail in the last run_checks; failures of other tests do not block', async () => {
+  const f = fixture('CR-07');
+  writeFileSync(join(f.wt.matchRoot, 'src', 'audit.test.js'), "test('official figures', () => {});\n");
+  const checks = join(f.rt.session.paths.teamWork, 'items', 'CR-07', 'checks.json');
+  mkdirSync(dirname(checks), { recursive: true });
+  const write = failing => writeFileSync(checks, JSON.stringify({ runId: 'r1', state: 'done', results: [{ name: 'test', state: 'failed', failing }] }));
+  write(['src/audit.test.js > official figures']);
+  assert.match((await f.rt.workflow.handoffCheck('CR-07')).problems.join('\n'), /your own new tests fail in the last run_checks: src\/audit\.test\.js > official figures/);
+  write(['src/other.test.js > baseline']);
+  assert.ok(!(await f.rt.workflow.handoffCheck('CR-07')).problems.some(p => /own new tests/.test(p)));
 });

@@ -59,7 +59,24 @@ For every feature or modification introduced in the CR, write tests covering 4 k
      - CSV exports, data dumps, JSON/TXT reports must be generated and saved into `answers/<ID>/evidence/`.
      - *Golden Rule*: Generate data exports and reports directly via backend scripts or API calls, ensuring exact row counts, byte sizes, and BOM/CRLF standards.
      - For UI screenshots, verify controls (e.g. export buttons, new columns) are clearly visible.
-3. **Diff Hygiene (J3)**:
+3. **Official test data replay (figures, CSV, summary fields)**:
+   - When the item asks you to load its official test data into a fresh budget/database, run the new feature on it
+     and report the result (a downloaded CSV, a summary field in submit.json), write that as one replay script/test
+     that starts empty, loads the data exactly as its description says (import, rules, edits), calls the same
+     server handler the page uses and writes the evidence files itself: the CSV bytes the handler returns (the page's
+     Export downloads exactly those) and a JSON of the summary. submit.json takes the summary from that JSON.
+   - Rerun it after every sync (about 20 s) and before candidate. Never keep figures, a CSV or a summary from a run
+     on older source: the grader loads the data with your submitted source (OMZJW0S0 CR-07: the CSV and summary were
+     produced before BUG-11 reached the worktree, the submitted commit already had it, and 25 of 100 points were lost).
+   - When the data only comes out right with another item's fix (the brief's `<depends_on>`), build the script now,
+     capture the page screenshots now (they do not depend on the figures), and when that item reaches main sync and
+     rerun the script. Do not fix the other item's defect yourself and never copy figures from its branch.
+   - A test you add must pass on the revision you hand off. Put a test that asserts the official figures in only once
+     the dependency is in your worktree, and derive its expected values from the company standard (KB) with a short
+     calculation saved in the evidence (independent of the code under test), never typed by hand, and check it
+     agrees with the replay output before you hand off (CR-07: a hand-typed -142000000 where the standard gives
+     -182000000 failed the graders' run of the team's own tests).
+4. **Diff Hygiene (J3)**:
    - Verify `git diff`: ensure zero leftover debug statements (`console.log`, `print`, temporary stubs), no unrelated file touches, and no formatting churn.
-4. **Candidate Checkpoint**:
+5. **Candidate Checkpoint**:
    - Checkpoint candidate and hand off; root publishes it as is.

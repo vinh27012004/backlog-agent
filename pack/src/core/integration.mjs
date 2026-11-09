@@ -56,6 +56,8 @@ export async function integrateCandidate(rt, key, message) {
   }
   const headRevision = await revParse(checkoutRoot), count = plan.commits.length, mainBefore = plan.mainBefore;
   ji.integratedRevision = headRevision; ji.integratedWorktreeHead = head; delete ji.integratePlan;
+  // Mốc item lên main: item nhắc tới nó trong đề (dependsOn) so với baseAt của mình để biết kết quả đã cũ.
+  ji.integratedAt = new Date().toISOString();
   j.save();
   return { integrated: true, headRevision, commits: count, baseChanged: mainBefore !== ji.worktreeBase,
     hint: 'Run commit_and_push or resume publish_item.' };

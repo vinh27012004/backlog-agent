@@ -74,7 +74,9 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    A UI fix is done when the page looks right in the app mode the MVS names (dev or production), not only in a test.
 4. Before final UI/data evidence follow .agents/skills/backlog-references/evidence-playbook.md (already in <skill_text>).
    First make every source change the evidence needs (copy the issued seed/report scripts into src/ as the MVS
-   says), so the checks run on the final source. Then call worker_checkpoint ready_for_evidence. writesAllowed:true
+   says), so the checks run on the final source. Stop every test, build or server you started yourself in the
+   worktree (run_checks replaces them; OMZJW0S0: CR-07 left its own suite and build running and three syncs failed).
+   Then call worker_checkpoint ready_for_evidence. writesAllowed:true
    means the helper already synced, resumed you and started run_checks: call app start at once (it waits only for
    that run's build, never for the test suite, and reuses it) and collect final evidence now, no message to root.
    Only after the evidence call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite;

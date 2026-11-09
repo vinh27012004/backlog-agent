@@ -20,6 +20,9 @@ provenance, not correct UI.
 - **Non-UI reports, logs and text files (e.g. *.txt, *.json, *.csv, *.log)**: NEVER use the browser for these.
   Generate them directly by running the test/script command and piping output to `answers/<ID>/evidence/<name>`
   (e.g. `node script.js > answers/<ID>/evidence/report.txt`). Only PNG screenshots and browser downloads use `capture_evidence`.
+- **Official test data figures** (a CSV of the official data, summary fields in submit.json): produce them with the
+  replay script of `backlog-cr` §4.3, not through the browser, and rerun it after every sync: it takes seconds, while
+  a browser replay of an import takes minutes and goes stale the moment main brings another item's fix.
 - **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. If a step fails, screenshots taken before it
   stay (`error.details.screenshotsDone`) and the helper saves the screen at the failed step as
   `<scenario image>.FAILED-step<N>.png` (`error.details.diagnostic`): look at it to fix the steps, but never cite it in
