@@ -173,6 +173,51 @@ giao → root gọi publish_item 10 s, publish 8 s. Sửa:
 - Ước tính PI-01 sau sửa: Start Work 2 s, prepare ~8 s, root spawn ~20 s, fixer ~35 s (2–3 lượt), publish ~8 s:
   khoảng 1m15s. Đo lại bằng bench sau trận kế.
 
+## Kho log production chung cho PI (09/11, sau OMZJW0S0)
+
+OMZJW0S0 (05/11): PI-02 và PI-03 đúng tối đa điểm thô nhưng về nhì cả hai (−9, −8). Fixer chỉ ra lỗi code sau 0:49 và
+1:01, rồi mất 3–4 phút gom log: `search_logs` trả tối đa 20 dòng mỗi lời gọi, mới nhất trước, không limit/offset (thử
+`limit`, `pageSize`, `maxResults` đều bị từ chối); brief PI-02 có 6 service, cả 6 chỉ 20/N và thiếu đúng hai service cần
+(`rule-engine`, `deploy`, không đoán ra từ đề/KB). Fixer hỏi root schema (`blocked`), rồi PI-02 chia query theo từng giờ
+(168 lời gọi, 93 s), PI-03 theo từng schedule (320 lời gọi, 121 s). Log là kho chung của trận: brief PI-02 lúc 05:00 đã
+thấy `schedules` 697 dòng, đúng số PI-03 cần 5 phút sau. Sửa (`pack/src/match/logs.mjs`):
+- `LogStore` gom toàn bộ log không lọc service: `query` khớp chuỗi con cả trong `ts`, nên chia đệ quy theo tiền tố ts
+  (năm → tháng → chục ngày → ngày → chục giờ → giờ → chục phút → … → ms) tới khi `returned == total`. Server trả mới
+  nhất trước, nên con nào mới hơn dòng cũ nhất vừa nhận thì đã đủ, khỏi gọi. Đủ khi mọi nhánh đủ và số dòng gộp bằng
+  `total` của lời gọi không lọc; thiếu (thứ tự không như giả định) thì đi lại không nhảy cóc. Server không lọc theo
+  query (dòng trả về không chứa chuỗi) thì dừng ngay (`unfiltered`); tối đa 1.200 lời gọi (`budget`).
+- Mô phỏng trên log của trận (3.608 dòng, 8 service): 523 lời gọi; không nhảy cóc 770. Riêng một service cỡ
+  `rule-engine` (755 dòng) khoảng 125–150 lời gọi.
+- Company Tools giới hạn 120 request/phút mỗi API key (helper tự giới hạn 100): `invoke(…, {priority: 'low'})` chỉ đi
+  khi cửa sổ một phút còn dưới 70 lời gọi, nên lookup của worker và prepare luôn còn ít nhất 30/phút.
+- `bootGame` mở job `log_harvest` ưu tiên thấp ngay khi vào GAME (OMZJW0S0: PI đầu ra sau ~7 phút; 523 lời gọi ở
+  70/phút ~7,5 phút). Prepare PI (`prefetchCompany` → `harvestLogs`) gọi `harvestJob('normal')`: job đang chạy thì nâng
+  ưu tiên, xong rồi thì làm mới (log không đổi chỉ một lời gọi; nhánh có `total` không đổi được tái dùng). Prepare chờ
+  tối đa 60 s (`logWaitMs`), song song với dựng worktree.
+- Kho lưu ở `.team-work/company/logs.json` (khởi động lại helper vẫn dùng). Mỗi PI có `company/timeline.json`: header
+  `complete`, `total`, `services` (số dòng mỗi service), rồi mỗi dòng log một dòng file, theo `ts` rồi `context.seq`.
+  Brief ghi `timeline (complete: all N production log entries of every service (…); no need to query search_logs
+  again)`; còn đang gom thì `partial: n of N entries; helper job <id> still collects the rest …: job_status …`, và job
+  xong viết lại timeline chưa đủ của mọi PI đã prepare (`refreshTimelines`, cả bản chép trong evidence của PI chỉ báo
+  cáo, `ji.logTimeline`). Kho không đủ thì vẫn dò từng service như cũ (`probeServices`) và gộp vào timeline.
+- Tắt: `"logHarvest": false`.
+
+PI có sửa code (Form B) đi theo thứ tự mới, khối `<pi_hotfix>` trong brief (`PI_HOTFIX`, workflow.mjs). OMZJW0S0: PI-02
+chỉ ra lỗi ở 0:49 mà 5:39 mới sửa, PI-03 lỗi ở 1:01 mà 6:59 mới sửa, vì cả hai gom log trước; sau đó PI-02 mất ~4 phút
+cho check cuối. Thứ tự mới:
+1. Lệnh đầu sau brief: đọc KB, 40 dòng đầu `timeline.json` (header), template, schema; tìm code lỗi.
+2. Sửa ngay khi thấy lỗi: test tái hiện đỏ → sửa → xanh cùng test sẵn có của module (capture before-fix trong
+   `<required_evidence>` nếu có thì làm trước).
+3. `worker_checkpoint ready_for_evidence` ngay: helper sync và chạy run_checks (typecheck, build, full suite) nền.
+4. Trong lúc đó viết `derive.mjs` trên `timeline.json`, `derivation.json`, `submit.json`. File trong `answers/` không làm
+   cũ kết quả run_checks (`sourceSnapshot` bỏ `answers/`, `challenge/`), nên không phải chạy lại.
+5. `run_checks status`, rồi `worker_checkpoint candidate`.
+
+Brief PI còn có dòng `search_logs input: {…}` (schema lấy từ danh sách Company Tools đã cache) cùng giới hạn 20 dòng,
+mới nhất trước, không phân trang: hai fixer OMZJW0S0 đã thử `limit`/`pageSize`/`maxResults` rồi dừng hỏi root, vì
+`company_tools` chỉ root gọi được. `team-fixer.toml` và `backlog-pi/SKILL.md` (Form B) theo cùng thứ tự đó; PI Form B
+vẫn giữ `<skill_text>`.
+
 ## Test fail sẵn: chủ đưa bản sửa lên main trước, item khác chờ khi publish (04/11, sau EIOR38SI)
 
 Bản phát của EIOR38SI có 2 test fail sẵn (`accounting.test.ts` trạng thái PAID, `cascade.test.ts` RESTRICT do migration

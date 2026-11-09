@@ -8,5 +8,6 @@
   "prewarmWorktrees": true,
   "preGamePollMs": 500,
   "releasePollMs": 250,
-  "autoChecks": true
+  "autoChecks": true,
+  "logHarvest": true
 }

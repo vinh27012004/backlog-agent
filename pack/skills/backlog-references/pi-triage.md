@@ -27,7 +27,9 @@ Every production incident in MTM traces back to one root cause: a recent commit,
 ## Deterministic Log Correlation Pattern (Zero Mental Math)
 **CRITICAL RULE**: Never read 50+ lines of raw JSON logs manually or calculate affected records in your head. An agent doing mental math takes 8+ minutes and misses edge cases.
 Instead, write a 15-20 line targeted correlation script (`derive.mjs` or `derive.py` or `.ps1`) in `answers/<ID>/evidence/`:
-1. **Completeness Check**: In `search_logs.json`, check `assert(total === returned)` to ensure no logs were truncated.
+1. **Completeness Check**: Load the helper's `company/timeline.json` (complete production log, one entry per line) and
+   check `complete === true` and `entries.length === total`. When it is partial, follow its note; `search_logs` itself
+   returns at most 20 entries per call, newest first, with no paging, so a single query file is never the whole log.
 2. **Event Join**: Load event streams (e.g. payments and reminders, or requests and errors).
 3. **Temporal Ordering**: Always compare timestamps via standard ISO parsing (`new Date(a.ts) < new Date(b.ts)`).
    - **TRAP**: Never sort opaque request IDs alphabetically (e.g. `req-BUN-91d2` vs `req-BUN-7f3a`); sort strictly by event timestamp `ts` ascending.
@@ -46,7 +48,7 @@ Instead, write a 15-20 line targeted correlation script (`derive.mjs` or `derive
 
 ## One-Shot PI Submission Rules (Finish in < 4 Minutes on Version 1)
 1. **Upfront Copy Company Facts**:
-   Before handoff, copy the relevant search log files from `.team-work/items/<ID>/company/*` directly into `answers/<ID>/evidence/` byte-for-byte.
+   Before handoff, copy `timeline.json` and the kb_search files from `.team-work/items/<ID>/company/` directly into `answers/<ID>/evidence/` byte-for-byte (a report-only PI already has them there).
 2. **Clean Relative Paths Only**:
    In `submit.json` and `evidenceFiles`, all paths MUST be `"evidence/<filename>.json"`.
    **FATAL TRAP**: NEVER append `:line` or `:41` suffixes in path strings. Line numbers belong only in the `incidentRecord` prose, never inside path arrays.

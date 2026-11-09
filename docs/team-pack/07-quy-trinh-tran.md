@@ -59,8 +59,12 @@ Attempt tối đa 12 phút, checkpoint phút sáu hoặc ngắn hơn theo deadli
 Chưa xác nhận giả thuyết thì trả partial/hypotheses.
 Root lấy recent_changes và company logs/facts. PI đổi code cần test mới fail trên code chưa sửa (fixer tự kiểm); chỉ
 đổi answers thì không cần. decide root_cause_confirmed là advisory.
-PI chỉ báo cáo (Form A, 04/11): worktree không cài dependency, không index codegraph; helper kéo log mọi service vào
-`company/timeline.json`, chép vào `answers/<ID>/evidence/`, brief có khối `<report_only_pi>` thay skill; fix-result
+Log production (09/11, sau OMZJW0S0): helper gom toàn bộ log của trận từ lúc vào GAME (job `log_harvest`, ưu tiên thấp,
+dùng chung cho mọi PI) và ghi `company/timeline.json` đầy đủ cho từng PI lúc prepare (13 §Kho log production chung).
+PI có sửa code (Form B, khối `<pi_hotfix>`): sửa trước (test đỏ → sửa → xanh), `ready_for_evidence` ngay để run_checks
+chạy nền, suy ra đáp án từ timeline trong lúc đó, rồi `run_checks status` và candidate.
+PI chỉ báo cáo (Form A, 04/11): worktree không cài dependency, không index codegraph; timeline đó chép vào
+`answers/<ID>/evidence/`, brief có khối `<report_only_pi>` thay skill; fix-result
 không bắt buộc (khi đó không có `hypotheses`, lập luận nằm trong incidentRecord); helper tự publish. Đích 1–2 phút.
 
 ## 8. Answer và evidence

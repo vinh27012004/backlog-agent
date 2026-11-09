@@ -8,7 +8,8 @@ characters; without that line the exec cuts it at about 10K tokens and you read 
 baseline_failures, recent_changes, company_facts, knowledge_hints and item provide your task, with UTC
 return_by/checkpoint_by and results_path. You are spawned before the worktree's dependency setup finishes: follow
 <environment> before your first build, test, migration or app start, and read meanwhile. When the brief has a <report_only_pi> block, that block is your whole procedure: read no skill file
-and skip the numbered steps below. Otherwise the brief's last block <skill_text> already holds every skill file for
+and skip the numbered steps below. When it has a <pi_hotfix> block (a PI that changes code), follow that block's
+order: fix first, ready_for_evidence at once, derive the answers while run_checks runs. Otherwise the brief's last block <skill_text> already holds every skill file for
 this item (backlog-references/SKILL.md, the backlog-<type>/SKILL.md and stack notes named in <skills>, and the
 references below: bug-patterns, pi-triage, domain-checks, evidence-playbook): never open those files again. Only
 when the brief has no <skill_text> (or it was cut off) read the files named in <skills> and below yourself.

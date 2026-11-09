@@ -58,10 +58,10 @@ const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}
 const REPORT_ONLY_PI = `Report-only incident (Form A): the item forbids source changes, so this block is your whole procedure and replaces
 every skill file. Do not read skills, build, test, run the app, use codegraph or edit code: this worktree has no
 dependencies installed.
-- Logs: the helper already fetched every service's logs. <company_facts> lists one file per service with
-  returned/total, and timeline.json merges them sorted by ts. A service marked INCOMPLETE returned only part of its
-  entries: query it again with a narrower query (company_lookup) only when it matters to the incident. These files
-  are already copied into answers/<ID>/evidence/.
+- Logs: the helper already collected the production logs into timeline.json (one entry per line, every service,
+  sorted by ts then context.seq; its header says complete, total and the entries per service). Its line in
+  <company_facts> says whether it is complete; when it is, do not query search_logs again. When it is partial, do what
+  that line says. These files are already copied into answers/<ID>/evidence/.
 - Standards: the kb_search file(s) in <company_facts> hold the incident report rules (how to name the release,
   component, flag, affected records and request ids). Follow them exactly.
 - Turn 1: in one command read timeline.json, the kb_search file(s) and the submit template and schema in <materials>.
@@ -76,6 +76,40 @@ dependencies installed.
 Traps: the root-cause release is the first release whose change introduced the fault, not a later metric or
 monitoring release; affected records come from the complete logs, not from complaints; exclude records settled only
 after the event and partial cases the company rule excludes. Target: hand off within 2 minutes.`;
+// PI có sửa code (Form B): sửa trước, rồi ready_for_evidence để run_checks chạy nền trong lúc suy ra đáp án.
+// OMZJW0S0: fixer PI-02 chỉ ra lỗi ở 0:49 nhưng 5:39 mới sửa (gom log trước), rồi tự chạy lại typecheck/build/full
+// suite ~4 phút; PI-03 tương tự (lỗi ở 1:01, sửa 6:59). File trong answers/ không làm cũ kết quả run_checks (snapshot
+// source bỏ answers/), nên viết derive.mjs và submit.json sau ready_for_evidence không phải chạy lại check.
+const PI_HOTFIX = `Code-changing incident (Form B): the item wants answer fields from production data and a source fix. Do the
+fix first and the answers while the closing checks run; this order overrides the PI playbook in <skill_text>.
+- First command after this brief: read the kb_search file(s), the first 40 lines of timeline.json from
+  <company_facts> (its header says complete, total and entries per service; after it one log entry per line),
+  template.json and the submit schema from <materials>, and locate the faulty code (codegraph or rg, against the KB
+  standard and the symptom in the item). Do not query search_logs while timeline.json is complete.
+- Fix as soon as the fault is located: a before-fix capture named in <required_evidence> comes first. Write the
+  reproduction test next to the existing tests, wait for the setup job in <environment>, run it with test_one (red,
+  output to answers/<ID>/evidence/red.log), apply the minimal fix, run it again with the module's existing tests
+  (green, to evidence/green.log).
+- Then at once worker_checkpoint ready_for_evidence: the helper syncs and starts run_checks (typecheck, build, full
+  suite) in the background. Never run those yourself.
+- While they run: copy timeline.json and the kb_search file(s) into answers/<ID>/evidence/, write
+  answers/<ID>/evidence/derive.mjs that loads evidence/timeline.json and computes every answer field exactly as the KB
+  incident rules say (log order, retries, dry runs, corrections, release windows; compare ts with Date.parse; never
+  count by hand), run it to evidence/derivation.json, then write answers/<ID>/submit.json (every template field,
+  incidentRecord, evidenceFiles as plain "evidence/<file>"). Files under answers/ do not make the checks stale.
+- Then run_checks {action: "status", waitSeconds: 110} (start that exec with // @exec: {"yield_time_ms": 120000}); fix
+  only a failure your change caused and run it again; then worker_checkpoint candidate with root_cause, hypotheses
+  (the confirmed one and those ruled out), verification rows for the red and green runs, and the submit.json status.
+  No app and no screenshots unless <required_evidence> names one.
+Target: hand off within 6 minutes.`;
+// Schema search_logs cho brief PI: company_tools chỉ root gọi được, nên OMZJW0S0 cả hai fixer PI thử limit/pageSize/
+// maxResults (đều bị từ chối) rồi dừng hỏi root bằng worker_checkpoint blocked.
+function searchLogsLine(r, type) {
+  const tool = type === 'PI' ? r.company?.tools?.find(t => t.name === 'search_logs') : null;
+  if (!tool) return [];
+  const props = tool.inputSchema?.properties ?? {};
+  return [`search_logs input: ${JSON.stringify(props).slice(0, 600)}. It returns at most 20 entries per call, newest first, with total; there is no paging (limit, pageSize and maxResults are refused): narrow with query, for example a ts prefix such as 2025-10-18T22.`];
+}
 // Đường dẫn skill theo loại item và stack-notes theo profile (java-maven → java), để brief ghi đúng file: từ khi brief
 // chỉ ghi "stack notes", fixer mở mục lục stack-notes/SKILL.md rồi mới tới <stack>.md (27/62 thread từ 01/11).
 const ITEM_SKILLS = ['bug', 'cr', 'task', 'pi'];
@@ -197,6 +231,11 @@ export class Workflow {
         // PI-01 của CA3WKX60 tự chép tay).
         if (reportOnly && worktree.evidenceDir) {
           for (const f of companyFacts) if (existsSync(f.savedTo)) copyFileSync(f.savedTo, join(worktree.evidenceDir, basename(f.savedTo)));
+          // Timeline còn thiếu thì job gom log viết lại cả bản chép này khi xong (refreshTimelines).
+          if (ji.logTimeline && companyFacts.some(f => f.tool === 'timeline')) {
+            ji.logTimeline.evidence = join(worktree.evidenceDir, 'timeline.json');
+            r.journal.save();
+          }
         }
         const out = { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, reportOnly,
           worktree, setup: setup ? { jobId: setup.jobId, state: setup.state, skipped: setup.result?.skipped ?? null } : null, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
@@ -297,6 +336,7 @@ export class Workflow {
         ...(wt.issuedRevision ? [`issuedRevision: ${wt.issuedRevision}`] : []), ...(wt.baseRevision ? [`baseRevision: ${wt.baseRevision}`] : []),
         `results_path: ${s.fixResultFile}`, `fix_result_schema: ${FIX_RESULT_SCHEMA_FILE}`].join('\n')),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
+      ...(!s.reportOnly && (s.type ?? typeOf(key)) === 'PI' ? block('pi_hotfix', PI_HOTFIX.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
       ...(s.reportOnly ? [] : block('environment', environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null))),
       ...(s.reportOnly ? [] : block('skills', [s.skills?.item, s.skills?.stackNotes].filter(Boolean).join('\n'))),
       ...(s.reportOnly ? [] : block('profile', s.profile ?? null)),
@@ -308,7 +348,9 @@ export class Workflow {
       ...block('shared_failures', s.sharedFailures?.length ? s.sharedFailures : null),
       ...block('recent_changes', s.remote?.recentChanges ?? null),
       ...block('company_facts', [`dir: ${s.companyFactsDir}`, ...(s.companyFacts ?? []).map(f => `${f.tool}${f.note ? ` (${f.note})` : ''}: ${f.savedTo}`),
-        'More lookups: company_lookup {name, arguments, backlogItemKey} (kb_search, search_logs, get_test_data); results are saved in this dir.'].join('\n')),
+        'More lookups: company_lookup {name, arguments, backlogItemKey} (kb_search, search_logs, get_test_data); results are saved in this dir.',
+        ...((s.companyFacts ?? []).some(f => f.tool === 'timeline') ? ['timeline.json holds the production logs the helper collected (one entry per line); derive answers from it with a script.'] : []),
+        ...searchLogsLine(r, s.type ?? typeOf(key))].join('\n')),
       ...block('knowledge_hints', s.knowledgeHints ?? null),
       ...block('related_events', s.relatedEvents ?? null),
       ...block('item', [raw.descriptionMd ?? raw.description ?? '', s.startInstruction ? `\nStart instruction: ${s.startInstruction}` : ''].join('')),

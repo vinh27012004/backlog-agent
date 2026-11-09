@@ -656,8 +656,126 @@ test('a report-only PI is prepared without dependency setup, with every service 
   const brief = readFileSync(done.result.briefFile, 'utf8');
   assert.match(brief, /<report_only_pi>[\s\S]*answers\/PI-01\/evidence\/derive\.mjs/);
   assert.match(brief, /search_logs \(service web: 1\/30 INCOMPLETE\)/);
-  assert.match(brief, /timeline \(4 entries from 3 services, sorted by ts\)/);
+  // Server này không lọc theo query, nên kho chung dừng ngay và helper lùi về cách dò từng service.
+  assert.match(brief, /timeline \(partial: 4 of 40 entries \(unfiltered\); search_logs returns at most 20 entries per call/);
   assert.doesNotMatch(brief, /<skills>|<profile>|<skill_text>/, 'the playbook replaces the skill files');
+});
+
+// Server giả như Company Tools của trận: query khớp chuỗi con, mới nhất trước, tối đa 20 dòng mỗi lời gọi.
+function logServer(logs, calls = []) {
+  return async (name, args) => {
+    calls.push([name, args]);
+    const text = v => ({ content: [{ type: 'text', text: JSON.stringify(v) }] });
+    if (name === 'kb_search') return text({ articles: [{ id: 'KB-RULE-01', body: 'Rules are ranked by score.' }] });
+    const q = String(args.query ?? '').toLowerCase();
+    const hit = logs.filter(e => (!args.service || e.service === args.service) && JSON.stringify(e).toLowerCase().includes(q))
+      .sort((a, b) => (a.ts < b.ts ? 1 : -1));
+    return text({ total: hit.length, returned: Math.min(20, hit.length), entries: hit.slice(0, 20) });
+  };
+}
+const ruleLogs = n => Array.from({ length: n }, (_, i) => ({ ts: new Date(Date.parse('2025-10-13T00:00:00.000Z') + i * 611_000).toISOString(),
+  service: i % 9 ? 'rule-engine' : 'deploy', level: 'INFO', requestId: `pi-${i}`, message: 'rule.applied', context: { seq: 3100000 + i } }));
+
+// OMZJW0S0: brief PI-02 có 6 service, cả 6 chỉ 20/N và thiếu đúng rule-engine, deploy; fixer tự chia query theo giờ
+// (168 lời gọi, 93 s) sau một vòng hỏi root.
+test('a PI gets the complete production log from the shared store, every service in one timeline, no per-service probing', async () => {
+  const f = fixture('PI-01', true);
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, verificationKind: undefined });
+  f.rt.gm.view.items[0].raw = { title: 'Transactions land in the wrong category', points: 90,
+    descriptionMd: '## Context\nFinance sees wrong categories.\n## Out of scope\nChanging the application source.\n' };
+  f.rt.startWork = async () => ({ type: 'PI', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key),
+    files: [], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' }, requirements: [] });
+  const logs = ruleLogs(300), calls = [];
+  f.rt.company.list = async () => [{ name: 'kb_search', inputSchema: {} }, { name: 'search_logs', inputSchema: { properties: { query: {}, service: {} } } }];
+  f.rt.company.invoke = logServer(logs, calls);
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  const company = join(f.rt.session.paths.teamWork, 'items', f.key, 'company');
+  const timeline = JSON.parse(readFileSync(join(company, 'timeline.json'), 'utf8'));
+  assert.equal(timeline.complete, true);
+  assert.equal(timeline.entries.length, 300);
+  assert.deepEqual(timeline.services.map(s => [s.service, s.entries]), [['rule-engine', 266], ['deploy', 34]]);
+  assert.equal(readFileSync(join(company, 'timeline.json'), 'utf8').split('\n').filter(l => l.startsWith('{"ts"')).length, 300, 'one entry per line');
+  assert.ok(!calls.some(([, a]) => a?.service), 'no per-service probing once the store is complete');
+  assert.deepEqual(readdirSync(company).filter(n => /search_logs/.test(n)), []);
+  assert.ok(readdirSync(join(f.wt.matchRoot, 'answers', f.key, 'evidence')).includes('timeline.json'));
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  assert.match(brief, /timeline \(complete: all 300 production log entries of every service \(rule-engine 266, deploy 34\)[^)]*no need to query search_logs again\)/);
+  assert.equal(f.rt.journal.data.items[f.key].logTimeline.complete, true);
+
+  // Lần prepare PI sau: log không đổi thì làm mới kho chỉ tốn một lời gọi.
+  calls.length = 0;
+  const again = await f.rt.harvestJob('normal');
+  await again.promise;
+  assert.deepEqual(calls.map(([, a]) => a.query), ['']);
+});
+
+// OMZJW0S0: fixer PI-02 chỉ ra lỗi ở 0:49 nhưng 5:39 mới sửa (gom log trước), rồi ~4 phút cho check cuối; cả hai fixer
+// PI thử limit/pageSize/maxResults cho search_logs rồi dừng hỏi root schema.
+test('a code-changing PI brief puts the fix first, closing checks in the background while answers are derived, and the search_logs schema', async () => {
+  const f = fixture('PI-02');
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, verificationKind: undefined });
+  f.rt.gm.view.items[0].raw = { title: 'Transactions land in the wrong category', points: 90,
+    descriptionMd: '## What we need\n1. rootCauseRelease\nThen fix the fault in the application source.\n## Out of scope\nCorrecting the categories of existing transactions.\n' };
+  f.rt.startWork = async () => ({ type: 'PI', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key),
+    files: [], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' }, requirements: [] });
+  f.rt.worktree = async () => ({ ...f.wt, setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });
+  const tools = [{ name: 'kb_search', inputSchema: {} }, { name: 'search_logs', inputSchema: { properties: { service: { type: 'string' }, query: { type: 'string' } } } }];
+  f.rt.company.list = async () => { f.rt.company.tools = tools; return tools; };
+  f.rt.company.invoke = logServer(ruleLogs(60));
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  assert.equal(done.result.reportOnly, false);
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  const block = brief.slice(brief.indexOf('<pi_hotfix>'), brief.indexOf('</pi_hotfix>'));
+  assert.ok(block.length > 0, 'Form B gets the hotfix block');
+  assert.doesNotMatch(brief, /<report_only_pi>/);
+  const order = ['answers/PI-02/evidence/red.log', 'worker_checkpoint ready_for_evidence', 'answers/PI-02/evidence/derive.mjs', 'run_checks {action: "status"', 'worker_checkpoint candidate'];
+  const at = order.map(s => block.indexOf(s));
+  assert.ok(at.every(i => i >= 0), JSON.stringify(at));
+  assert.deepEqual([...at].sort((a, b) => a - b), at, 'fix, then checks in the background, then answers, then status and handoff');
+  assert.match(brief, /<company_facts>[\s\S]*search_logs input: \{"service":\{"type":"string"\},"query":\{"type":"string"\}\}\. It returns at most 20 entries per call, newest first/);
+  assert.match(brief, /<company_facts>[\s\S]*timeline \(complete: all 60 production log entries/);
+  assert.match(brief, /<skill_text>/, 'Form B keeps the skill files');
+});
+
+test('a PI prepared while the store is still collecting gets a partial timeline that the harvest job rewrites, evidence copy included', async () => {
+  const f = fixture('PI-01', true);
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, verificationKind: undefined });
+  f.rt.gm.view.items[0].raw = { title: 'Wrong categories', points: 90, descriptionMd: '## Out of scope\nChanging the application source.\n' };
+  f.rt.startWork = async () => ({ type: 'PI', triage: { models: {} }, materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key),
+    files: [], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' }, requirements: [] });
+  const base = f.rt.runtimeConfig.bind(f.rt);
+  f.rt.runtimeConfig = () => ({ ...base(), logWaitMs: 20 });
+  const logs = ruleLogs(120), serve = logServer(logs);
+  let release;
+  const gate = new Promise(r => { release = r; });
+  f.rt.company.list = async () => [{ name: 'kb_search', inputSchema: {} }, { name: 'search_logs', inputSchema: { properties: { query: {} } } }];
+  f.rt.company.invoke = async (name, args) => {
+    if (name === 'search_logs' && args.query) await gate;   // lời gọi gốc trả ngay, phần chia nhỏ treo tới khi release
+    return serve(name, args);
+  };
+  const j = await f.rt.workflow.prepare({ backlogItemKey: f.key, waitSeconds: 0 });
+  await f.rt.jobs.jobs.get(j.jobId).promise;
+  const done = f.rt.jobs.view(f.rt.jobs.jobs.get(j.jobId));
+  assert.equal(done.state, 'done', JSON.stringify(done));
+  const brief = readFileSync(done.result.briefFile, 'utf8');
+  assert.match(brief, new RegExp(`timeline \\(partial: 20 of 120 entries; helper job ${f.rt.logJobId} still collects the rest`));
+  const evidence = join(f.wt.matchRoot, 'answers', f.key, 'evidence', 'timeline.json');
+  assert.equal(JSON.parse(readFileSync(evidence, 'utf8')).complete, false);
+  release();
+  const harvest = await f.rt.jobs.jobs.get(f.rt.logJobId).promise;
+  assert.equal(harvest.result.complete, true, JSON.stringify(harvest.result));
+  assert.deepEqual(harvest.result.timelinesRewritten, [f.key]);
+  for (const file of [join(f.rt.session.paths.teamWork, 'items', f.key, 'company', 'timeline.json'), evidence]) {
+    const t = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(t.complete, true, file);
+    assert.equal(t.entries.length, 120, file);
+  }
 });
 
 // EIOR38SI: helper thấy → fixer bắt đầu trung bình 1m24s, trong đó install/generate/migrate/seed 45–105 s. Fixer được

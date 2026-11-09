@@ -4,6 +4,9 @@ import { HelperError, fail, sleep } from '../core/util.mjs';
 
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 100;      // chừa khoảng trống dưới 120 của server
+// Lời gọi ưu tiên thấp (gom log nền, match/logs.mjs) chỉ đi khi cửa sổ còn dưới mức này: lookup của worker và prepare
+// luôn còn ít nhất 30 lời gọi mỗi phút.
+const LOW_PRIORITY_PER_WINDOW = 70;
 
 export class CompanyTools {
   constructor({ session, http }) {
@@ -20,19 +23,19 @@ export class CompanyTools {
     return `${this.session.gameMasterOrigin}/api/v1/mcp/${encodeURIComponent(this.session.descriptor.matchId)}`;
   }
 
-  async throttle() {
+  async throttle(limit = MAX_PER_WINDOW) {
     for (;;) {
       const now = Date.now();
       this.sent = this.sent.filter(t => now - t < WINDOW_MS);
-      if (this.sent.length < MAX_PER_WINDOW) { this.sent.push(now); return; }
-      await sleep(WINDOW_MS - (now - this.sent[0]) + 50);
+      if (this.sent.length < limit) { this.sent.push(now); return; }
+      await sleep(WINDOW_MS - (now - this.sent[this.sent.length - limit]) + 50);
     }
   }
 
-  async rpc(method, params, { notify = false } = {}) {
+  async rpc(method, params, { notify = false, priority = 'normal' } = {}) {
     const key = this.session.secrets.apiKey;
     if (!key) fail('NOT_CONFIGURED', 'company tools need the team API key (GAME phase)');
-    await this.throttle();
+    await this.throttle(priority === 'low' ? LOW_PRIORITY_PER_WINDOW : MAX_PER_WINDOW);
     const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream' };
     if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
@@ -63,15 +66,15 @@ export class CompanyTools {
     await this.rpc('notifications/initialized', {}, { notify: true });
   }
 
-  async call(method, params) {
+  async call(method, params, { priority = 'normal' } = {}) {
     await this.ensureInitialized();
     try {
-      return await this.rpc(method, params);
+      return await this.rpc(method, params, { priority });
     } catch (error) {
       if (error.code !== 'COMPANY_SESSION_EXPIRED') throw error;
       this.protocolVersion = null;
       await this.ensureInitialized();
-      return this.rpc(method, params);
+      return this.rpc(method, params, { priority });
     }
   }
 
@@ -83,8 +86,9 @@ export class CompanyTools {
     return this.tools;
   }
 
-  async invoke(name, args) {
-    return this.call('tools/call', { name, arguments: args ?? {} });
+  // priority 'low': chỉ dùng phần hạn mức còn trống (gom log nền).
+  async invoke(name, args, { priority = 'normal' } = {}) {
+    return this.call('tools/call', { name, arguments: args ?? {} }, { priority });
   }
 }
 
