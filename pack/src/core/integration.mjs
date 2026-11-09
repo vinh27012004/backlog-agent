@@ -1,6 +1,6 @@
 // Kế hoạch tích hợp bền: nhận diện cherry-pick đã commit nhưng chưa kịp lưu checkpoint.
 import { changedFiles } from '../match/answers.mjs';
-import { git, revParse } from './git.mjs';
+import { git, revParse, trackedChanges } from './git.mjs';
 import { fail, oneLine } from './util.mjs';
 
 export async function integrateCandidate(rt, key, message) {
@@ -36,7 +36,8 @@ export async function integrateCandidate(rt, key, message) {
       plan.pending = null; j.save();
     }
   }
-  if ((await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out) fail('WORKTREE_CONFLICT', 'main has uncommitted changes');
+  const dirty = await trackedChanges(checkoutRoot);
+  if (dirty.length) fail('WORKTREE_CONFLICT', `main has uncommitted changes (${dirty.slice(0, 5).join(', ')})`);
   if (!plan) {
     const commits = (await git(['rev-list', '--reverse', `${ji.integratedWorktreeHead ?? ji.worktreeBase}..${head}`], { cwd: checkoutRoot })).out.split(/\r?\n/).filter(Boolean);
     plan = ji.integratePlan = { head, mainBefore: await revParse(checkoutRoot), commits, cursor: 0, pending: null }; j.save();

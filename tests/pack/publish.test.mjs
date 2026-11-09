@@ -2,9 +2,10 @@
 // đã integrate; commit_and_push của item đã lên remote cùng lần push trước chỉ ghi revision. Remote đổi mà rebase sạch
 // thì push tiếp.
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { integrateCandidate } from '../../pack/src/core/integration.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
 import { localRuntime, sh, tempDir } from './support.mjs';
@@ -69,4 +70,35 @@ test('a remote that moved is rebased onto and the push goes on when the rebase i
   assert.equal(sh('git', ['--git-dir', bare, 'rev-parse', 'refs/heads/main'], checkout, env), pushed.revision);
   assert.equal(sh('git', ['rev-parse', `${pushed.revision}~1`], checkout, env), remote, 'the item commit sits on top of the remote one');
   assert.equal(ji.publishedRevision, pushed.revision);
+});
+
+// Practice 85WTXFLQ: baseline tests ghi lại *.snap bằng LF trong checkout core.autocrlf=true; git status báo M dù nội
+// dung y hệt, và integrate từ chối cả trận ("main has uncommitted changes"). Main chỉ bẩn khi nội dung thật sự khác HEAD.
+test('integrate ignores files that differ from HEAD only in line endings, and still refuses real uncommitted edits', async () => {
+  const root = tempDir('mtm-eol-');
+  const checkout = join(root, 'checkout'), wt = join(root, 'wt');
+  mkdirSync(join(checkout, 'M1', 'src', '__snapshots__'), { recursive: true });
+  sh('git', ['init', '-q', '-b', 'main', checkout], root, env);
+  sh('git', ['config', 'core.autocrlf', 'true'], checkout, env);
+  writeFileSync(join(checkout, '.gitattributes'), '* text=auto\n');
+  const snap = join(checkout, 'M1', 'src', '__snapshots__', 'a.test.ts.snap');
+  writeFileSync(snap, 'exports[`a`] = `1`;\n');
+  writeFileSync(join(checkout, 'M1', 'src', 'lib.js'), 'module.exports = 1;\n');
+  sh('git', ['add', '-A'], checkout, env);
+  sh('git', ['commit', '-q', '-m', 'seed'], checkout, env);
+  const base = sh('git', ['rev-parse', 'HEAD'], checkout, env);
+  rmSync(snap); sh('git', ['checkout', '--', '.'], checkout, env);
+  writeFileSync(snap, 'exports[`a`] = `1`;\n');
+  assert.match(sh('git', ['status', '--porcelain'], checkout, env), /a\.test\.ts\.snap/, 'status reports the LF rewrite');
+  sh('git', ['worktree', 'add', '-q', '-b', 'team/TASK-01', wt], checkout, env);
+  mkdirSync(join(wt, 'M1', 'answers', 'TASK-01'), { recursive: true });
+  writeFileSync(join(wt, 'M1', 'answers', 'TASK-01', 'submit.json'), '{"status":"DONE"}\n');
+  const ji = { worktreeBase: base }, journal = { item: () => ji, save() {} };
+  const rt = { workflow: {}, journal, session: { paths: { checkoutRoot: checkout }, descriptor: { matchId: 'M1' } }, wtPaths: () => ({ worktreeRoot: wt }) };
+  writeFileSync(join(checkout, 'M1', 'src', 'lib.js'), 'module.exports = 2;\n');
+  await assert.rejects(integrateCandidate(rt, 'TASK-01', 'answer'), /WORKTREE_CONFLICT.*M1\/src\/lib\.js/);
+  sh('git', ['checkout', '--', 'M1/src/lib.js'], checkout, env);
+  const res = await integrateCandidate(rt, 'TASK-01', 'answer');
+  assert.equal(res.integrated, true);
+  assert.equal(sh('git', ['show', '--format=', '--name-only', 'HEAD'], checkout, env), 'M1/answers/TASK-01/submit.json');
 });

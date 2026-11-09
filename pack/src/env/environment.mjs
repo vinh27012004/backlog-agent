@@ -2,6 +2,7 @@
 // Repo của BTC có thể kèm env-require/ (README, doctor.ps1...): khi có thì doctor.ps1 là thước đo READY.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
+import { restoreTracked, statusChanged } from '../core/git.mjs';
 import { run } from '../core/jobs.mjs';
 import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from '../core/util.mjs';
@@ -338,9 +339,20 @@ export async function setupEnvironment(job, { matchRoot, localDir, logDir, repor
     const budget = Math.min(baselineMs, Math.max(30_000, deadlineAt - Date.now() - 60_000));
     // Có reporter máy đọc thì baseline giữ trạng thái từng test (gate so test fail mới / test biến mất theo id).
     job.progress.push('baseline-tests: running');
+    const before = await statusChanged(matchRoot);
     const run = await runTests(profile, 'test_all', { logFile: log('baseline-tests'), timeoutMs: budget });
     job.progress.push(`baseline-tests: ${run.res.code === 0 ? 'ok' : `exit ${run.res.code}`} (${Math.round(run.res.ms / 1000)}s, ${run.source})`);
     out.baseline = baselineOf(run);
+    // Baseline tests chạy trên checkout chính, nơi publish cherry-pick vào: file đã track mà test ghi lại (vitest ghi
+    // lại *.snap bằng LF khi checkout là CRLF, practice 85WTXFLQ) phải về như bản phát, nếu không main bẩn cả trận.
+    if (before) {
+      const touched = ((await statusChanged(matchRoot)) ?? []).filter(f => !before.includes(f));
+      if (touched.length) {
+        await restoreTracked(matchRoot, touched);
+        out.restoredAfterTests = touched;
+        job.progress.push(`baseline-tests: restored ${touched.length} tracked file(s) the tests rewrote`);
+      }
+    }
   }
   const b = out.baseline;
   const note = !b ? 'no test command' : b.status === 'TIMEOUT' ? 'baseline tests timed out' :
