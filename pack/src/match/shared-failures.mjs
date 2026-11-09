@@ -117,6 +117,13 @@ export class SharedFailures {
   }
   productContexts() { return this.records().filter(i => i.kind === 'product' && i.baselineOwner && !['deferred', 'abandoned'].includes(state(i))); }
   ownerPending(key) { return this.records().find(i => i.baselineOwner === key && ['assigned', 'failed'].includes(state(i))); }
+  // Hết thời gian chờ chủ sửa lỗi chung (sharedFixWaitMinutes, mặc định 8, tính từ lần giao gần nhất): item khác thôi
+  // chờ, chính chủ cũng được nộp phần của nó. Lỗi vẫn assigned, chủ sửa tiếp được.
+  waitExpired(issue) {
+    const minutes = Number(this.rt.runtimeConfig().sharedFixWaitMinutes ?? 8);
+    const since = Date.parse(issue?.assignedAt ?? '');
+    return Number.isFinite(since) && minutes >= 0 && Date.now() - since >= minutes * 60_000;
+  }
   async environmentRefresh(key) {
     for (const issue of this.records().filter(i => i.kind === 'environment' && state(i) === 'resolved' && this.affects(i, key))) {
       const checks = readChecks(this.rt.session.paths.teamWork, key);

@@ -1221,6 +1221,42 @@ test('an ended shared owner is reassigned explicitly, and deferral releases wait
   assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
 });
 
+// 85WTXFLQ: PI-02, PI-03 và TASK-10 không chạy cả bộ test mà vẫn bị shared-1 giữ; TASK-08 nhận sửa lúc 03:16 và không
+// xong tới hết trận, BUG-09 bàn giao 03:21 rồi chờ mãi. Không item nào được nộp.
+test('a shared failure does not hold a PI or an item that changed only its answers, unless root names it', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Reproduced on the issued parser' });
+  f.result(1, fix({ changed_files: ['src/lib.js', 'answers/BUG-02/submit.json'] }));
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner', 'a source change waits for the repair');
+  f.result(2, fix({ changed_files: ['answers/BUG-02/submit.json', 'answers/BUG-02/evidence/derive.log'] }));
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null, 'only answers changed: the suite on its commit is the issued one');
+  const issue = f.rt.workflow.sharedFailures.get(failureId);
+  issue.affectedItems = ['BUG-01', 'BUG-02'];
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner', 'root named it explicitly');
+  issue.affectedItems = null;
+  f.result(3, fix({ changed_files: ['src/lib.js'] }));
+  const pi = f.rt.journal.item('PI-01');
+  Object.assign(pi, { startedAt: new Date().toISOString(), needsSuite: true });
+  assert.equal(f.rt.workflow.baselineApplies('PI-01', issue), false, 'a PI is ranked by submission order and never waits');
+});
+
+test('the wait for a shared owner ends after sharedFixWaitMinutes, for waiting items and for the owner itself', async () => {
+  const f = sharedFixture(), { failureId } = await f.report();
+  f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'product', reason: 'Reproduced on the issued parser' });
+  f.result(1); f.ji.checkpoint = 'candidate';
+  await assert.rejects(f.rt.workflow.publish({ backlogItemKey: f.key, fixResultFile: join(f.results, 'BUG-02-fixer-1.json') }), /BASELINE_PENDING/);
+  f.oi.workerState = 'yielded';
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-01').action, 'refresh_candidate');
+  const issue = f.rt.workflow.sharedFailures.get(failureId);
+  issue.assignedAt = new Date(Date.now() - 7 * 60_000).toISOString();
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), 'owner', 'still inside the default 8 minutes');
+  issue.assignedAt = new Date(Date.now() - 8 * 60_000).toISOString();
+  assert.equal(f.rt.workflow.baselineWait('BUG-02'), null);
+  assert.deepEqual(f.rt.workflow.actions().nextActions.filter(a => a.key === 'BUG-02').map(a => a.action), ['publish_item']);
+  assert.notEqual(f.rt.workflow.actions().nextActions.find(a => a.key === 'BUG-01')?.action, 'refresh_candidate', 'the owner is no longer held to the repair');
+  assert.equal(f.rt.workflow.sharedFailures.get(failureId).state, 'assigned', 'the owner may still land the repair');
+});
+
 test('environment resolution requires a fresh full check on each affected copy and never marks it PASS', async () => {
   const f = sharedFixture(), { failureId } = await f.report();
   f.manage({ action: 'assign', failureId, owner: 'BUG-01', kind: 'environment', reason: 'Standalone runtime reproduction, no product dependency' });

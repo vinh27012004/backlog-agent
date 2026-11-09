@@ -256,9 +256,14 @@ PARTIAL. Luồng mới tách báo cáo trong GAME khỏi baseline lịch sử, k
   đường dẫn ngoài item hay item chỉ trả lời bị từ chối. Báo cáo không tự xác nhận đây là lỗi có sẵn.
 - Root nhận `assign_shared_failure`, đọc bằng chứng tái hiện trên source chưa sửa hoặc chương trình runtime độc lập,
   rồi gọi `shared_failure {action:"assign",failureId,owner,kind:"product"|"environment",reason}` và gửi `followup`
-  được trả về cho đúng worker đã spawn. Mặc định áp dụng các item code còn hoạt động có kiểm suite; `affectedItems`
-  có thể giới hạn phạm vi. Chỉ một chủ cho mỗi lỗi; nhiều lỗi độc lập có thể tồn tại đồng thời. Chủ hết thời gian hoặc
-  kết thúc mà chưa sửa thì root phải giao lại hoặc `defer` kèm lý do; không tự coi yêu cầu đang fail là đạt.
+  được trả về cho đúng worker đã spawn. Mặc định áp dụng các item code còn hoạt động, trừ PI và item đã bàn giao mà
+  `changed_files` chỉ nằm trong `answers/`; `affectedItems` do root nêu thì theo đúng danh sách đó. Chỉ một chủ cho
+  mỗi lỗi; nhiều lỗi độc lập có thể tồn tại đồng thời. Chủ hết thời gian hoặc kết thúc mà chưa sửa thì root phải giao
+  lại hoặc `defer` kèm lý do; không tự coi yêu cầu đang fail là đạt.
+- Chờ có hạn (09/11, sau 85WTXFLQ): quá `sharedFixWaitMinutes` (mặc định 8, `config/runtime.json`) tính từ lần giao gần
+  nhất mà bản sửa chưa lên main thì item khác thôi chờ (`BASELINE_PENDING`) và chính chủ được nộp phần của nó; lỗi vẫn
+  `assigned`, bản sửa lên main sau đó thì item chưa nộp sync như thường. 85WTXFLQ: TASK-08 nhận `shared-1` lúc 03:16 và
+  không xong tới hết trận; BUG-09 bàn giao lúc 03:21, PI-02, PI-03 và TASK-10 (không sửa source) đều chờ tới hết giờ.
 - `product`: chủ sửa các file sản phẩm chỉ chứa bản sửa chung, không trộn phần riêng còn dở. Sau kiểm tra, gọi
   `worker_checkpoint shared_failure_fixed {failureId,files}`. Helper đóng băng riêng từng lỗi tại
   `.team-work/baseline/<owner>/<failureId>/`, commit riêng qua `autoBaseline`, kiểm tra main chưa đổi cùng file

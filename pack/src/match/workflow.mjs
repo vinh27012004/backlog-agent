@@ -361,6 +361,15 @@ export class Workflow {
     return file;
   }
   // Fix-result mới nhất của item (chưa có thì null).
+  // Fix-result mới nhất chỉ đổi file trong answers/ (changed_files do helper tính lúc bàn giao, đường dẫn từ matchRoot).
+  answersOnlyChange(key) {
+    const file = this.latestResult(key);
+    if (!file || !existsSync(file)) return false;
+    try {
+      const files = JSON.parse(readFileSync(file, 'utf8')).changed_files;
+      return Array.isArray(files) && files.length > 0 && files.every(p => String(p).replaceAll('\\', '/').startsWith('answers/'));
+    } catch { return false; }
+  }
   latestResult(key) {
     const next = this.nextResultFile(key), n = Number(next.match(/-fixer-(\d+)\.json$/)[1]);
     return n > 1 ? next.replace(/-fixer-\d+\.json$/, `-fixer-${n - 1}.json`) : null;
@@ -635,8 +644,13 @@ export class Workflow {
   baselineApplies(key, context = null) {
     if (!context) return this.baselineContexts().some(c => this.baselineApplies(key, c));
     const r = this.rt, prep = context, ji = r.journal?.data.items[key];
-    return Boolean(prep.baseline?.failing?.length && prep.baselineOwner && prep.baselineOwner !== key && ji
-      && (prep.id ? this.sharedFailures.affects(prep, key) : ji.needsSuite && typeOf(key) !== 'PI' && !r.answerOnlyItem(key)));
+    if (!(prep.baseline?.failing?.length && prep.baselineOwner && prep.baselineOwner !== key && ji)) return false;
+    if (!prep.id) return Boolean(ji.needsSuite) && typeOf(key) !== 'PI' && !r.answerOnlyItem(key);
+    // Lỗi chung phát hiện trong GAME không dựa vào cờ needsSuite lúc prepare, nhưng không giữ PI (xếp hạng theo thứ tự
+    // nộp, như baseline lúc prepare) và item đã bàn giao mà không sửa gì ngoài answers/, trừ khi root nêu tên trong
+    // affectedItems. 85WTXFLQ: PI-02, PI-03 và TASK-10 (chỉ có answers/) bị shared-1 giữ tới hết trận.
+    return this.sharedFailures.affects(prep, key)
+      && (Boolean(prep.affectedItems) || typeOf(key) !== 'PI' && !this.answersOnlyChange(key));
   }
   baselineOwnerFor(key) {
     const contexts = this.baselineContexts();
@@ -658,6 +672,10 @@ export class Workflow {
     if (!context.id && (ji.baselineSyncError || ji.baselineSynced)) return null;
     if (fix?.state === 'landed') return 'sync';
     if (fix?.state === 'pending') return 'owner';
+    // Chủ lỗi chung có hạn (sharedFixWaitMinutes tính từ lần giao gần nhất): quá hạn thì item nộp như đang có, mất tiêu
+    // chí test sẵn có còn hơn mất cả item. 85WTXFLQ: TASK-08 nhận shared-1 lúc 03:16, không xong tới hết trận, BUG-09 bàn
+    // giao lúc 03:21 vẫn chờ. Bản sửa lên main sau đó thì item chưa nộp lại sync như thường (landed ở trên).
+    if (context.id && this.sharedFailures.waitExpired(context)) return null;
     if (context.id && fix?.state === 'failed') return 'owner';
     if (fix) return null;
     if (context.id) return 'owner'; // Chủ nghỉ/bàn giao: root phải giao lại hoặc defer có lý do.
@@ -933,7 +951,8 @@ export class Workflow {
     const refresh = this.dependencies.opportunity(key, dependencyRow);
     const dependencyProblems = await this.dependencies.problems(key, { partial: Boolean(lastChance) || lastCallOf(dependencyRow) && !refresh });
     if (dependencyProblems.length) fail('DEPENDENCY_REPLAY_REQUIRED', dependencyProblems.join('; '));
-    if (!lastCallOf(r.itemRows().find(x => x.key === key)) && this.sharedFailures.ownerPending(key)) fail('SHARED_FAILURE_PENDING', 'finish your assigned shared repair, or ask root to reassign/defer it with a concrete reason before publishing');
+    const owned = this.sharedFailures.ownerPending(key);
+    if (!lastCallOf(r.itemRows().find(x => x.key === key)) && owned && !this.sharedFailures.waitExpired(owned)) fail('SHARED_FAILURE_PENDING', 'finish your assigned shared repair, or ask root to reassign/defer it with a concrete reason before publishing');
     if (this.baselineWait(key, r.itemRows().find(x => x.key === key))) {
       fail('BASELINE_PENDING', `${this.baselineOwnerFor(key)} is fixing shared/baseline failures: the helper lands that fix, syncs this worktree and then offers refresh_candidate (in the last minutes it publishes as is)`);
     }
@@ -1081,7 +1100,7 @@ export class Workflow {
         continue;
       }
       const owned = this.sharedFailures.ownerPending(key);
-      if (owned && !lastCallOf(row)) {
+      if (owned && !lastCallOf(row) && !this.sharedFailures.waitExpired(owned)) {
         held.add(key);
         if (ji.workerState !== 'writing') add(key, 'refresh_candidate', {}, { reason: 'shared_failure_owner', failureId: owned.id,
           workerThread: ji.workerThread ?? null, followup: this.sharedFailures.assignment(owned).followup });
