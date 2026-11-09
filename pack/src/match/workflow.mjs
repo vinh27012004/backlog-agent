@@ -203,7 +203,7 @@ export class Workflow {
         ji.verificationKind = r.answerOnlyItem(key) && !Array.isArray(template?.testResults) ? 'answer_only'
           : r.itemMvs(key) ? 'mvs' : 'acceptance';
         ji.workerState = 'writing';
-        ji.workStartedAt = Date.now();
+        ji.phaseClock = { name: 'code_test', since: Date.now() };
         ji.prepared = started;
         this.metric(key, 'prepare', since);
         const profile = r.detectProfile({ path: worktree.matchRoot });
@@ -502,14 +502,22 @@ export class Workflow {
   checkpoint({ backlogItemKey: key, phase, threadId = null }) {
     const ji = this.item(key);
     if (!['ready_for_evidence', 'candidate', 'resume'].includes(phase)) fail('INVALID_ARGUMENT', 'checkpoint phase');
+    // Đồng hồ giai đoạn (phaseClock): chỉ chuyển ở ready_for_evidence (code_test → evidence) và candidate (đóng giai
+    // đoạn đang chạy). resume không đặt lại đồng hồ: OMZJW0S0 TASK-08 resume/blocked nhiều lần và vẫn làm tiếp sau khi
+    // yield, journal ghi code_test 1 s, evidence 76 s cho 22,7 phút fixer chạy thật. resume sau candidate mở giai đoạn
+    // làm lại (tên handoff như trước); thời gian chờ root trả lời blocked ghi riêng là blocked.
+    const now = Date.now();
+    const close = () => { const c = ji.phaseClock; if (c?.name && c.name !== 'waiting') this.metric(key, c.name, c.since); };
     if (phase === 'resume') {
       if (this.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before resuming this worker');
       ji.workerState = 'writing';
-      ji.workStartedAt = Date.now();
+      if (!ji.phaseClock || ji.phaseClock.name === 'waiting') ji.phaseClock = { name: ji.phaseClock ? 'handoff' : 'code_test', since: now };
+      if (ji.question?.at) this.metric(key, 'blocked', Date.parse(ji.question.at));
       if (threadId) ji.workerThread = threadId;
       delete ji.question;
     } else {
-      if (ji.workStartedAt) this.metric(key, ji.workerPhase ?? 'code_test', ji.workStartedAt);
+      if (phase === 'candidate') { close(); ji.phaseClock = { name: 'waiting', since: now }; }
+      else if (ji.phaseClock?.name !== 'evidence') { close(); ji.phaseClock = { name: 'evidence', since: now }; }
       ji.workerState = 'yielded';
       ji.workerPhase = phase === 'ready_for_evidence' ? 'evidence' : 'handoff';
       this.rt.events.push('WORKER_YIELDED', { key, phase });

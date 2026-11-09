@@ -1055,3 +1055,33 @@ test('handoff refuses own new tests that fail in the last run_checks; failures o
   write(['src/other.test.js > baseline']);
   assert.ok(!(await f.rt.workflow.handoffCheck('CR-07')).problems.some(p => /own new tests/.test(p)));
 });
+
+// OMZJW0S0 TASK-08: fixer chạy 22,7 phút mà journal chỉ ghi code_test 1 s, evidence 76 s: mỗi resume đặt lại đồng hồ,
+// còn checkpoint mà worker vẫn làm tiếp thì chốt giai đoạn quá sớm.
+test('phase metrics follow the work, not every resume: blocked waits are separate and a second ready_for_evidence keeps the clock', () => {
+  const f = fixture('TASK-08');
+  const wf = f.rt.workflow, ji = f.ji, min = 60_000;
+  const phases = () => (ji.metrics ?? []).map(m => [m.phase, Math.round(m.ms / min)]);
+  ji.metrics = [];
+  ji.phaseClock = { name: 'code_test', since: Date.now() - 10 * min };
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'resume' });
+  assert.equal(ji.phaseClock.name, 'code_test');
+  assert.ok(Date.now() - ji.phaseClock.since >= 10 * min - 1000, 'resume keeps the running clock');
+  ji.question = { text: 'run_checks cannot find yarn', at: new Date(Date.now() - 1 * min).toISOString() };
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'resume' });
+  assert.deepEqual(phases(), [['blocked', 1]]);
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'ready_for_evidence' });
+  assert.deepEqual(phases(), [['blocked', 1], ['code_test', 10]]);
+  ji.phaseClock.since -= 8 * min;
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'resume' });
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'ready_for_evidence' });
+  assert.equal(phases().length, 2, 'a second ready_for_evidence does not close evidence');
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'candidate' });
+  assert.deepEqual(phases().slice(-1), [['evidence', 8]]);
+  ji.phaseClock.since -= 5 * min;
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'resume' });
+  assert.equal(ji.phaseClock.name, 'handoff', 'a resume after handoff opens the rework phase; the wait for root is not counted');
+  ji.phaseClock.since -= 2 * min;
+  wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'candidate' });
+  assert.deepEqual(phases().slice(-1), [['handoff', 2]]);
+});

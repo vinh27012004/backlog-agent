@@ -349,7 +349,11 @@ dòng -142M fail: sync rồi chạy lại replay là đủ lấy lại 25 điể
 
 ## Đo và kiểm
 
-journal.metrics: prepare, code_test, evidence, handoff, publish; jobs: worktree_setup/publish_item/drop_databases.
+journal.metrics: prepare, code_test, evidence, handoff, blocked, publish; jobs: worktree_setup/publish_item/drop_databases.
+Từ 09/11 các giai đoạn của worker đo bằng `phaseClock`: chỉ chuyển ở ready_for_evidence (code_test → evidence) và
+candidate; resume không đặt lại đồng hồ, resume sau candidate mở giai đoạn làm lại (`handoff`), thời gian chờ root trả
+lời blocked ghi `blocked`. Trước đó mỗi resume đặt lại đồng hồ: OMZJW0S0 TASK-08 chạy 22,7 phút mà ghi code_test 1 s,
+evidence 76 s (11,5 phút trong đó là lỗi môi trường: run_checks không thấy yarn, `.snap` bị ghi lại bằng LF).
 dispatchMs từ lúc helper quan sát item tới Start Work, không phải release server. usage.mjs xuất bảng
 giai đoạn/token/credit/thread; không cộng hoạt động song song thành thời gian toàn trận. Chạy
 node --test "tests/pack/*.test.mjs" với git/PowerShell/browser; replay và chấm lại cùng bộ đề sau cài pack mới.

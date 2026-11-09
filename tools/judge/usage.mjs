@@ -373,9 +373,9 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     '', '## Thời gian theo giai đoạn', '',
     'Đề ra → thấy: từ giờ ra đề (đồng hồ server, trừ độ lệch ước lượng ' +
       `${(release.skewMs / 1000).toFixed(1).replace('.', ',')} s từ ${release.polled} item poller thấy) tới lúc helper thấy. ` +
-      'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint; các hoạt động song song không cộng thành thời gian toàn trận.', '',
-    table(['Item', 'Đề ra → thấy', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Publish'], Object.entries(items).map(([key, x]) =>
-      [key, x.releasedAt && x.seenAt ? durFine(Date.parse(x.seenAt) - Date.parse(x.releasedAt)) : '—', dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
+      'Dispatch từ lúc helper quan sát item tới Start Work. Code/test và evidence đo theo checkpoint: từ 09/11 (turning/OMZJW0S0) resume không đặt lại đồng hồ, nên chúng cộng gần bằng thời gian fixer chạy; trận cũ hơn chỉ đo từ lần resume cuối và có thể thiếu nhiều phút (OMZJW0S0 TASK-08: 22,7 phút mà code/test ghi 1 s). Chờ root: thời gian worker blocked chờ root trả lời. Các hoạt động song song không cộng thành thời gian toàn trận.', '',
+    table(['Item', 'Đề ra → thấy', 'Dispatch', 'Chuẩn bị', 'Code/test', 'Evidence', 'Bàn giao', 'Chờ root', 'Publish'], Object.entries(items).map(([key, x]) =>
+      [key, x.releasedAt && x.seenAt ? durFine(Date.parse(x.seenAt) - Date.parse(x.releasedAt)) : '—', dur(x.dispatchMs), ...['prepare', 'code_test', 'evidence', 'handoff', 'blocked', 'publish'].map(p => x.phases[p] ? dur(x.phases[p].ms) : '—')])),
     '', '## Root: lượt gọi model đến sau việc gì', '',
     `Context lớn nhất của root: ${tok(Math.max(0, ...rootThreads.map(t => t.maxContext)))}. Mỗi lượt gọi model được tính cho tool vừa trả kết quả ` +
       '(`message` = tin nhắn của Player hoặc agent khác); `exec` được tách theo tool bên trong.', '',
