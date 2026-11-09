@@ -30,6 +30,8 @@ Instead, write a 15-20 line targeted correlation script (`derive.mjs` or `derive
 1. **Completeness Check**: Load the helper's `company/timeline.json` (complete production log, one entry per line) and
    check `complete === true` and `entries.length === total`. When it is partial, follow its note; `search_logs` itself
    returns at most 20 entries per call, newest first, with no paging, so a single query file is never the whole log.
+   Its query words match whole words only (split at every non-letter/digit): `2025-10-18T22` selects that hour, but
+   `2025-10-18` never selects that day, because the ts word is `18t22`.
 2. **Event Join**: Load event streams (e.g. payments and reminders, or requests and errors).
 3. **Temporal Ordering**: Always compare timestamps via standard ISO parsing (`new Date(a.ts) < new Date(b.ts)`).
    - **TRAP**: Never sort opaque request IDs alphabetically (e.g. `req-BUN-91d2` vs `req-BUN-7f3a`); sort strictly by event timestamp `ts` ascending.

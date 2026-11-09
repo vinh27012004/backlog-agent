@@ -661,14 +661,15 @@ test('a report-only PI is prepared without dependency setup, with every service 
   assert.doesNotMatch(brief, /<skills>|<profile>|<skill_text>/, 'the playbook replaces the skill files');
 });
 
-// Server giả như Company Tools của trận: query khớp chuỗi con, mới nhất trước, tối đa 20 dòng mỗi lời gọi.
+// Server giả như Company Tools của trận: mọi từ của query là một từ nguyên vẹn của dòng, mới nhất trước, tối đa 20 dòng.
 function logServer(logs, calls = []) {
+  const words = s => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   return async (name, args) => {
     calls.push([name, args]);
     const text = v => ({ content: [{ type: 'text', text: JSON.stringify(v) }] });
     if (name === 'kb_search') return text({ articles: [{ id: 'KB-RULE-01', body: 'Rules are ranked by score.' }] });
-    const q = String(args.query ?? '').toLowerCase();
-    const hit = logs.filter(e => (!args.service || e.service === args.service) && JSON.stringify(e).toLowerCase().includes(q))
+    const want = words(args.query ?? '');
+    const hit = logs.filter(e => (!args.service || e.service === args.service) && want.every(w => words(JSON.stringify(e)).includes(w)))
       .sort((a, b) => (a.ts < b.ts ? 1 : -1));
     return text({ total: hit.length, returned: Math.min(20, hit.length), entries: hit.slice(0, 20) });
   };

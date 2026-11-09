@@ -181,18 +181,25 @@ OMZJW0S0 (05/11): PI-02 và PI-03 đúng tối đa điểm thô nhưng về nhì
 (`rule-engine`, `deploy`, không đoán ra từ đề/KB). Fixer hỏi root schema (`blocked`), rồi PI-02 chia query theo từng giờ
 (168 lời gọi, 93 s), PI-03 theo từng schedule (320 lời gọi, 121 s). Log là kho chung của trận: brief PI-02 lúc 05:00 đã
 thấy `schedules` 697 dòng, đúng số PI-03 cần 5 phút sau. Sửa (`pack/src/match/logs.mjs`):
-- `LogStore` gom toàn bộ log không lọc service: `query` khớp chuỗi con cả trong `ts`, nên chia đệ quy theo tiền tố ts
-  (năm → tháng → chục ngày → ngày → chục giờ → giờ → chục phút → … → ms) tới khi `returned == total`. Server trả mới
-  nhất trước, nên con nào mới hơn dòng cũ nhất vừa nhận thì đã đủ, khỏi gọi. Đủ khi mọi nhánh đủ và số dòng gộp bằng
-  `total` của lời gọi không lọc; thiếu (thứ tự không như giả định) thì đi lại không nhảy cóc. Server không lọc theo
-  query (dòng trả về không chứa chuỗi) thì dừng ngay (`unfiltered`); tối đa 1.200 lời gọi (`budget`).
-- Mô phỏng trên log của trận (3.608 dòng, 8 service): 523 lời gọi; không nhảy cóc 770. Riêng một service cỡ
-  `rule-engine` (755 dòng) khoảng 125–150 lời gọi.
+- Ngữ nghĩa query (sửa 09/11 sau 85WTXFLQ): mô tả tool ghi "every word must appear in the entry", và 3.300 lời gọi đã
+  lưu của OMZJW0S0, 3GW2NNGG, 85WTXFLQ đều khớp kiểu "mỗi từ của query là một từ nguyên vẹn của dòng, tách ở mọi ký tự
+  không phải chữ/số" (khớp chuỗi con sai 307/626 lời gọi của 85WTXFLQ). ts `2025-10-18T22:51:08.468Z` cho các từ 2025,
+  10, 18t22, 51, 08, 468z: `2025-10-18T22` chọn đúng giờ đó, `2025-10-18` hay `2025-10-1` không bao giờ khớp ts, `2025-10`
+  kéo cả dòng tháng 11 có release 2025.10.x. Bản đầu chia theo tiền tố ts nên 85WTXFLQ dừng ở `unfiltered` sau 13 lời
+  gọi với 20/4.057 dòng: PI-02 trả lời trên 485 dòng, PI-03 trên 607/697 dòng schedules, và brief còn dặn fixer query
+  theo tiền tố ts (fixer PI-02 hỏi `2025-10-17`, nhận hai dòng tháng 11).
+- `LogStore` gom toàn bộ log: lời gọi không lọc cho `total`, rồi mỗi từ giờ `DDtHH` (31 × 24 = 744; một từ phủ cùng giờ
+  đó ở mọi tháng) một lời gọi, bắt đầu từ giờ của dòng mới nhất, dừng ngay khi số dòng gộp bằng `total`. Giờ quá 20
+  dòng chia theo service (tổng các nhánh phải bằng `total` của giờ), rồi theo từ phút, rồi từ giây. Dòng trả về thiếu
+  một từ của query thì dừng (`unfiltered`); tối đa 1.500 lời gọi (`budget`).
+- Mô phỏng 4.070 dòng, 8 service, 13/10–21/11 như log của trận, có một giờ sự cố 60 dòng: 787 lời gọi, khoảng 11 phút ở
+  mức ưu tiên thấp, 8 phút ở mức thường. Log ngắn dừng sớm (60 dòng trong một ngày: dưới 60 lời gọi).
 - Company Tools giới hạn 120 request/phút mỗi API key (helper tự giới hạn 100): `invoke(…, {priority: 'low'})` chỉ đi
   khi cửa sổ một phút còn dưới 70 lời gọi, nên lookup của worker và prepare luôn còn ít nhất 30/phút.
-- `bootGame` mở job `log_harvest` ưu tiên thấp ngay khi vào GAME (OMZJW0S0: PI đầu ra sau ~7 phút; 523 lời gọi ở
-  70/phút ~7,5 phút). Prepare PI (`prefetchCompany` → `harvestLogs`) gọi `harvestJob('normal')`: job đang chạy thì nâng
-  ưu tiên, xong rồi thì làm mới (log không đổi chỉ một lời gọi; nhánh có `total` không đổi được tái dùng). Prepare chờ
+- `bootGame` mở job `log_harvest` ưu tiên thấp ngay khi vào GAME (OMZJW0S0: PI đầu ra sau ~7 phút, 85WTXFLQ sau ~7 và
+  ~12 phút; ~790 lời gọi ở 70/phút ~11 phút, PI đến sớm hơn thì nhận timeline tạm rồi bản đủ khi job xong). Prepare PI
+  (`prefetchCompany` → `harvestLogs`) gọi `harvestJob('normal')`: job đang chạy thì nâng ưu tiên, xong rồi thì làm mới
+  (log không đổi và lần trước đủ thì chỉ một lời gọi; log đổi thì gom lại, dòng đã có được giữ). Prepare chờ
   tối đa 60 s (`logWaitMs`), song song với dựng worktree.
 - Kho lưu ở `.team-work/company/logs.json` (khởi động lại helper vẫn dùng). Mỗi PI có `company/timeline.json`: header
   `complete`, `total`, `services` (số dòng mỗi service), rồi mỗi dòng log một dòng file, theo `ts` rồi `context.seq`.

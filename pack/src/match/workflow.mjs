@@ -10,6 +10,7 @@ import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
 import { SharedFailures } from './shared-failures.mjs';
+import { SEARCH_LOGS_WORDS } from './logs.mjs';
 import { ItemDependencies } from './item-dependencies.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
@@ -108,7 +109,7 @@ function searchLogsLine(r, type) {
   const tool = type === 'PI' ? r.company?.tools?.find(t => t.name === 'search_logs') : null;
   if (!tool) return [];
   const props = tool.inputSchema?.properties ?? {};
-  return [`search_logs input: ${JSON.stringify(props).slice(0, 600)}. It returns at most 20 entries per call, newest first, with total; there is no paging (limit, pageSize and maxResults are refused): narrow with query, for example a ts prefix such as 2025-10-18T22.`];
+  return [`search_logs input: ${JSON.stringify(props).slice(0, 600)}. It returns at most 20 entries per call, newest first, with total; there is no paging (limit, pageSize and maxResults are refused): narrow with query. ${SEARCH_LOGS_WORDS}`];
 }
 // Đường dẫn skill theo loại item và stack-notes theo profile (java-maven → java), để brief ghi đúng file: từ khi brief
 // chỉ ghi "stack notes", fixer mở mục lục stack-notes/SKILL.md rồi mới tới <stack>.md (27/62 thread từ 01/11).
