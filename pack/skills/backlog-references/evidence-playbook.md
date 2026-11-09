@@ -20,7 +20,11 @@ provenance, not correct UI.
 - **Non-UI reports, logs and text files (e.g. *.txt, *.json, *.csv, *.log)**: NEVER use the browser for these.
   Generate them directly by running the test/script command and piping output to `answers/<ID>/evidence/<name>`
   (e.g. `node script.js > answers/<ID>/evidence/report.txt`). Only PNG screenshots and browser downloads use `capture_evidence`.
-- **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. If a step fails, the helper takes a fail-safe snapshot so the file exists; report unfinished scenarios honestly and proceed to publish.
+- **Time box**: Spend at most 3 minutes or 2 `capture_evidence` attempts. If a step fails, screenshots taken before it
+  stay (`error.details.screenshotsDone`) and the helper saves the screen at the failed step as
+  `<scenario image>.FAILED-step<N>.png` (`error.details.diagnostic`): look at it to fix the steps, but never cite it in
+  testResults, rename it or copy it to the scenario's file name; candidate refuses a PASS that cites one. Report
+  unfinished scenarios NOT_RUN honestly and proceed to publish.
 
 `<required_evidence>` lists files the item description names outside the MVS (Practice ZVUYZ41V: "Capture screenshot
 of Dashboard before fixing as dashboard_before_fixing.png" sat only in the Submission section; without it the item
@@ -37,6 +41,15 @@ in `evidenceFiles`; a missing file scores the whole item 0.
   starts it detached on a free port (3100+) with its log in `<checkoutRoot>/.team-work/logs/<ID>-app.log`, and waits
   until it answers. `state: "ready"` gives the `url` for `capture_evidence`; `"starting"`: call
   `app {action: "status", backlogItemKey, waitSeconds: 50}`; `"failed"`: read `tail`, fix the cause, start again.
+- The project README (often a "Commands during the match" section) names its own build and serve commands, e.g.
+  build the web app, then run a server that serves it with environment variables for its port and data folders:
+  pass them as `custom` on the first `app start` instead of starting anything yourself (OMZJW0S0 and UOMNKT6Z BUG-09:
+  the plain start ran the wrong app and the fixer lost 2.5-3 minutes and two failed launches starting the server by
+  hand). `custom: {build: [{command, cwd}], start: {command, cwd}, env: {NAME: value}}`, cwd relative to matchRoot;
+  `{port}` is the port the helper picked, `{data}` a fresh data folder for your item outside the worktree (folders an
+  env value names under it are created), `{matchRoot}` your worktree match folder, e.g.
+  `env: {APP_PORT: "{port}", APP_DATA_DIR: "{data}", APP_FILES: "{data}/files", WEB_ROOT: "{matchRoot}/src/web/build"}`.
+  Later starts of the item reuse it; `build: false` skips its build steps when the build output is current.
 - A scenario whose precondition says the development app runs (`pnpm dev`, "development app running"): `app start`
   with `mode: "dev"` (runs the dev script, no build; the first page load compiles, so `waitSeconds` may run out:
   call `status` again). Every other scenario uses the default production mode; switch with `app start` again
@@ -53,7 +66,8 @@ in `evidenceFiles`; a missing file scores the whole item 0.
   then start the app once: a later change makes capture fail `EVIDENCE_STALE_APP` naming the changed files (Practice
   4D895OVI: CR-01 and CR-02 rebuilt the app twice each).
 - `app {action: "stop", backlogItemKey}` once your evidence is written (also on a time box stop).
-- `UNSUPPORTED_APP` (not a node app): build, then start it yourself on a free port from 3100, output to the log path
+- `UNSUPPORTED_APP` (not a node app): pass `custom` with the README's commands; only when that cannot work either,
+  build, then start it yourself on a free port from 3100, output to the log path
   above (never into the worktree: Windows locks a running app's log and the worktree can no longer be synced or
   removed), and stop it with `taskkill /PID <pid> /T /F`. Never kill a process you did not start.
 - Sign in with the `login` step (§2): the helper signs in with the account the app's seed script creates and never
@@ -72,15 +86,24 @@ login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
 → goto <the screen> → <TC-01 steps> → assertText <TC-01 value> → screenshot answers/<ID>/evidence/<TC-01 file>.png
 → <TC-02 steps, e.g. change the filter> → assertText <TC-02 value> → download / screenshot <TC-02 files>
 ```
-Files already written stay when a later step fails (`stepsDone` lists them): retry in a new call from the failed
+Files already written stay when a later step fails (`stepsDone` and `screenshotsDone` list them): retry in a new call from the failed
 scenario only, starting with `goto` and the steps that rebuild its state. A different viewport or app mode, or a
 scenario that needs fresh seed data, starts a new call.
-- Each call opens a new blank page: only cookies carry over, never the page, its filters or a dialog. Start every
-  call with `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls
-  to `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
-- Give every call the same `browserProfile` (e.g. `"<id>-admin"`): the login cookie is kept, so later calls may start
-  at the screen, and parallel calls may share it. A failed step whose `error.details.url` is `/login` means the
-  session is gone: put the `login` step back in (it returns `alreadySignedIn` when the cookie still holds).
+- Each call opens a new blank page: the page, its filters and any dialog never carry over. Start every call with
+  `goto` to the screen and repeat the steps that set its state (Practice 4D895OVI: CR-01 lost three calls to
+  `ELEMENT_NOT_FOUND` expecting the page left open by the previous call).
+- Give every call the same `browserProfile` (e.g. `"<id>-admin"`): cookies, localStorage and IndexedDB are kept
+  for the same origin (scheme, host and port), so a login or a budget/document the app keeps in the browser survives
+  into later calls; an app restarted on another port is a new origin with none of it. A failed step whose
+  `error.details.url` is `/login` means the session is gone: put the `login` step back in (it returns
+  `alreadySignedIn` when the cookie still holds); landing on a first-run or setup screen means the local data is gone.
+- A scenario that reloads the page so the app reads a changed setting: change the setting, reload (`goto` the same
+  screen), and only then create the records the screenshot shows, `waitFor` each of them and capture without another
+  reload. When the scenario needs a reload after writes (it checks that data survives), first `waitFor` every record
+  you wrote, the last one too, read back from the app's list or its saved message, and only then `goto`: a write still
+  in flight when the page unloads is lost (OMZJW0S0 and UOMNKT6Z BUG-09-TC-02: the schedule added last vanished on the
+  reload right after its Add click, the scenario went NOT_RUN and lost 25 of 80 points). After any reload `waitFor`
+  every expected record again before the screenshot.
 - `NAVIGATION_FAILED` (connection refused): the app is not running on that url; check `app status`, never retry blindly.
 - `LOGIN_FAILED`: the app refused the seeded account; `error.details.visibleText` has its message. Seeding again
   (`app_data` lock, §6) may restore it; otherwise the scenario is `NOT_RUN` with that message. A login bug the item
@@ -95,6 +118,12 @@ scenario that needs fresh seed data, starts a new call.
   relative to `context.matchRoot` (`answers/<ID>/evidence/<name>.png`).
 
 ## 3. Selectors
+- Before writing steps for a screen you have not driven yet, take its flow and selectors from the project's own
+  browser tests: e2e/, playwright/, cypress/ folders and their page models (`rg -l "page.goto|getByRole|getByTestId"`
+  over the test folders). They show the first-run screens (server choice, password, "Start budgeting"), the route
+  of each screen and how custom fields (combobox, date input) are filled. Read component source only for a screen no
+  test covers (OMZJW0S0 and UOMNKT6Z BUG-09: about 2 minutes and 3 failed captures reading WelcomeScreen.tsx and
+  Select.tsx, while desktop-client/e2e/page-models had the whole flow).
 - `selector` is CSS or Playwright selector syntax (`text=Invoices`, `[role=tab]:has-text("Invoices")`,
   `role=button[name="Save"]`, `>> nth=1`).
 - Pick by visible text with `selector` + `text` together: `{selector: "[role=tab]", text: "Invoices"}`,

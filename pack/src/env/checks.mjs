@@ -71,9 +71,12 @@ export function verificationRows(record) {
 function view(record, { waited = false } = {}) {
   if (!record) return { state: 'none', hint: 'No checks recorded for this item: call run_checks {action: "run"}.' };
   if (record.state === 'running') {
+    const built = record.build?.state === 'passed';
     return { state: 'running', runId: record.runId, checks: record.checks, startedAt: record.startedAt,
-      seconds: Math.round((Date.now() - Date.parse(record.startedAt)) / 1000),
-      hint: `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}). Do not run these commands yourself meanwhile.` };
+      seconds: Math.round((Date.now() - Date.parse(record.startedAt)) / 1000), ...(record.build ? { build: record.build.state } : {}),
+      hint: built
+        ? 'The build passed and the rest is still running: app start now (it reuses that build) and capture your evidence; call run_checks {action: "status"} for the remaining checks before candidate. Do not run these commands yourself meanwhile.'
+        : `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}). Do not run these commands yourself meanwhile.` };
   }
   const failed = (record.results ?? []).filter(c => c.state === 'failed' || c.state === 'timeout');
   return { state: record.state, runId: record.runId, ok: !failed.length, ms: record.ms, results: record.results,
@@ -157,7 +160,21 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
     // dựng lại thư mục đó, tsc đang đọc thì báo TS6053 dù code đúng (ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt vì typecheck
     // "hỏng" giả ngay trước giờ đóng). Chạy typecheck trước (nhanh, hỏng sớm) rồi build; test song song với cả hai.
     const byName = {};
-    const chain = async list => { for (const n of list) byName[n] = await one(n); };
+    // Build xong thì ghi ngay vào checks.json: app start chỉ chờ build, không chờ cả bộ test (UOMNKT6Z: BUG-09 chờ
+    // full suite 8,5 phút, quá 600 s, trước khi được start app để chụp evidence).
+    const buildFinished = async r => {
+      record.build = { state: r.state, endedAt: new Date().toISOString() };
+      if (r.state === 'passed' && before) {
+        const mid = await sourceSnapshot(checkout, folder, profile).catch(() => null);
+        if (mid && JSON.stringify(mid) === JSON.stringify(before)) {
+          rememberBuild(teamWorkspace, profile.root, before, 'run_checks'); record.buildRemembered = true;
+        }
+      }
+      if (readChecks(teamWork, key)?.runId === runId) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
+    };
+    const chain = async list => {
+      for (const n of list) { byName[n] = await one(n); if (n === 'build') await buildFinished(byName[n]); }
+    };
     if (parallel) await Promise.all([chain(names.filter(n => n !== 'test')), chain(names.filter(n => n === 'test'))]);
     else await chain(names);
     const results = names.map(n => byName[n]);

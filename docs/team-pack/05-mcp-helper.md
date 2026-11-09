@@ -651,6 +651,16 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `mode: "dev"` luôn chạy script `dev` (`next dev -p <port>` hoặc `<pm> run dev`), không build; không có script `dev`
   thì `UNSUPPORTED_APP`. Dùng cho kịch bản MVS ghi "development app running" (NO5X6J0K: BUG-01-TC-01 phải `NOT_RUN`,
   mất 67 điểm).
+- Lệnh riêng của project (09/11, sau OMZJW0S0/UOMNKT6Z: README "Commands during the match" build web app rồi chạy
+  sync-server với `ACTUAL_*` trỏ tới thư mục dữ liệu; lệnh chung chạy sai app, fixer BUG-09 tự khởi động server mất
+  2,5–3 phút và hỏng 2 lần): `start {custom: {build?: [{command, cwd?}], start: {command, cwd?}, env?: {NAME: value}}}`.
+  `cwd` tương đối với `matchRoot`, không ra ngoài. Trong lệnh và giá trị env: `{port}` (port helper chọn, cũng là
+  `PORT`), `{data}` (`.team-work/app-data/<ID>`, ngoài worktree, tạo sẵn cùng thư mục con mà một biến env trỏ tới dưới
+  `{data}`), `{matchRoot}`. Mỗi bước chạy trong `cwd` của nó, tuần tự, trong cùng tiến trình tách rời; `mode: "custom"`.
+  Helper nhớ lệnh theo item trong `team-sdlc-pack/local/app-commands/<ID>.json` (chỉ cho đúng `matchRoot` đó): start
+  sau không gửi `custom` thì dùng lại, `build: false` bỏ các bước build; `custom: {}` quên lệnh riêng. Không ghi nhớ
+  bản build (helper không biết thư mục output). Lần thử lại vì `EADDRINUSE` giữ lệnh riêng. Kiểm trên app thật
+  (worktree BUG-09 của OMZJW0S0, bỏ bước build): sẵn sàng sau 2,1 s, TC-02 chụp đạt.
 - `status {backlogItemKey, waitSeconds?}`, `stop {backlogItemKey}` (`taskkill /T /F` theo pid trong file trạng
   thái). `worktree remove` của root gọi `stop` trước khi xoá và trả `stoppedApp`.
 - Không `readOnlyHint`: chạy tiến trình nên qua `auto_review`.
@@ -674,17 +684,25 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Engine tự viết trên CDP (lớp `Cdp`, tìm phần tử, click/gõ phím, download, `Fetch`) được thay bằng `playwright-core`
   (ghim ở `config/playwright.json`), vì phải vá sau mỗi trận: 31/167 lần chụp lỗi qua 6 trận (PXWV53VC → 3OCNFC54).
   Interface `steps`, kiểm tra trước khi mở trình duyệt, URL loopback, đường dẫn `answers/<ID>/evidence/`, provenance,
-  `EVIDENCE_STALE_APP`, login bằng tài khoản seed, `route`, `drag`, chờ trang yên trước khi chụp, ảnh dự phòng khi
-  bước lỗi và `error.details` (`candidates`, `hint`, `preGateFailed`) giữ nguyên.
+  `EVIDENCE_STALE_APP`, login bằng tài khoản seed, `route`, `drag`, chờ trang yên trước khi chụp, ảnh khi
+  bước lỗi và `error.details` (`candidates`, `hint`, `preGateFailed`) giữ nguyên. Ảnh khi bước lỗi (sau OMZJW0S0/UOMNKT6Z)
+  là ảnh chẩn đoán tên `<ảnh kịch bản>.FAILED-step<N>.png` (`details.diagnostic`, cạnh `screenshotsDone`), không mang tên
+  ảnh kịch bản, không ghi đè ảnh đã chụp, không vào manifest; `answerCheck` báo lỗi kịch bản PASS trích nó. Trước đó
+  helper ghi ảnh dự phòng đúng tên mọi ảnh kịch bản còn thiếu, nên ảnh của lần chụp hỏng trông như evidence đạt.
 - Không tải trình duyệt: `executablePath` là Edge/Chrome đã cài (`findBrowser`). Installer cài `playwright-core` vào
   `team-sdlc-pack/playwright/` (cạnh `runtime/`, như codegraph) trước khi thay `runtime/`; cài lỗi thì dừng
   (`PLAYWRIGHT_NOT_INSTALLED`), không có bản dự phòng CDP. `--no-playwright` chỉ dùng cho test của pack.
   `check-distribution` mở thử trình duyệt (mục `playwright`) để phát hiện trước trận khi Edge tự cập nhật lên bản mà
   phiên bản đã ghim chưa điều khiển được.
 - `launchServer` + `kill` thay cho `launch` + `close`: Edge đóng êm mất khoảng 2 s mỗi lần gọi, kill khoảng 0,4 s.
-  `browserProfile` là một file `storageState` (`local/browser/<profile>.json`, cookie và localStorage) thay cho thư mục
+  `browserProfile` là một file `storageState` (`local/browser/<profile>.json`, cookie, localStorage và IndexedDB qua
+  `storageState({ indexedDB: true })`, theo origin gồm cả cổng) thay cho thư mục
   profile của Edge: các lần gọi song song cùng profile không khoá nhau (CR-01 của 3OCNFC54 chụp bốn kịch bản song song),
-  hết lỗi profile bị Edge mồ côi giữ (`BROWSER_START_FAILED`, 4D895OVI).
+  hết lỗi profile bị Edge mồ côi giữ (`BROWSER_START_FAILED`, 4D895OVI). IndexedDB thêm sau OMZJW0S0: BUG-09 tạo budget
+  local ("Don't use a server"), lần gọi sau chỉ còn cookie/localStorage nên quay về `/bootstrap`. Playwright 1.64 bỏ khoá
+  falsy (`0`) của bản ghi out-of-line khi lưu, rồi khôi phục cả snapshot lỗi: `fillDroppedIdbKeys` điền lại khoá từ
+  `getAllKeys` của trang trước khi ghi file. Snapshot vẫn không khôi phục được thì giữ cookie/localStorage (không mở
+  phiên trắng) và bước `browserProfile` trong `steps` báo phải dựng lại dữ liệu local trong lần gọi đó.
 - Selector: CSS hoặc cú pháp Playwright (`text=`, `:has-text()`, `role=`, `>> nth=`), bỏ chặn `INVALID_SELECTOR` của
   Practice #5; sai cú pháp vẫn báo ngay. `{selector, text}` lọc theo chữ hiển thị hoặc `aria-label`, khớp đúng trước,
   chứa chữ sau. Bước cần đích mà không có selector lẫn text bị từ chối trước khi mở trình duyệt.
@@ -716,7 +734,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Cache: lần chạy xong ghi `snapshot` khi source/môi trường không đổi trong lúc chạy; `run` với cùng snapshot và các
   bước đã có kết quả (không timeout) trả lại lần đó (`cached: true`) trừ khi `force`.
 - `app start` chờ `run_checks` đang build của cùng item (đọc `checks.json`, pid còn sống) rồi mới launch, quá
-  `waitSeconds` thì trả `waiting_for_checks`.
+  `waitSeconds` thì trả `waiting_for_checks`. Chỉ chờ bước build: build xong `run_checks` ghi ngay `build {state, endedAt}`
+  vào `checks.json` (và `rememberBuild` khi source chưa đổi), `status` lúc đó trả `build: passed` với hint start app;
+  bộ test chạy tiếp song song với việc chụp evidence (UOMNKT6Z: BUG-09 chờ full suite 8,5 phút mới được start app).
 - Lệnh lấy từ `detect_profile` của `matchRoot` (`typecheck`, `build`, `test_all` qua `runTests` có reporter JSON/JUnit,
   báo cáo để ở `.team-work/scratch/<ID>/checks/`). Log: `answers/<ID>/evidence/{typecheck,build,full-suite}.log`.
   Profile thiếu lệnh nào thì bước đó `skipped`.
@@ -724,7 +744,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   Chờ tới `waitSeconds`; quá thì trả `running`, gọi `status` để chờ tiếp. `run` khi đang có lần chạy sống thì nhập vào
   lần đó. Helper chạy nó chết giữa chừng thì `status` trả `lost`.
 - Có `build`: dừng app của item trước (build ghi đè thư mục build), `forgetBuild`, và khi build đạt mà snapshot
-  source/môi trường trước và sau như nhau thì `rememberBuild(..., 'run_checks')`: `app start` sau đó dùng lại bản build.
+  source/môi trường trước và lúc build xong (rồi lúc kết thúc) như nhau thì `rememberBuild(..., 'run_checks')`: `app start` sau đó dùng lại bản build.
 - Kết quả: mỗi bước `{name, command, state passed|failed|timeout|skipped, exitCode, ms, log, counts?, failing?, tail?}`;
   `ok`, `hint`. `worker_checkpoint candidate {result}` chép các bước thành dòng `verification` (typecheck, build, full
   test suite). Test: `checks.test.mjs`, `workflow.test.mjs`.

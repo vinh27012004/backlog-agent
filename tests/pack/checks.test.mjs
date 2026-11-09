@@ -90,7 +90,27 @@ test('app start waits for a run_checks build of the same item instead of buildin
   const res = await app({ teamWorkspace: p.tw, action: 'start', backlogItemKey: 'BUG-04', matchRoot: p.matchRoot, waitSeconds: 1 });
   assert.equal(res.state, 'waiting_for_checks', JSON.stringify(res)); assert.equal(res.runId, 'r-9');
   assert.ok(Date.now() - t0 >= 900, 'it waited before giving up');
-  assert.match(res.hint, /run_checks {action: "status"/);
+  assert.match(res.hint, /call app start again/);
+});
+
+// UOMNKT6Z: BUG-09 chờ full suite quá 600 s mới được start app. Build xong là ghi ngay, app start không chờ bộ test.
+test('run_checks records the finished build while the suite still runs, and app start no longer waits for it', async () => {
+  const p = project({ build: ok('built'), start: ok('started'), test: 'node -e "setTimeout(() => console.log(\'Tests  1 passed (1)\'), 6000)"' });
+  const first = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['build', 'test'], waitSeconds: 0 });
+  assert.equal(first.state, 'running');
+  let rec;
+  for (let i = 0; i < 50 && !(rec = readChecks(p.teamWork, 'BUG-05'))?.build; i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(rec.state, 'running', 'the suite is still running');
+  assert.equal(rec.build?.state, 'passed', JSON.stringify(rec));
+  const status = await runChecks({ teamWorkspace: p.tw, action: 'status', backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, waitSeconds: 0 });
+  assert.equal(status.build, 'passed'); assert.match(status.hint, /app start now/);
+  const t0 = Date.now();
+  const res = await app({ teamWorkspace: p.tw, action: 'start', backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, waitSeconds: 1 });
+  assert.notEqual(res.state, 'waiting_for_checks', JSON.stringify(res));
+  assert.ok(Date.now() - t0 < 5000, 'app start did not wait for the suite');
+  await app({ teamWorkspace: p.tw, action: 'stop', backlogItemKey: 'BUG-05' });
+  const done = await runChecks({ teamWorkspace: p.tw, action: 'status', backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, waitSeconds: 30 });
+  assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.ok, true);
 });
 
 // ME1X0FFX: typecheck chạy cùng lúc next build đọc .next/types đang bị xoá, báo TS6053 giả. typecheck xong rồi mới build.

@@ -98,6 +98,10 @@ test('answer results must cover the template, carry the MVS evidence and agree w
   assert.deepEqual(modest.problems, []);
   assert.match(modest.warnings.join('\n'), /all 2 testResults PASS but status is PARTIAL/);
   assert.deepEqual(check({ ...TEMPLATE2, status: 'DONE', testResults: [tc1, tc2] }), { problems: [], warnings: [] });
+  // Ảnh chẩn đoán lúc bước hỏng (capture_evidence) không chứng minh kịch bản PASS.
+  writeFileSync(join(dir, 'evidence', 'tc-02-export.FAILED-step7.png'), 'png');
+  const diag = check({ ...TEMPLATE2, status: 'DONE', testResults: [tc1, { ...tc2, evidence: ['evidence/tc-02-export.png', 'evidence/tc-02-export.FAILED-step7.png'] }] });
+  assert.match(diag.problems.join('\n'), /BUG-09-TC-02 is PASS but cites evidence\/tc-02-export\.FAILED-step7\.png, a screen captured at a failed step/);
   assert.deepEqual(check({ ...TEMPLATE2, status: 'PARTIAL', testResults: [tc1, { ...tc2, result: 'FAIL' }] }).problems, []);
   assert.deepEqual(scenarioCounts(join(dir, 'submit.json')), { passed: 1, failed: 1, skipped: 0 });
 });

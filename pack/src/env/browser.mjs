@@ -209,6 +209,37 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const cssString = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const describeQuery = q => q.selector ? `${q.selector}${q.text ? ` "${q.text}"` : ''}` : `text "${q.text}"`;
 
+// Playwright 1.64 bỏ khoá falsy (0, '') của bản ghi out-of-line khi lưu IndexedDB, rồi khôi phục cả snapshot lỗi
+// "key parameter was not provided" (OMZJW0S0 BUG-09: block 0 của SQLite budget local). Điền lại khoá từ getAllKeys của
+// trang (cùng thứ tự khoá với bản ghi) cho origin trang đang mở; origin khác giữ nguyên.
+export async function fillDroppedIdbKeys(state, page) {
+  let origin;
+  try { origin = new URL(page.url()).origin; } catch { return state; }
+  const entry = state.origins?.find(o => o.origin === origin);
+  const stores = [];
+  for (const db of entry?.indexedDB ?? []) for (const st of db.stores ?? []) {
+    if (!st.keyPath && st.records?.some(r => !('key' in r) && !('keyEncoded' in r))) stores.push([db.name, st.name, st]);
+  }
+  if (!stores.length) return state;
+  const keys = await page.evaluate(async list => Promise.all(list.map(([dbName, storeName]) => new Promise(done => {
+    const req = indexedDB.open(dbName);
+    req.onerror = () => done(null);
+    req.onsuccess = () => {
+      try {
+        const all = req.result.transaction(storeName).objectStore(storeName).getAllKeys();
+        all.onsuccess = () => { done(all.result.map(k => (typeof k === 'number' || typeof k === 'string' ? k : null))); req.result.close(); };
+        all.onerror = () => done(null);
+      } catch { done(null); }
+    };
+  }))), stores.map(([d, s]) => [d, s])).catch(() => null);
+  stores.forEach(([, , st], i) => {
+    const k = keys?.[i];
+    if (!k || k.length !== st.records.length) return;
+    st.records.forEach((r, j) => { if (!('key' in r) && !('keyEncoded' in r) && k[j] !== null) r.key = k[j]; });
+  });
+  return state;
+}
+
 export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
   timeoutMs = 45_000, context = null }) {
   if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
@@ -265,7 +296,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     provenance = { ...snapshot, base, worktree: where.matchRoot, appMode: context.appMode, scenario: String(context.scenario), phase: context.phase,
       teamWork: dirname(where.logDir), key: context.backlogItemKey };
   }
-  // browserProfile giữ cookie và localStorage giữa các lần gọi trong một file storageState (không dùng thư mục profile của
+  // browserProfile giữ cookie, localStorage và IndexedDB giữa các lần gọi trong một file storageState (không dùng thư mục profile của
   // Edge: hai lần gọi song song cùng profile không khoá nhau, và đóng trình duyệt không phải chờ ghi profile).
   const stateFile = browserProfile && /^[A-Za-z0-9_-]{1,40}$/.test(browserProfile)
     ? join(teamWorkspace, 'team-sdlc-pack', 'local', 'browser', `${browserProfile}.json`) : null;
@@ -291,9 +322,23 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   let page;
   try {
     const options = { viewport: vp, deviceScaleFactor: 1, acceptDownloads: true };
-    ctx = stateFile && existsSync(stateFile)
-      ? await instance.newContext({ ...options, storageState: stateFile }).catch(() => instance.newContext(options))
-      : await instance.newContext(options);
+    // IndexedDB khôi phục lỗi (Playwright không giữ được giá trị nhị phân, hay bản ghi out-of-line thiếu value: budget
+    // local của OMZJW0S0 BUG-09) thì vẫn khôi phục cookie/localStorage, không mở phiên trắng làm mất đăng nhập.
+    const withoutIdb = () => {
+      try {
+        const s = JSON.parse(readFileSync(stateFile, 'utf8'));
+        return { cookies: s.cookies ?? [], origins: (s.origins ?? []).map(({ indexedDB, ...o }) => o) };
+      } catch { return null; }
+    };
+    if (stateFile && existsSync(stateFile)) {
+      ctx = await instance.newContext({ ...options, storageState: stateFile }).catch(() => null);
+      if (!ctx) {
+        const partial = withoutIdb();
+        ctx = partial ? await instance.newContext({ ...options, storageState: partial }).catch(() => null) : null;
+        if (ctx) log.push({ step: 0, action: 'browserProfile', note: 'saved IndexedDB could not be restored (binary or keyless records); cookies and localStorage were restored: rebuild browser-local data in this call' });
+      }
+    }
+    ctx ??= await instance.newContext(options);
     page = await ctx.newPage();
     page.setDefaultTimeout(5000);
     page.setDefaultNavigationTimeout(15_000);
@@ -671,24 +716,29 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       // Lỗi của Playwright (trang đóng, phím không tồn tại...) cũng tới agent như lỗi của bước, kèm trạng thái trang.
       const error = caught instanceof HelperError ? caught
         : new HelperError(caught?.name === 'TimeoutError' ? 'STEP_TIMEOUT' : 'BROWSER_STEP_FAILED', firstLine(caught));
-      // Fail-safe snapshot: chụp ngay màn hình hiện tại cho các screenshot còn thiếu để không bị mất điểm oan
-      for (const s of steps.filter(s => s && s.action === 'screenshot')) {
-        if (s.path && !existsSync(s.path)) {
-          try {
-            const png = await page.screenshot({ timeout: 5000 }).catch(() => null);
-            if (png) {
-              mkdirSync(dirname(s.path), { recursive: true });
-              writeFileSync(s.path, png);
-              saved(s.path, 'screenshot');
-            }
-          } catch { /* fallback best effort */ }
-        }
+      // Ảnh chẩn đoán của màn hình lúc hỏng, tên riêng `<ảnh kịch bản>.FAILED-step<N>.png`: không bao giờ mang tên ảnh
+      // kịch bản (OMZJW0S0/UOMNKT6Z: ảnh dự phòng mang đúng tên tc-02-*.png nên dễ bị nộp nhầm như evidence đạt), không ghi
+      // đè ảnh kịch bản đã chụp được, không vào manifest evidence. Chỉ để fixer xem vì sao hỏng.
+      let diagnostic = null;
+      const pending = steps.slice(Math.max(0, at)).find(s => s?.action === 'screenshot' && s.path)
+        ?? steps.find(s => s?.action === 'screenshot' && s.path);
+      if (pending) {
+        try {
+          const png = await page.screenshot({ timeout: 5000 }).catch(() => null);
+          if (png) {
+            diagnostic = pending.path.replace(/\.png$/i, '') + `.FAILED-step${at + 1}.png`;
+            mkdirSync(dirname(diagnostic), { recursive: true });
+            writeFileSync(diagnostic, png);
+          }
+        } catch { diagnostic = null; }
       }
       if (at >= 0) {
         const step = steps[at];
         const state = await evaluate(PAGE_STATE, { selector: step.selector ?? null, text: step.text ?? null }).catch(() => null);
         const hint = failureHint(step, state, error.code);
         error.details = { failedStep: at + 1, action: step.action, ...(state ?? {}), ...(hint ? { hint } : {}), stepsDone: log,
+          screenshotsDone: shots.map(x => x.path),
+          ...(diagnostic ? { diagnostic, diagnosticNote: 'screen at the failed step for debugging only: never list it as scenario evidence or rename it' } : {}),
           consoleErrors: consoleErrors.slice(0, 5) };
       }
       throw error;
@@ -706,7 +756,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       try {
         mkdirSync(dirname(stateFile), { recursive: true });
         const tmp = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
-        writeFileSync(tmp, JSON.stringify(await ctx.storageState()));
+        // indexedDB: app lưu dữ liệu local trong IndexedDB (OMZJW0S0 BUG-09: budget "Don't use a server") mất ở lần gọi
+        // sau nếu chỉ giữ cookie/localStorage; newContext({storageState}) khôi phục cả IndexedDB.
+        writeFileSync(tmp, JSON.stringify(await fillDroppedIdbKeys(await ctx.storageState({ indexedDB: true }), page)));
         renameSync(tmp, stateFile);
       } catch { /* trình duyệt đã đóng */ }
     }

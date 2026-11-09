@@ -186,6 +186,31 @@ test('capture_evidence accepts Playwright selectors and reports the page on a fa
   }
 });
 
+// OMZJW0S0/UOMNKT6Z BUG-09: ảnh dự phòng khi bước hỏng mang đúng tên ảnh kịch bản (tc-02-*.png), dễ bị nộp như evidence đạt.
+test('a failed step writes a separately named diagnostic image, never the scenario image, and keeps earlier ones', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const evidence = join(tw, 'matches', 'M1', 'M1', 'answers', 'BUG-09', 'evidence');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'screenshot', path: join(evidence, 'tc-01-schedules.png') },
+      { action: 'click', text: 'Receipts', timeoutMs: 500 },
+      { action: 'screenshot', path: join(evidence, 'tc-02-window-14.png') }] }), e => {
+      assert.equal(e.details.failedStep, 3);
+      assert.equal(e.details.diagnostic, join(evidence, 'tc-02-window-14.FAILED-step3.png'));
+      assert.deepEqual(e.details.screenshotsDone, [join(evidence, 'tc-01-schedules.png')]);
+      return true;
+    });
+    assert.ok(existsSync(join(evidence, 'tc-01-schedules.png')), 'the scenario captured before the failure stays');
+    assert.ok(!existsSync(join(evidence, 'tc-02-window-14.png')), 'no file carries the name of the scenario that failed');
+    assert.ok(existsSync(join(evidence, 'tc-02-window-14.FAILED-step3.png')));
+  } finally {
+    server.close();
+  }
+});
+
 // NBDB5U0O BUG-02: click [role=option] khi danh sách chưa mở và click "New invoice" trên about:blank; candidates của
 // lỗi chỉ là link sidebar đầu DOM.
 const SIDEBAR_PAGE = page(`<nav>${Array.from({ length: 45 }, (_, i) => `<a href="/p${i}">Link ${i}</a>`).join('')}</nav>
@@ -238,6 +263,68 @@ test('capture_evidence browserProfile keeps the login cookie across calls', { sk
     for (const res of all) assert.match(res.visibleText, /Accounting/);
     const fresh = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `${url}/accounting` }] });
     assert.match(fresh.visibleText, /Please sign in/);
+  } finally {
+    server.close();
+  }
+});
+
+// OMZJW0S0 BUG-09: app lưu budget local trong IndexedDB; profile chỉ giữ cookie/localStorage nên lần gọi sau về /bootstrap.
+const IDB_PAGE = page(`<div id="out">loading</div><script>
+const open = indexedDB.open('budget', 1);
+open.onupgradeneeded = () => open.result.createObjectStore('rows');
+open.onsuccess = () => {
+  const db = open.result;
+  // Khoá 0 và giá trị nhị phân như block SQLite của budget local (Playwright bỏ khoá 0 khi lưu).
+  if (location.hash === '#add') {
+    const tx = db.transaction('rows', 'readwrite');
+    tx.objectStore('rows').put(new TextEncoder().encode('Edge 14 days').buffer, 0);
+    tx.objectStore('rows').put(new TextEncoder().encode('Beyond 15 days').buffer, 1);
+    tx.oncomplete = () => { out.textContent = 'saved'; };
+  } else {
+    const req = db.transaction('rows').objectStore('rows').getAll();
+    req.onsuccess = () => { out.textContent = 'rows: ' + (req.result.map(b => new TextDecoder().decode(b)).join(', ') || 'none'); };
+  }
+};
+</script>`);
+
+test('capture_evidence browserProfile keeps IndexedDB data across calls', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(IDB_PAGE); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await captureEvidence({ teamWorkspace: tw, browserProfile: 'bug09', steps: [
+      { action: 'goto', url: `${url}/#add` }, { action: 'assertText', text: 'saved' }] });
+    const again = await captureEvidence({ teamWorkspace: tw, browserProfile: 'bug09', steps: [
+      { action: 'goto', url: `${url}/` }, { action: 'assertText', text: 'rows:' }] });
+    assert.match(again.visibleText, /rows: Edge 14 days, Beyond 15 days/);
+    const fresh = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `${url}/` }, { action: 'assertText', text: 'rows:' }] });
+    assert.match(fresh.visibleText, /rows: none/);
+  } finally {
+    server.close();
+  }
+});
+
+// Snapshot có bản ghi out-of-line thiếu khoá (như file cũ lưu trước khi sửa): Playwright không khôi phục được IndexedDB;
+// khi đó vẫn phải giữ cookie đăng nhập thay vì mở phiên trắng.
+test('a saved IndexedDB that cannot be restored still restores the login cookie', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(/sid=ok/.test(req.headers.cookie ?? '') ? '<h1>Accounting</h1>' : '<h1>Please sign in</h1>');
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const dir = join(tw, 'team-sdlc-pack', 'local', 'browser');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'broken-idb.json'), JSON.stringify({
+    cookies: [{ name: 'sid', value: 'ok', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+    origins: [{ origin, localStorage: [], indexedDB: [{ name: 'actual', version: 1, stores: [
+      { name: 'data', autoIncrement: false, records: [{ value: 'block without its key' }], indexes: [] }] }] }] }));
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, browserProfile: 'broken-idb', steps: [{ action: 'goto', url: `${origin}/accounting` }] });
+    assert.match(res.visibleText, /Accounting/);
+    assert.ok(res.steps.some(s => s.action === 'browserProfile' && /IndexedDB could not be restored/.test(s.note)), JSON.stringify(res.steps));
   } finally {
     server.close();
   }

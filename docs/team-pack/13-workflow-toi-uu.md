@@ -263,8 +263,9 @@ lượt dài 32 s vì tool chờ lâu. Nguyên nhân và sửa:
     trong lúc chạy; gọi lại với cùng snapshot thì trả lần đó ngay (`cached: true`), `force: true` để chạy lại.
   - `worker_checkpoint ready_for_evidence` (helper của root) tự chạy `run_checks` ngay sau sync, trên source cuối
     cùng, trả `checks {state, runId}`; worker chỉ gọi `run_checks status`. Tắt: `"autoChecks": false`.
-  - `app start` thấy `run_checks` của chính item đang build thì chờ nó (tới `waitSeconds`) rồi dùng lại bản build;
-    quá hạn thì trả `waiting_for_checks`.
+  - `app start` thấy `run_checks` của chính item đang build thì chờ bước build (tới `waitSeconds`) rồi dùng lại bản build;
+    quá hạn thì trả `waiting_for_checks`. Không chờ bộ test: fixer chụp evidence trong lúc full suite còn chạy và xem
+    `run_checks status` trước candidate (sau UOMNKT6Z).
   - Bỏ `parallel` khỏi schema (luôn song song). `team-fixer.toml`: không chạy full `run_checks` trước
     ready_for_evidence (chỉ test_one, `checks: ["typecheck"]` khi đổi kiểu), chép script seed/report vào `src/`
     trước ready_for_evidence.

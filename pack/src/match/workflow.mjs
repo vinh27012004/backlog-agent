@@ -536,7 +536,7 @@ export class Workflow {
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
         ...(checks ? { checks } : {}),
         hint: checks
-          ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call run_checks {action: "status", waitSeconds: 110} for its result (fix and run again only on a failure), then app start, which reuses that build, and capture final evidence.${baseline}`
+          ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call app start now: it waits only for that run's build and reuses it. Capture final evidence, then call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite before candidate (fix and run again only on a failure).${baseline}`
           : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}` };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };

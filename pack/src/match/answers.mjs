@@ -191,6 +191,11 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null,
       if (missing.length) {
         problems.push(`${r.id} is PASS but its evidence lacks what the MVS requires: ${missing.map(m => `evidence/${m}`).join(', ')} (capture it or report the scenario as FAIL/NOT_RUN)`);
       }
+      // capture_evidence đặt tên ảnh màn hình lúc bước hỏng là *.FAILED-step<N>.png: chẩn đoán, không phải evidence đạt.
+      const diagnostics = [...refs].filter(name => /\.FAILED-step\d+\.png$/i.test(name));
+      if (diagnostics.length) {
+        problems.push(`${r.id} is PASS but cites ${diagnostics.map(d => `evidence/${d}`).join(', ')}, a screen captured at a failed step: capture the scenario again or report it FAIL/NOT_RUN`);
+      }
     }
     const notPassed = results.filter(r => !PASS.test(String(r.result ?? ''))).map(r => r.id ?? '?');
     if (answer.status === 'DONE' && notPassed.length) {

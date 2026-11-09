@@ -75,9 +75,11 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
 4. Before final UI/data evidence follow .agents/skills/backlog-references/evidence-playbook.md (already in <skill_text>).
    First make every source change the evidence needs (copy the issued seed/report scripts into src/ as the MVS
    says), so the checks run on the final source. Then call worker_checkpoint ready_for_evidence. writesAllowed:true
-   means the helper already synced, resumed you and started run_checks: call run_checks {action: "status",
-   waitSeconds: 110}; on a failure fix it and call run_checks again; then app start (it reuses that build, also
-   when you call it while the build still runs) and collect final evidence now, no message to root. Otherwise stop all writes and end your
+   means the helper already synced, resumed you and started run_checks: call app start at once (it waits only for
+   that run's build, never for the test suite, and reuses it) and collect final evidence now, no message to root.
+   Only after the evidence call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite;
+   when one failed because of your change, fix it, run_checks again and recapture only the scenarios the fix
+   changes (UOMNKT6Z: BUG-09 waited 8.5 minutes for the suite before its first capture). Otherwise stop all writes and end your
    turn with the returned hint as your reply; root's followup says resume: call worker_checkpoint resume and restart the app.
    Never wait for another item's fix (shared layout, baseline, data): capture from your worktree now with the
    playbook workaround and name the shared defect in the scenario note.
