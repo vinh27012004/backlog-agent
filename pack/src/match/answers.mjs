@@ -29,6 +29,18 @@ export function strayAnswers(files, folder) {
     .map(f => f.path);
 }
 
+// Test ghi file vào đường dẫn tuyệt đối ngoài repo. QXUD1QAI BUG-11: `fs.writeFile('/bug-11-statement.qif')` chạy được
+// trên Windows (thành D:\bug-11-statement.qif, 0,4 s) nhưng máy chấm Linux không cho ghi vào `/`; atomicWriteFile của
+// Actual thử lại 20 lần, quá 5 s, team-tests 0/2. Chuỗi bị bắt: file ngay dưới gốc ('/x.qif') hay đường dẫn có ổ đĩa
+// ('C:\\...', 'D:/...'), trong file test có lệnh ghi. Đường dẫn URL kiểu '/api/x' (không có đuôi file) không tính.
+const WRITE_CALL = /\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|outputFile|mkdir|mkdirSync)\s*\(/;
+const ABSOLUTE_LITERAL = /(['"`])(\/[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}|[A-Za-z]:[\\/][^'"`\r\n]*)\1/g;
+export function absoluteTestWrites(text) {
+  const source = String(text ?? '');
+  if (!WRITE_CALL.test(source)) return [];
+  return [...new Set([...source.matchAll(ABSOLUTE_LITERAL)].map(m => m[2]))];
+}
+
 const PASS = /^pass(ed)?$/i;
 const FAIL = /^fail(ed)?$/i;
 const EVIDENCE_FILE = /[A-Za-z0-9][\w.-]*\.(?:png|jpe?g|webp|gif|json|txt|log|md|csv|pdf|html?|xml|zip|webm|mp4)\b/gi;

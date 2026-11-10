@@ -3,7 +3,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { answerCheck, changedFiles, requirementsCheck, strayAnswers } from './answers.mjs';
+import { absoluteTestWrites, answerCheck, changedFiles, requirementsCheck, strayAnswers } from './answers.mjs';
 import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
@@ -416,6 +416,23 @@ export class Workflow {
       const folder = `${r.session.descriptor.matchId}/`;
       const stray = strayAnswers(changed, r.session.descriptor.matchId);
       if (stray.length) problems.push(`answer files outside the match folder's answers/: ${stray.slice(0, 5).join(', ')}; answers/<ID>/ exists only at ${join(paths.matchRoot, 'answers', key)} (a script run from src/ that writes answers/... lands in src/answers/, and graders then read every later submission from there). Delete that copy and write by the absolute answers path`);
+      const ownTests = changed.filter(f => f.status !== 'D' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path));
+      const absolute = [];
+      for (const f of ownTests) {
+        let text = '';
+        try { text = readFileSync(join(paths.worktreeRoot, f.path), 'utf8'); } catch { continue; }
+        const hits = absoluteTestWrites(text);
+        if (hits.length) absolute.push(`${f.path.slice(folder.length)} (${hits.slice(0, 3).join(', ')})`);
+      }
+      // Từ chối một lần: một file system ảo trong bộ nhớ của test (vd fs/index.test.ts của Actual ghi '/outside.txt' vào
+      // IndexedDB giả) cũng khớp; worker gọi candidate lại với đúng các đường dẫn đó thì chỉ còn cảnh báo.
+      const absoluteKey = absolute.join('|');
+      if (absolute.length && ji.absoluteWritesSeen !== absoluteKey) {
+        ji.absoluteWritesSeen = absoluteKey;
+        problems.push(`tests that write to an absolute path outside the repository: ${absolute.slice(0, 5).join('; ')}. Graders run the suite on Linux as a non-root user: '/name.ext' is refused there (on Windows it silently lands at the drive root and passes), and a retrying writer times out the test (QXUD1QAI BUG-11 lost team-tests). Write temporary files under a directory from mkdtemp(join(os.tmpdir(), ...)) or read fixtures relative to __dirname, then run_checks again. If the path belongs to an in-memory file system of the test, not the disk, call candidate again unchanged`);
+      } else if (absolute.length) {
+        warnings.push(`tests write to absolute paths (${absolute.slice(0, 5).join('; ')}); accepted as an in-memory file system on the second handoff`);
+      }
       const own = changed.filter(f => f.path.startsWith(folder) && f.status !== 'A').map(f => f.path.slice(folder.length));
       const config = own.filter(p => TEST_CONFIG.test(p));
       if (config.length) problems.push(`test configuration changed: ${config.join(', ')}; restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>) and make your test work with the existing config`);

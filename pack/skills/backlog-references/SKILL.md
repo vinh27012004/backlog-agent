@@ -35,6 +35,11 @@ do: graders run the whole suite where no browser is installed, the file errors i
 failed tests, which fails every later item's automated-test case (Practice BTZNI69E: BUG-01's layout test launched
 msedge; CR-01, CR-02 and CR-03 each lost their test case). Test the logic in node or jsdom; keep browser runs as
 evidence scripts under answers/<ID>/evidence/. Judge the full suite by its exit code, not only the failed count.
+Graders run the suite on Linux as a non-root user, maybe on a slower machine. New tests write temporary files only
+under a directory from `mkdtemp(join(os.tmpdir(), ...))` and read fixtures relative to `__dirname`; never an absolute
+path such as `'/statement.qif'` or `'C:\\...'`. On Windows `'/x.qif'` lands at the drive root and the test passes; on
+Linux the write is refused, and a retrying writer times the test out (QXUD1QAI BUG-11: team-tests 0/2). Give a test
+that replays a whole data set through real modules an explicit timeout well above its local time.
 Your worktree also carries test changes other items already put on main (a baseline owner's corrected test), and
 graders compare test files at your commit with the issued version. Before any note or record claims tests were
 unchanged, and whenever the item says grading reads the original tests, run

@@ -1289,3 +1289,19 @@ test('candidate refuses while main changed one of the files of the item with oth
   assert.match(refused.problems[0], /main changed files you also change.*M1\/src\/lib\.js.*SYNC_REQUIRED/);
   assert.match(refused.hint, /ready_for_evidence/);
 });
+
+// QXUD1QAI BUG-11: test ghi '/bug-11-statement.qif' đạt trên Windows (gốc ổ D:) nhưng timeout trên máy chấm Linux.
+test('a new test that writes to an absolute path outside the repository is refused once', async () => {
+  const f = fixture('BUG-01'), wf = f.rt.workflow;
+  f.result(1);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'replay.test.js'),
+    "const filename = '/bug-11-statement.qif';\nawait fs.writeFile(filename, data);\nawait fetch('/api/accounts');\n");
+  const first = await wf.handoffCheck('BUG-01');
+  assert.ok(first.problems.some(p => /absolute path outside the repository: src\/replay\.test\.js \(\/bug-11-statement\.qif\)/.test(p)), JSON.stringify(first.problems));
+  const second = await wf.handoffCheck('BUG-01');
+  assert.ok(!second.problems.some(p => /absolute path/.test(p)), 'the same paths pass the second time');
+  assert.ok(second.warnings.some(w => /in-memory file system/.test(w)));
+  writeFileSync(join(f.wt.matchRoot, 'src', 'replay.test.js'), "await fs.writeFile(join(mkdtempSync(join(tmpdir(), 'b11-')), 'statement.qif'), data);\n");
+  const fixed = await wf.handoffCheck('BUG-01');
+  assert.ok(!fixed.problems.some(p => /absolute path/.test(p)) && !fixed.warnings.some(w => /absolute paths/.test(w)));
+});
