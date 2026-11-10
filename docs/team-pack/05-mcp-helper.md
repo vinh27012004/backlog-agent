@@ -355,7 +355,7 @@ chạy, không bao giờ là đạt. Root **không** tự ghi `BACKLOG_TESTS` b�
 ### 5.12 `commit_and_push`
 
 1. Kiểm trên checkout chính: mọi file thay đổi nằm dưới `<folder>/`; không có `<folder>/evidence/`,
-   `<folder>/challenge/evidence/`; không file > 5 MB; không có file trông như secret (`.env`, `*.pem`, token).
+   `<folder>/challenge/evidence/`; không giới hạn cỡ file (mốc 5 MB bỏ 10/11 sau LXRMBRA2); không có file trông như secret (`.env`, `*.pem`, token).
    `answers/<ID>/submit.json` được kiểm như §5.10 nhưng lỗi chỉ thành `answerWarnings`, không chặn.
 2. `git add -- <folder>` → `git commit -m "<ID>: <tóm tắt>"`.
 3. `git push origin HEAD:refs/heads/<branch>` (không `--force`, env §8). Bị từ chối non-fast-forward thì

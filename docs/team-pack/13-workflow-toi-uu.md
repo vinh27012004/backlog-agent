@@ -374,6 +374,32 @@ dòng -142M fail: sync rồi chạy lại replay là đủ lấy lại 25 điể
 - Candidate từ chối khi test mới của chính item fail ở lần `run_checks` cuối (khớp tên file trong `failing`).
   Expected của test số liệu official lấy từ phép tính theo chuẩn KB, không gõ tay.
 
+### Chép sớm bản sửa sang item đang chờ (10/11, sau LXRMBRA2)
+
+LXRMBRA2: CR-07 (hạn 20 phút, ra cùng lúc BUG-11) mất 41 điểm vì source nộp chưa có bản sửa BUG-11. BUG-11 xong code
+và test trọng tâm ở phút 7,5, nhưng evidence, check và publish hỏng kéo tới phút 25. Hai item không sửa chung file nào;
+chỗ dính là luật chấm. Chờ "lên main" là quá muộn với item có hạn.
+
+- `neededBy(key)`: item chưa xong mà đề nhắc tới `key`, đọc từ đề của mọi item đang thấy (không chờ chúng prepare).
+  Brief của `key` có khối `<needed_by>`: ai chờ, đóng sau bao lâu, sửa product trước rồi `ready_for_evidence` ngay khi
+  test trọng tâm xanh, sau đó giữ product ổn định.
+- `shareWithDependents(key)` (`match/dependency.mjs`), ở `ready_for_evidence` và `candidate` của `key`: lấy file product
+  `key` sửa so với `worktreeBase` (không test, cấu hình test, `answers/`, `.codegraph/`), `git diff --binary` + `git
+  apply --check` rồi áp vào worktree item chờ; file mới chép thẳng. Item chờ cũng sửa một file đó, patch không áp
+  sạch, hay worker nhận đã sửa bản chép trước thì không chép gì. Ghi `sharedFix {from, files, fingerprint, at}` và sự
+  kiện `DEPENDENCY_READY`; lần sau chỉ chép lại khi nội dung đổi (gỡ bản cũ rồi áp bản mới).
+- Báo item chờ một lần: candidate từ chối (đang viết), hint của resume hay `ready_for_evidence`, hoặc `nextActions`
+  `refresh_candidate {reason: dependency_ready}` khi đã bàn giao (giữ publish, còn ≥ 3 phút). Worker chạy lại replay,
+  so với phép tính độc lập; bản chép làm hỏng build/test thì tự gỡ (`git checkout HEAD -- <file>`) và bàn giao không có nó.
+- `key` lên main: `noteDependencyLanded` so nội dung các file đã chép với main. Giống thì `dependencyLanded` bỏ qua
+  (khỏi sync và chạy lại); khác mà worker nhận chưa sửa gì vào bản chép thì gỡ bản chép, để sync lấy bản của main.
+- Item chờ lên main trước `key` với cùng nội dung: kiểm `SYNC_REQUIRED` của `key` đã coi nội dung giống nhau là sạch.
+- Item được chờ đứng đầu `nextActions` của root.
+- Candidate còn ≥ 3 phút mà main đã đổi một file product của item với nội dung khác: từ chối, bảo `ready_for_evidence`
+  (sync) thay vì để publish dừng ở `SYNC_REQUIRED` (LXRMBRA2 BUG-11 và `transfer.ts` của TASK-08).
+- Giới hạn: chỉ nhận phụ thuộc khi đề nêu tên item kia; bản chép là product code lúc `ready_for_evidence`, chưa qua
+  evidence và bộ test của item được chờ.
+
 ## Test đỏ không lên main, PASS phải có evidence MVS (10/11, sau QDYZMY1K)
 
 - PI-03 hết giờ trước khi sửa source và bàn giao chỉ có test tái hiện `pi03-posted-amount.test.ts` (đỏ). Grader chạy test
@@ -421,13 +447,24 @@ PI-03 hỏi ở giây 357, lặp 320 truy vấn `SCH-xxxx` và chạm trần 12 
   TASK-08 6m43s, trong khi đề BUG/CR ghi "The grader runs the loot-core tests" và item chỉ sửa loot-core.
 - `env/test-scope.mjs`: đề (page.json) có câu "the grader runs the <gói> tests" và <gói> khớp một workspace có script
   test (tên gói, đuôi sau `/` hay tên thư mục) thì bước test chỉ chạy gói đó (`yarn workspace <tên> test`, `pnpm
-  --filter`, `npm test --workspace=`), cộng mọi workspace có file item sửa (git diff HEAD + file mới). File sửa trong app
-  mà ngoài mọi workspace (package.json gốc, tsconfig, lockfile) thì chạy cả bộ. Đề ghi "the whole test suite" hay không
+  --filter`, `npm test --workspace=`). Item sửa file của một workspace khác có test (git diff HEAD + file mới) thì chạy
+  cả bộ: runner của repo chạy các gói song song, lệnh theo gói chạy lần lượt (LXRMBRA2 CR-07: core rồi web, hết 600 s).
+  File sửa trong app mà ngoài mọi workspace (package.json gốc, tsconfig, lockfile) cũng chạy cả bộ. Đề ghi "the whole test suite" hay không
   nêu gói (TASK-08) thì chạy cả bộ như cũ. Kết quả test mang `scope {packages, reason}`, dòng verification ghi
   `scoped to …`; lệnh theo gói không kèm reporter JSON, số đếm đọc từ log. Typecheck và build vẫn chạy cả repo.
 - Rủi ro còn lại: grader chấm thêm gói khác mà đề không nêu, và một thay đổi trong gói được chấm làm hỏng test của gói
   khác mà item không sửa. Tắt: `"scopedTests": false`.
 
+
+## Sau LXRMBRA2 (10/11): lỗi sớm của run_checks, tra log trước khi bàn giao, file lớn
+
+- `run_checks`: mỗi check xong ghi vào `checks.json` (`finished`); một check hỏng trong lúc check khác còn chạy thì
+  status/run trả ngay `failed[]` kèm đuôi log. `run` khi source đã đổi so với `startSnapshot` ghi `checks.cancel`
+  (runId), tiến trình đang chạy đọc file mỗi giây, giết lệnh con, ghi `cancelled`, rồi lần mới bắt đầu.
+- `worker_checkpoint candidate` chờ job `log_lookup` của item còn chạy (90 s, bỏ qua khi item còn dưới 3 phút) và từ
+  chối một lần khi worker chưa nhận kết quả (`resultSeen`, đặt ở `job_status`/`company_lookup` trả kết quả).
+- Push không còn giới hạn cỡ file; `unpushable` (integration.mjs) chặn đường dẫn cấm trước khi commit lên main local.
+- `capture_evidence` nhận app `custom` với appMode worker khai.
 
 ## Đo và kiểm
 
