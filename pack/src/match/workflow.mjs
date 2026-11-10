@@ -80,6 +80,13 @@ const neededByBlock = list => `${list.map(d => `${d.key}${d.minutesLeft != null 
   + 'Fix the product code first. As soon as the fix is done and your focused tests are green, call worker_checkpoint ready_for_evidence: the helper copies your product changes (not tests, not test configuration, not answers/) into their worktrees then, so they can finish before they close. '
   + 'Keep the product code stable after that: change tests and evidence freely, but a later product change reaches them only when it is copied again at your candidate, which may be too late. '
   + 'Never wait for them and never change their files.';
+// Item có hạn cần ảnh màn hình (QXUD1QAI CR-07, hạn 20 phút: app lên 6 phút sau ready_for_evidence, không kịp chụp;
+// trong 9 trận cùng bộ đề CR-07 chỉ chụp được một lần).
+const screensFirstBlock = (files, tb) => `This item closes at ${tb.returnBy ?? 'return_by'} (UTC) and needs screenshots: ${files.join(', ')}. `
+  + 'Building and starting this app takes minutes, and after ready_for_evidence the app waits for the closing build. '
+  + 'Start the app and capture these as soon as the page renders, before ready_for_evidence, with the data the scenario names; '
+  + 'they do not wait for the test suite or for final figures. After the last sync recapture only what changed on screen, and only if time allows: '
+  + 'a screenshot of the working page beats none, and a scenario you verified stays PASS.';
 // Followup cho item chờ khi bản sửa được chép tới lúc nó đã bàn giao.
 const sharedFollowup = (from, files) => `${from}'s product fix was copied into your worktree (${files.slice(0, 6).join(', ')}${files.length > 6 ? ', …' : ''}). `
   + `Call worker_checkpoint resume, rerun your replay script (backlog-cr §4.3) and everything whose result depends on ${from}, compare the figures with your independent calculation, update submit.json from the new output, run_checks, and call worker_checkpoint candidate again. `
@@ -348,6 +355,7 @@ export class Workflow {
         ...(s.files ?? []).map(f => join(s.materialsDir ?? r.itemDir(key), 'files', f))].join('\n')),
       ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}) : null),
       ...block('needed_by', (() => { const list = this.neededBy(key, { minutes: true }); return list.length ? neededByBlock(list) : null; })()),
+      ...block('screens_first', (() => { const files = tb.deadline ? this.screenshotFiles(key) : []; return files.length ? screensFirstBlock(files, tb) : null; })()),
       ...block('requirements', s.requirements ?? null),
       ...block('required_evidence', s.requiredEvidence ?? null),
       ...block('baseline_failures', s.baselineFailures ?? null),
@@ -516,6 +524,25 @@ export class Workflow {
       if (at && (!ji.baseAt || Date.parse(at) > Date.parse(ji.baseAt))) return { key: d, at };
     }
     return null;
+  }
+  // Ảnh màn hình item đòi: tên file ảnh trong MVS và trong mô tả item.
+  screenshotFiles(key) {
+    const r = this.rt, out = new Set();
+    const mvs = r.itemMvs?.(key);
+    const text = typeof mvs === 'string' ? mvs : mvs ? JSON.stringify(mvs) : '';
+    for (const m of text.matchAll(/[A-Za-z0-9][\w.-]*\.(?:png|jpe?g|webp)\b/gi)) out.add(m[0]);
+    for (const e of r.itemEvidence?.(key) ?? []) if (/\.(png|jpe?g|webp)$/i.test(e.file)) out.add(e.file);
+    return [...out];
+  }
+  // Ảnh còn thiếu của item có hạn (null khi không có hạn hay không cần ảnh).
+  missingScreens(key) {
+    const r = this.rt, ji = this.item(key);
+    if (!ji.prepared?.timeBox?.deadline) return null;
+    const files = this.screenshotFiles(key);
+    if (!files.length) return null;
+    const dir = join(r.wtPaths(key).matchRoot, 'answers', key, 'evidence');
+    const missing = files.filter(f => !existsSync(join(dir, f)));
+    return missing.length ? { missing, minutesLeft: r.itemRows?.().find(x => x.key === key)?.minutesLeft ?? null } : null;
   }
   // Item chưa xong mà đề nhắc tới `key`, đọc từ đề của mọi item đang thấy (không chờ prepare của chúng).
   neededBy(key, { minutes = false } = {}) {
@@ -798,6 +825,8 @@ export class Workflow {
       ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
+      const screens = this.missingScreens(key);
+      const screensNote = screens ? ` Screenshots first: ${screens.missing.join(', ')} ${screens.missing.length === 1 ? 'does' : 'do'} not exist yet${screens.minutesLeft != null ? ` and the item closes in about ${Math.max(0, Math.round(screens.minutesLeft))} minutes` : ''}. Call app start now and capture them before anything else (they do not wait for the suite); then the remaining checks.` : '';
       const received = this.sharedPending(key);
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null, internal: true });
       if (received) { received.notified = true; r.journal.save(); }
@@ -808,7 +837,7 @@ export class Workflow {
         ...(checks ? { checks } : {}),
         hint: (checks
           ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call app start now: it waits only for that run's build and reuses it. Capture final evidence, then call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite before candidate (fix and run again only on a failure).${baseline}`
-          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}`) + shared + receivedNote };
+          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}`) + screensNote + shared + receivedNote };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
     }

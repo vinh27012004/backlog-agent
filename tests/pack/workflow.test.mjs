@@ -1305,3 +1305,23 @@ test('a new test that writes to an absolute path outside the repository is refus
   const fixed = await wf.handoffCheck('BUG-01');
   assert.ok(!fixed.problems.some(p => /absolute path/.test(p)) && !fixed.warnings.some(w => /absolute paths/.test(w)));
 });
+
+// QXUD1QAI CR-07 (hạn 20 phút): app lên 6 phút sau ready_for_evidence, trang không được chụp (−19).
+test('a deadline item that needs screenshots is told to capture them first, in the brief and at ready_for_evidence', async () => {
+  const f = fixture('CR-07'), wf = f.rt.workflow;
+  const materials = join(f.rt.session.paths.teamWork, 'items', 'CR-07');
+  writeFileSync(join(materials, 'mvs.json'), JSON.stringify('## CR-07-TC-03 - the page\n\nRequired evidence: `reconciliation.png`.\n\n## CR-07-TC-01\n\nRequired evidence: `mvs-tests.log`.'));
+  assert.deepEqual(wf.screenshotFiles('CR-07'), ['reconciliation.png']);
+  const returnBy = new Date(Date.now() + 10 * 60_000).toISOString();
+  const brief = text => readFileSync(wf.writeBrief('CR-07', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], timeBox: { deadline: text, returnBy } }), 'utf8');
+  assert.match(brief(true), /<screens_first>\nThis item closes at .* and needs screenshots: reconciliation\.png\. .*before ready_for_evidence/);
+  assert.doesNotMatch(brief(false), /^<screens_first>$/m, 'no deadline, no block');
+
+  assert.equal(wf.missingScreens('CR-07'), null, 'not prepared with a deadline');
+  f.ji.prepared = { timeBox: { deadline: true, returnBy } };
+  assert.deepEqual(wf.missingScreens('CR-07'), { missing: ['reconciliation.png'], minutesLeft: 30 });
+  const res = await wf.evidenceCheckpoint({ backlogItemKey: 'CR-07', phase: 'ready_for_evidence' });
+  assert.match(res.hint, /Screenshots first: reconciliation\.png does not exist yet and the item closes in about 30 minutes/);
+  writeFileSync(join(f.dir, 'evidence', 'reconciliation.png'), 'png');
+  assert.equal(wf.missingScreens('CR-07'), null);
+});

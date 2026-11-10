@@ -6,6 +6,10 @@ for a different app mode, phase, viewport or data. At most two repaired retries 
 time box; report unfinished checks NOT_RUN. Before final evidence call worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
 the app again and capture at once. Only when it returns writesAllowed:false: stop writes and end your turn with its
 hint as your reply; root gets the sync from the helper and sends a followup to resume (never send_message to root).
+An item with a deadline that needs screenshots (the brief's `<screens_first>`) captures them before
+ready_for_evidence, as soon as the page renders: after it the app waits for the closing build, and building and
+starting a large app takes minutes (QXUD1QAI CR-07, 20-minute deadline: the app answered six minutes after the sync,
+the page was never captured, -19 points; in nine matches CR-07 captured it once).
 
 Every capture_evidence call supplies context: {backlogItemKey, matchRoot, scenario, appMode: "dev"|"production",
 phase: "before_fix"|"final"}. Helper records source/environment fingerprint, worktree, app mode, time and byte hash
