@@ -76,6 +76,9 @@ On failure act on code/hint, then call publish_item again: successful steps/rece
 - refresh_candidate (reason dependency_landed): an item this item's text names (its `dependency`) reached main after
   this worker's last sync, so its official figures are from older source. Send its `followup` text as the one
   followup_task, also when it carries lastCall: the refresh is a sync and a rerun of one script, about a minute.
+- refresh_candidate (reason dependency_ready): the helper copied the product fix of the item this item waits for into
+  this worker's worktree after it had handed off. Send its `followup` text as the one followup_task, also with lastCall.
+  Items other items wait for come first in nextActions: act on them first.
 - CANDIDATE_STALE (main changed this item's files after its handoff): with 3 or more minutes left, sync the yielded
   worktree and send one followup to refresh only what the change affects and hand off again; never ask the worker to
   hand off the stale result as it is (OMZJW0S0 CR-07 did so with 5 minutes left and lost 25 points). Under 3 minutes,

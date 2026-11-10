@@ -69,8 +69,14 @@ For every feature or modification introduced in the CR, write tests covering 4 k
      on older source: the grader loads the data with your submitted source (OMZJW0S0 CR-07: the CSV and summary were
      produced before BUG-11 reached the worktree, the submitted commit already had it, and 25 of 100 points were lost).
    - When the data only comes out right with another item's fix (the brief's `<depends_on>`), build the script now,
-     capture the page screenshots now (they do not depend on the figures), and when that item reaches main sync and
-     rerun the script. Do not fix the other item's defect yourself and never copy figures from its branch.
+     capture the page screenshots now (they do not depend on the figures), and build an independent calculation of
+     the expected figures from the company standard. When that item's product fix is ready the helper copies it into
+     your worktree and tells you (a refused candidate, a resume hint or a root followup): rerun the script, compare its
+     output with your independent calculation, restart your app before more screenshots, and hand off with the new
+     figures. If the copied files break your build or your tests, restore them (`git checkout HEAD -- <file>`, delete
+     a file that is new) and hand off without them, saying so in the engineering record. When that item reaches main
+     with other content than the copy, sync and rerun the script. Do not fix the other item's defect yourself and
+     never copy its code or figures by hand.
    - A test you add must pass on the revision you hand off. Put a test that asserts the official figures in only once
      the dependency is in your worktree, and derive its expected values from the company standard (KB) with a short
      calculation saved in the evidence (independent of the code under test), never typed by hand, and check it

@@ -12,6 +12,7 @@ import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { searchLogsHelp } from './logs.mjs';
+import { fingerprint, fingerprintAt, productChanges, revert, sameContent, shareFix } from './dependency.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -36,6 +37,7 @@ const typeOf = key => String(key).split('-')[0].toUpperCase();
 // thêm esbuild jsx vào vitest.config.ts cho test mới của nó, TASK-02 nộp sau mang theo thay đổi đó và mất TC-04).
 const TEST_CONFIG = /(^|\/)((vitest|jest|playwright|cypress|karma|mocha)\.(config|setup|workspace)\.[cm]?[jt]s|vitest\.workspace\.json|jest\.config\.json|\.mocharc\.[a-z]+|setupTests\.[jt]sx?|pytest\.ini|conftest\.py|tox\.ini|phpunit\.xml(\.dist)?|karma\.conf\.js)$/i;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|Tests?\.(java|cs)$/;
+const isProduct = p => !TEST_FILE.test(p) && !TEST_CONFIG.test(p);
 // Test mở trình duyệt: grader chạy cả suite trong môi trường sạch không có trình duyệt, beforeAll hỏng thì vitest
 // thoát 1 dù 0 test hỏng (BTZNI69E: layout.test.ts của BUG-01 launch msedge, CR-01/CR-02/CR-03 mất TC test tự động,
 // 30 điểm). Cùng một chuỗi cho RegExp và `git grep -E` (không dùng \b, \s).
@@ -67,8 +69,21 @@ const dependencyFollowup = dep => `${dep} is now on main. Call worker_checkpoint
 const dependencyBlock = (deps, items) => deps.map(d => `${d} (${items[d]?.integratedAt ? 'already on main' : 'not on main yet'})`).join(', ')
   + ': this item\'s text names it. When this item\'s data or behaviour needs that item\'s fix, its figures come out right only once that fix is in your worktree.\n'
   + 'Build everything that does not depend on it now: code, tests of your own logic, page screenshots, and the replay script of backlog-cr §4.3 that writes the official figures, CSV and summary. '
-  + 'When it reaches main the helper tells you (candidate refuses a handoff made before your sync, root sends a followup after it): call worker_checkpoint ready_for_evidence (it syncs), rerun the replay, refresh submit.json, then candidate. '
-  + 'Never fix that item\'s defect yourself and never copy its code or figures. If it is still not on main at your last call, hand off as observed with PARTIAL and say so.';
+  + 'As soon as that item\'s product fix is ready (its worker reaches ready_for_evidence), the helper copies its product changes (no tests, no answers/) into your worktree and tells you: '
+  + 'candidate refuses once, a resume hint or a root followup says so. Then rerun the replay, compare the figures with your independent calculation, restart your app before more screenshots, refresh submit.json and call candidate. '
+  + 'If those copied files break your build or tests, restore them as the message says and hand off without them. '
+  + 'When it reaches main with other content than the copy, the helper tells you again (candidate refuses a handoff made before your sync, root sends a followup after it): call worker_checkpoint ready_for_evidence (it syncs), rerun the replay, refresh submit.json, then candidate. '
+  + 'Never fix that item\'s defect yourself and never copy its code or figures by hand. If its fix is still not in your worktree at your last call, hand off as observed with PARTIAL and say so.';
+// Khối brief của item mà item khác đang chờ (LXRMBRA2 BUG-11: không biết CR-07 hạn 20 phút cần bản sửa của nó).
+const neededByBlock = list => `${list.map(d => `${d.key}${d.minutesLeft != null ? ` (closes in about ${Math.max(0, Math.round(d.minutesLeft))} min)` : ''}`).join(', ')}`
+  + ': their text names this item, and their result is right only with your fix in their source. '
+  + 'Fix the product code first. As soon as the fix is done and your focused tests are green, call worker_checkpoint ready_for_evidence: the helper copies your product changes (not tests, not test configuration, not answers/) into their worktrees then, so they can finish before they close. '
+  + 'Keep the product code stable after that: change tests and evidence freely, but a later product change reaches them only when it is copied again at your candidate, which may be too late. '
+  + 'Never wait for them and never change their files.';
+// Followup cho item chờ khi bản sửa được chép tới lúc nó đã bàn giao.
+const sharedFollowup = (from, files) => `${from}'s product fix was copied into your worktree (${files.slice(0, 6).join(', ')}${files.length > 6 ? ', …' : ''}). `
+  + `Call worker_checkpoint resume, rerun your replay script (backlog-cr §4.3) and everything whose result depends on ${from}, compare the figures with your independent calculation, update submit.json from the new output, run_checks, and call worker_checkpoint candidate again. `
+  + 'If the copied files break your build or tests, restore them (git checkout HEAD -- <file>; delete a file that is new) and hand off without them, saying so.';
 // Lời root gửi worker ở stop_worker (hết giờ / cơ hội cuối). ME1X0FFX: BUG-02 đã chạy đạt cả 3 kịch bản UI rồi, khi bị
 // dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
 const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
@@ -332,6 +347,7 @@ export class Workflow {
       ...block('materials', [`dir: ${s.materialsDir ?? r.itemDir(key)}`, ...['template.json', 'mvs.json', 'requirements.json', 'start.json'].map(files).filter(Boolean),
         ...(s.files ?? []).map(f => join(s.materialsDir ?? r.itemDir(key), 'files', f))].join('\n')),
       ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}) : null),
+      ...block('needed_by', (() => { const list = this.neededBy(key, { minutes: true }); return list.length ? neededByBlock(list) : null; })()),
       ...block('requirements', s.requirements ?? null),
       ...block('required_evidence', s.requiredEvidence ?? null),
       ...block('baseline_failures', s.baselineFailures ?? null),
@@ -478,9 +494,85 @@ export class Workflow {
     const items = this.rt.journal?.data.items ?? {}, ji = items[key] ?? {};
     for (const d of ji.dependsOn ?? []) {
       const at = items[d]?.integratedAt;
+      // Bản đã chép sang giống hệt bản lên main: worktree đã có đúng source đó, không cần sync và chạy lại.
+      if (at && ji.sharedFix?.from === d && ji.sharedFix.matchesMain === at) continue;
       if (at && (!ji.baseAt || Date.parse(at) > Date.parse(ji.baseAt))) return { key: d, at };
     }
     return null;
+  }
+  // Item chưa xong mà đề nhắc tới `key`, đọc từ đề của mọi item đang thấy (không chờ prepare của chúng).
+  neededBy(key, { minutes = false } = {}) {
+    const r = this.rt, items = r.journal?.data.items ?? {};
+    return (r.gm?.view?.items ?? []).filter(i => i.key !== key && !items[i.key]?.endedAt && !items[i.key]?.receipt
+      && itemDependencies(i.key, i.raw?.descriptionMd ?? i.raw?.description ?? '').includes(key))
+      .map(i => (minutes ? { key: i.key, minutesLeft: r.gm.itemMinutesLeft?.(i) ?? null } : i.key));
+  }
+  // Chép phần sửa product của `key` sang worktree của các item đang chờ nó (dependency.mjs). Gọi ở ready_for_evidence
+  // và candidate của `key`; lần sau chỉ chép lại khi nội dung đổi. Trả [{key, files} | {key, skipped}].
+  async shareWithDependents(key) {
+    const r = this.rt, ji = this.item(key), out = [];
+    if (!r.liveWorktree(key) || !ji.worktreeBase || ji.integratedAt) return out;
+    const folder = r.session.descriptor.matchId;
+    for (const d of this.neededBy(key)) {
+      const dj = this.item(d);
+      if (!r.liveWorktree(d) || !dj.worktreeBase || dj.endedAt || dj.integratedRevision || r.jobs.jobs.get(dj.publishJobId)?.state === 'running') continue;
+      const prev = dj.sharedFix?.from === key ? dj.sharedFix : null;
+      try {
+        const res = await shareFix({ fromRoot: r.wtPaths(key).worktreeRoot, fromBase: ji.worktreeBase, toRoot: r.wtPaths(d).worktreeRoot,
+          toBase: dj.worktreeBase, folder, isProduct, previous: prev,
+          patchFile: join(r.session.paths.teamWork, 'scratch', `${key}-to-${d}-${Date.now()}.patch`) });
+        if (res.unchanged) continue;
+        if (res.skipped) { out.push({ key: d, skipped: res.skipped }); continue; }
+        dj.sharedFix = { from: key, files: res.files, fingerprint: res.fingerprint, at: new Date().toISOString(), notified: false };
+        r.journal.save();
+        r.events.push('DEPENDENCY_READY', { key: d, from: key, files: res.files.length });
+        out.push({ key: d, files: res.files });
+      } catch (e) {
+        out.push({ key: d, skipped: e.message });
+      }
+    }
+    return out;
+  }
+  // Câu báo cho worker của item được chờ về lần chép vừa làm.
+  sharedNote(results) {
+    const done = results.filter(x => x.files), skipped = results.filter(x => x.skipped);
+    return [done.length ? ` Your product fix was copied into the worktree of ${done.map(x => x.key).join(', ')}, which need${done.length === 1 ? 's' : ''} it before closing: keep the product code stable now (a later product change is copied again at your candidate).` : '',
+      skipped.length ? ` Your fix could not be copied to ${skipped.map(x => `${x.key} (${x.skipped})`).join(', ')}: they wait until it reaches main.` : ''].join('');
+  }
+  // Bản sửa được chép tới mà worker nhận chưa được báo (resume, candidate).
+  sharedPending(key) {
+    const f = this.item(key).sharedFix;
+    return f && !f.notified ? f : null;
+  }
+  // Main lấy key: so nội dung các file đã chép trong worktree của item chờ với main. Giống thì item chờ khỏi sync lại.
+  async noteDependencyLanded(key) {
+    const r = this.rt, at = this.item(key).integratedAt;
+    if (!at) return;
+    for (const d of this.neededBy(key)) {
+      const f = this.item(d).sharedFix;
+      if (f?.from !== key || !r.liveWorktree(d)) continue;
+      const root = r.wtPaths(d).worktreeRoot;
+      const [mine, main] = await Promise.all([fingerprint(root, f.files), fingerprintAt(r.session.paths.checkoutRoot, 'HEAD', f.files)]);
+      if (sameContent(mine, main)) { f.matchesMain = at; r.journal.save(); continue; }
+      // Bản lên main khác bản đã chép: gỡ bản chép (khi worker nhận chưa sửa gì vào đó) để lần sync sau lấy bản của main
+      // không xung đột; dependency_landed báo worker như trước.
+      if (sameContent(mine, f.fingerprint)) { await revert(root, f.files); f.reverted = at; r.journal.save(); }
+    }
+  }
+  // Main đã đổi một file item này cũng sửa, với nội dung khác: publish sẽ dừng ở SYNC_REQUIRED (LXRMBRA2 BUG-11:
+  // TASK-08 lên main với transactions/transfer.ts lúc 08:23, BUG-11 bàn giao 08:28 và chỉ biết lúc publish 08:29).
+  async mainOverlap(key) {
+    const r = this.rt, ji = this.item(key);
+    if (!r.liveWorktree(key) || !ji.worktreeBase) return [];
+    const checkout = r.session.paths.checkoutRoot, head = await revParse(checkout);
+    if (head === ji.worktreeBase) return [];
+    const own = (await productChanges(r.wtPaths(key).worktreeRoot, ji.worktreeBase, r.session.descriptor.matchId, isProduct)).map(f => f.path);
+    if (!own.length) return [];
+    const onMain = new Set(await this.changedPaths(ji.worktreeBase, head, own));
+    const both = own.filter(p => onMain.has(p));
+    if (!both.length) return [];
+    const [mine, main] = await Promise.all([fingerprint(r.wtPaths(key).worktreeRoot, both), fingerprintAt(checkout, head, both)]);
+    return both.filter(p => mine[p] !== main[p]);
   }
   // Còn đủ thời gian để sync và chạy lại script replay (null: trận không có hạn item).
   dependencyRefreshFits(key) {
@@ -543,6 +635,23 @@ export class Workflow {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
     const lookup = await this.lookupBeforeHandoff(key);
     if (lookup) return lookup;
+    const pending = this.sharedPending(key);
+    if (pending) {
+      pending.notified = true; this.rt.journal.save();
+      if (this.dependencyRefreshFits(key)) {
+        return { key, phase: 'candidate', handedOff: false, writesAllowed: true, warnings: [],
+          problems: [`${pending.from}'s product fix was copied into your worktree at ${pending.at} (${pending.files.slice(0, 6).join(', ')}${pending.files.length > 6 ? ', …' : ''}): results that depend on ${pending.from} (official figures, CSV, summary fields, tests asserting them) may be from source without it`],
+          hint: `Not handed off: rerun your replay script and everything that depends on ${pending.from}, compare with your independent calculation, update submit.json, run_checks, then call candidate again. If the copied files break your build or tests, restore them (git checkout HEAD -- <file>; delete a file that is new) and hand off without them, saying so. If your results already come from source with these files, call candidate again as is.` };
+      }
+    }
+    if (this.dependencyRefreshFits(key)) {
+      const overlap = await this.mainOverlap(key).catch(() => []);
+      if (overlap.length) {
+        return { key, phase: 'candidate', handedOff: false, writesAllowed: true, warnings: [],
+          problems: [`main changed files you also change since your worktree last took main: ${overlap.slice(0, 5).join(', ')}; publish would stop at SYNC_REQUIRED`],
+          hint: 'Not handed off: call worker_checkpoint ready_for_evidence (it syncs main into your worktree, keeping your changes), check those files and rerun what they affect, then call candidate again.' };
+      }
+    }
     const landed = this.dependencyLanded(key);
     if (landed && this.dependencyRefreshFits(key)) {
       return { key, phase: 'candidate', handedOff: false, writesAllowed: true,
@@ -571,9 +680,12 @@ export class Workflow {
       return { key: args.backlogItemKey, phase: 'candidate', handedOff: false, writesAllowed: true, problems, warnings,
         hint: 'Not handed off: fix these (a fix-result problem needs the next numbered fix-result), then call worker_checkpoint candidate again.' };
     }
+    // Item được chờ: product đổi sau lần chép ở ready_for_evidence thì chép lại.
+    const shared = this.neededBy(key).length ? await this.shareWithDependents(key).catch(() => []) : [];
+    if (shared.length) warnings.push(this.sharedNote(shared).trim());
     return { ...this.checkpoint(args), handedOff: true, fixResultFile: this.latestResult(key), warnings };
   }
-  checkpoint({ backlogItemKey: key, phase, threadId = null }) {
+  checkpoint({ backlogItemKey: key, phase, threadId = null, internal = false }) {
     const ji = this.item(key);
     if (!['ready_for_evidence', 'candidate', 'resume'].includes(phase)) fail('INVALID_ARGUMENT', 'checkpoint phase');
     // Đồng hồ giai đoạn (phaseClock): chỉ chuyển ở ready_for_evidence (code_test → evidence) và candidate (đóng giai
@@ -599,12 +711,15 @@ export class Workflow {
     ji.checkpoint = phase;
     this.rt.journal.save();
     const lookup = phase === 'resume' ? this.unreadLookup(key) : null;
+    const shared = phase === 'resume' && !internal ? this.sharedPending(key) : null;
+    if (shared) { shared.notified = true; this.rt.journal.save(); }
+    const sharedHint = shared ? `${shared.from}'s product fix was copied into your worktree (${shared.files.slice(0, 6).join(', ')}): rerun your replay and everything that depends on ${shared.from}, compare with your independent calculation and restart your app before more screenshots. If those files break your build or tests, restore them (git checkout HEAD -- <file>; delete a file that is new) and hand off without them, saying so.` : null;
     return { key, phase, writesAllowed: phase === 'resume',
       hint: phase === 'ready_for_evidence' ? 'Stop writing and end your turn. Root may sync now, then sends a followup to resume; restart the app before final evidence.'
         : lookup ? (lookup.state === 'done'
           ? `Your bulk log lookup ${lookup.id} has finished: ${lookup.result?.savedTo} (${lookup.result?.entries} entries, complete: ${lookup.result?.complete}). Compute the answers from it and write them into submit.json before candidate.`
           : `Your bulk log lookup ${lookup.id} is still running: job_status {jobId: "${lookup.id}", waitSeconds: 110}, then compute the answers from its file before candidate.`)
-          : null };
+          : sharedHint };
   }
   // Chỉ xác nhận thread khi worker thực sự gọi proxy: spawn lỗi (hết thread) vẫn được đề xuất lại ngay.
   registerWorker(key) {
@@ -666,13 +781,17 @@ export class Workflow {
       ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
-      const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null });
+      const received = this.sharedPending(key);
+      const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null, internal: true });
+      if (received) { received.notified = true; r.journal.save(); }
+      const receivedNote = received ? ` ${received.from}'s product fix is in your worktree (copied ${received.at}: ${received.files.slice(0, 6).join(', ')}): rerun your replay and everything that depends on it before candidate.` : '';
       const checks = await this.startChecks(key);
+      const shared = this.sharedNote(this.neededBy(key).length ? await this.shareWithDependents(key).catch(() => []) : []);
       return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
         ...(checks ? { checks } : {}),
-        hint: checks
+        hint: (checks
           ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call app start now: it waits only for that run's build and reuses it. Capture final evidence, then call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite before candidate (fix and run again only on a failure).${baseline}`
-          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}` };
+          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}`) + shared + receivedNote };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
     }
@@ -989,6 +1108,7 @@ export class Workflow {
           }
           step('integrate'); await r.worktree({ action: 'integrate', backlogItemKey: key, message });
           ji.integratedCandidateId = c.id; r.journal.save();
+          await this.noteDependencyLanded(key).catch(() => {});
         }
         // Main phải chứa đúng nội dung đã bàn giao ở mọi file của item; file khác là thay đổi của item khác. Item chỉ sửa
         // answers/ (answer_only) không có file source nào để so: answer được so riêng bên dưới (4D895OVI: TASK-03 đã
@@ -1022,7 +1142,9 @@ export class Workflow {
     const r = this.rt;
     if (r.session.phase !== 'GAME' || !r.gm.view || !r.session.paths?.teamWork) return { nextActions: [], waitMs: 55_000 };
     const rows = r.itemRows(), items = r.journal?.data.items ?? {};
-    const order = r.matchState().suggestedOrder;
+    // Item mà item khác đang chờ đi trước (root trả lời và gửi followup cho nó trước).
+    const waited = new Set(rows.filter(x => this.neededBy(x.key).length).map(x => x.key));
+    const order = [...r.matchState().suggestedOrder].sort((a, b) => Number(waited.has(b)) - Number(waited.has(a)));
     const nextActions = [];
     const add = (key, action, args = {}, extra = {}) => nextActions.push({ key, action, arguments: { backlogItemKey: key, ...args }, ...extra });
     const fresh = r.newResults();
@@ -1047,6 +1169,14 @@ export class Workflow {
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
       // Đã bàn giao, rồi item mà đề nhắc tới mới lên main: giữ publish, worker sync và chạy lại replay (~1 phút), kể cả
       // trong cửa sổ cơ hội cuối khi còn ≥ DEPENDENCY_REFRESH_MINUTES. Ít hơn thì nộp như đang có (khối dưới).
+      // Bản sửa của item mình chờ vừa được chép tới sau khi đã bàn giao: giữ publish, worker chạy lại replay.
+      const shared = (c || freshKeys.has(key)) && ji.workerState !== 'writing' ? this.sharedPending(key) : null;
+      if (shared && this.dependencyRefreshFits(key)) {
+        held.add(key);
+        add(key, 'refresh_candidate', {}, { reason: 'dependency_ready', dependency: shared.from, workerThread: ji.workerThread ?? null,
+          followup: sharedFollowup(shared.from, shared.files), ...(lastCallOf(row) ? { lastCall: true, minutesLeft: row.minutesLeft } : {}) });
+        continue;
+      }
       const landed = (c || freshKeys.has(key)) ? this.dependencyLanded(key) : null;
       if (landed && this.dependencyRefreshFits(key)) {
         held.add(key);

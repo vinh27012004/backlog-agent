@@ -64,6 +64,13 @@ Before modifying any production code, write a minimal reproduction test:
   2. Touched module tests pass.
   3. Run MVS scenario(s) and confirm output matches requirements.
   4. Build of touched modules succeeds.
+- **When the brief has `<needed_by>`** (another item, often with a deadline, is right only with your fix in its
+  source): fix the product code first and call worker_checkpoint ready_for_evidence as soon as the reproduction and
+  the touched module tests are green, before any screenshot or full-suite work. The helper copies your product changes
+  (not tests, not test configuration, not answers/) into the waiting worktrees at that moment. After it, change tests
+  and evidence freely but keep the product code stable: a later product change reaches them only when it is copied
+  again at your candidate, which can be too late. LXRMBRA2 BUG-11: the fix was green at minute 7.5 but reached main at
+  minute 25, after CR-07 (20-minute deadline) had handed off without it and lost 41 points.
 
 ---
 

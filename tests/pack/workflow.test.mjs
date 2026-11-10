@@ -1193,3 +1193,99 @@ test('candidate waits for a running bulk log lookup and refuses once until its r
   assert.ok(Date.now() - t0 < 1000);
 });
 
+// LXRMBRA2: CR-07 (hạn 20 phút) cần bản sửa BUG-11 trong source nộp; BUG-11 xong code ở phút 7,5, bàn giao ở phút 25.
+function dependencyFixture() {
+  const f = fixture('BUG-11');
+  const { rt, checkout } = f, head = sh('git', ['rev-parse', 'HEAD'], checkout);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'fix.js'), 'export const fixed = true;\n');
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), 'test("red then green", () => {});\n');
+  const cr = rt.wtPaths('CR-07');
+  sh('git', ['worktree', 'add', '-q', '--detach', cr.worktreeRoot, 'HEAD'], checkout);
+  writeFileSync(join(cr.matchRoot, 'src', 'page.js'), 'export const page = 1;\n');
+  Object.assign(rt.journal.item('CR-07'), { startedAt: new Date().toISOString(), worktreeBase: head, baseAt: new Date(Date.now() - 60_000).toISOString(),
+    dependsOn: ['BUG-11'], workerState: 'writing' });
+  rt.gm.view.items.push({ key: 'CR-07', title: 'CR-07', raw: { descriptionMd: 'The official data is right only on source that also contains the `BUG-11` fixes.' } });
+  rt.itemRows = () => [{ key: 'BUG-11', type: 'BUG', status: 'OPEN', local: 'started', minutesLeft: 30 },
+    { key: 'CR-07', type: 'CR', status: 'OPEN', local: 'started', minutesLeft: 12, deadlineMinutes: 20 }];
+  // git apply/checkout ghi CRLF khi core.autocrlf=true.
+  const read = (rel, root = cr.matchRoot) => (existsSync(join(root, rel)) ? readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n') : null);
+  return { ...f, cr, read, head };
+}
+
+test('the product fix of an item another item waits for is copied into the waiting worktree, without tests or answers', async () => {
+  const f = dependencyFixture(), wf = f.rt.workflow;
+  assert.deepEqual(wf.neededBy('BUG-11'), ['CR-07']);
+  assert.deepEqual(wf.neededBy('BUG-11', { minutes: true }), [{ key: 'CR-07', minutesLeft: 30 }]);
+  const shared = await wf.shareWithDependents('BUG-11');
+  assert.deepEqual(shared, [{ key: 'CR-07', files: ['M1/src/lib.js', 'M1/src/fix.js'] }]);
+  assert.equal(f.read('src/lib.js'), 'export const value=2;\n');
+  assert.equal(f.read('src/fix.js'), 'export const fixed = true;\n');
+  assert.equal(f.read('src/lib.test.js'), null, 'tests stay with BUG-11');
+  assert.equal(f.read('answers/BUG-11/submit.json'), null, 'answers stay with BUG-11');
+  assert.equal(f.read('src/page.js'), 'export const page = 1;\n', 'CR-07 keeps its own work');
+  assert.match(wf.sharedNote(shared), /copied into the worktree of CR-07, which needs it before closing/);
+  assert.deepEqual(await wf.shareWithDependents('BUG-11'), [], 'same content: nothing to copy again');
+
+  // BUG-11 đổi product sau đó: chép lại, thay bản cũ.
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=3;\n');
+  assert.deepEqual((await wf.shareWithDependents('BUG-11')).map(x => x.key), ['CR-07']);
+  assert.equal(f.read('src/lib.js'), 'export const value=3;\n');
+
+  // CR-07 đang viết: candidate từ chối một lần; resume báo trong hint.
+  const refused = await wf.candidateCheckpoint({ backlogItemKey: 'CR-07' });
+  assert.equal(refused.handedOff, false);
+  assert.match(refused.problems[0], /BUG-11's product fix was copied into your worktree/);
+  assert.match(refused.hint, /git checkout HEAD -- <file>/);
+  assert.equal(wf.sharedPending('CR-07'), null, 'told once');
+  f.rt.journal.item('CR-07').sharedFix.notified = false;
+  assert.match(wf.checkpoint({ backlogItemKey: 'CR-07', phase: 'resume' }).hint, /BUG-11's product fix was copied into your worktree/);
+
+  // CR-07 đã bàn giao khi bản sửa tới: giữ publish, root gửi followup.
+  const cj = f.rt.journal.item('CR-07');
+  Object.assign(cj, { workerState: 'yielded', candidate: { id: 'c1', state: 'ready' } });
+  cj.sharedFix.notified = false;
+  const action = wf.actions().nextActions.find(a => a.key === 'CR-07');
+  assert.equal(action.action, 'refresh_candidate'); assert.equal(action.reason, 'dependency_ready'); assert.equal(action.dependency, 'BUG-11');
+  assert.match(action.followup, /worker_checkpoint resume, rerun your replay script/);
+});
+
+test('a copy equal to what reaches main needs no second refresh; a different one is removed before the sync', async () => {
+  const f = dependencyFixture(), wf = f.rt.workflow;
+  await wf.shareWithDependents('BUG-11');
+  const land = text => {
+    writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), text);
+    writeFileSync(join(f.checkout, 'M1', 'src', 'fix.js'), 'export const fixed = true;\n');
+    sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'BUG-11'], f.checkout);
+    f.rt.journal.item('BUG-11').integratedAt = new Date().toISOString();
+  };
+  land('export const value=2;\n');
+  await wf.noteDependencyLanded('BUG-11');
+  assert.equal(wf.dependencyLanded('CR-07'), null, 'the worktree already has that source');
+  land('export const value=4;\n');
+  await wf.noteDependencyLanded('BUG-11');
+  assert.equal(wf.dependencyLanded('CR-07').key, 'BUG-11');
+  assert.equal(f.read('src/lib.js'), 'export const value=1;\n', 'copy removed, the sync brings main');
+  assert.equal(f.read('src/fix.js'), null);
+});
+
+test('nothing is copied when both items change the same file', async () => {
+  const f = dependencyFixture();
+  writeFileSync(join(f.cr.matchRoot, 'src', 'lib.js'), 'export const value=99;\n');
+  assert.deepEqual(await f.rt.workflow.shareWithDependents('BUG-11'), [{ key: 'CR-07', skipped: 'both items change M1/src/lib.js' }]);
+  assert.equal(f.read('src/lib.js'), 'export const value=99;\n');
+  assert.equal(f.read('src/fix.js'), null);
+});
+
+// LXRMBRA2 BUG-11: TASK-08 đưa transactions/transfer.ts lên main lúc 08:23, BUG-11 bàn giao 08:28, biết lúc publish.
+test('candidate refuses while main changed one of the files of the item with other content', async () => {
+  const f = fixture('BUG-11'), wf = f.rt.workflow;
+  const commit = text => { writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), text); sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout); };
+  commit('export const value=2;\n');
+  assert.deepEqual(await wf.mainOverlap('BUG-11'), [], 'same content on main');
+  commit('export const value=5;\n');
+  assert.deepEqual(await wf.mainOverlap('BUG-11'), ['M1/src/lib.js']);
+  const refused = await wf.candidateCheckpoint({ backlogItemKey: 'BUG-11' });
+  assert.equal(refused.handedOff, false);
+  assert.match(refused.problems[0], /main changed files you also change.*M1\/src\/lib\.js.*SYNC_REQUIRED/);
+  assert.match(refused.hint, /ready_for_evidence/);
+});
