@@ -4,7 +4,7 @@
 Mỗi item một worker (code, test, evidence); helper nộp nguyên kết quả, không gate, reviewer hay solver.
 
 > **Phiên bản 1.0 · 25/10/2026.** Đã đối chiếu với: MTM Player **0.9.33**, kiểm lại trên **0.9.35** ngày 27/10, **0.9.39** ngày 29/10, **0.9.41** ngày 30/10 và **0.9.44** ngày 01/11
-> (source trong `vendor/mtm-player-0.9.44/app/`), [technical guide **0.5.1**](../btc/technical-guide-0.5.1.md), sample pack **0.5.1**
+> (source trong `vendor/mtm-player-0.9.45/app/`), [technical guide **0.5.1**](../btc/technical-guide-0.5.1.md), sample pack **0.5.1**
 > (`vendor/team-orchestrator-pack-0.5.1/`), tài liệu API *Digital Cuder: Start work và Submit*, slide Kick-off
 > 23/10, Game Rules, Q&A, và Codex CLI **0.163.0** trên máy dev.
 >

@@ -17,7 +17,7 @@ export function localRuntime(teamWorkspace, cfg) {
 }
 export const REPO = resolve(here, '..', '..');
 export const PACK = join(REPO, 'pack');
-export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.44', 'app', 'src');
+export const PLAYER_SRC = process.env.MTM_PLAYER_SRC ?? join(REPO, 'vendor', 'mtm-player-0.9.45', 'app', 'src');
 export const hasPlayer = existsSync(join(PLAYER_SRC, 'progress.mjs'));
 
 export const player = async name => import(pathToFileURL(join(PLAYER_SRC, name)).href);
