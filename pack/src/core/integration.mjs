@@ -3,12 +3,19 @@ import { changedFiles, strayAnswers } from '../match/answers.mjs';
 import { git, revParse, trackedChanges } from './git.mjs';
 import { fail, oneLine } from './util.mjs';
 
+// File không bao giờ được push: ngoài thư mục trận, trông như secret, evidence đặt sai chỗ, exam-info.json.
+export const unpushable = (path, folder) => !path.startsWith(`${folder}/`) || /(^|\/)\.env(\.|$)|\.pem$|id_rsa/i.test(path)
+  || new RegExp(`^${folder}/(evidence|challenge/evidence)/`).test(path) || /(^|\/)exam-info\.json$/.test(path);
+
 export async function integrateCandidate(rt, key, message) {
   if (rt.workflow.publishOwner && rt.workflow.publishOwner !== key) fail('PUBLISH_BUSY', 'another item is being published');
   const { checkoutRoot } = rt.session.paths, folder = rt.session.descriptor.matchId, wt = rt.wtPaths(key);
   const j = rt.journal, ji = j.item(key);
   const files = await changedFiles(wt.worktreeRoot, 'HEAD');
-  const outside = files.filter(f => !f.path.startsWith(`${folder}/`));
+  // Kiểm ở đây, trước khi commit lên main local, mọi thứ commit_and_push sẽ từ chối: commit bị từ chối ở bước push vẫn
+  // nằm trên main và chặn push của mọi item sau (LXRMBRA2: file 10 MB của TASK-07 bị mốc 5 MB cũ chặn, BUG-11 không
+  // nộp được, mất 130 điểm).
+  const outside = files.filter(f => unpushable(f.path, folder));
   if (outside.length) fail('PATH_NOT_ALLOWED', outside.map(f => f.path).join(', '));
   if (ji.integratePlan && files.length) fail('INTEGRATION_PENDING', 'finish the frozen integration before changing the candidate');
   // Chốt cuối khi worker đã đi: bản answers/<ID>/ lạc chỗ (vd src/answers/) không bao giờ lên main (strayAnswers).

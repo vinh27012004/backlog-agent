@@ -27,7 +27,7 @@ import { PREPARATION_STAGES, ProgressWriter } from './match/progress.mjs';
 import { PROXY_TOOLS, forward, startProxyServer } from './core/proxy.mjs';
 import { redactDeep } from './core/redact.mjs';
 import { Session } from './core/session.mjs';
-import { integrateCandidate } from './core/integration.mjs';
+import { integrateCandidate, unpushable } from './core/integration.mjs';
 import { resultArtifact, digest } from './core/candidates.mjs';
 import { Workflow } from './match/workflow.mjs';
 import { trustedTeamWorkspace } from './core/paths.mjs';
@@ -1283,13 +1283,10 @@ export class Runtime {
     const warnings = [...checked.problems, ...checked.warnings];
     const files = await changedFiles(checkoutRoot, `origin/${branch}`);
     const working = await changedFiles(checkoutRoot, 'HEAD');
-    const bad = files.filter(f => !f.path.startsWith(`${folder}/`) || /(^|\/)\.env(\.|$)|\.pem$|id_rsa/i.test(f.path) ||
-      new RegExp(`^${folder}/(evidence|challenge/evidence)/`).test(f.path) || /(^|\/)exam-info\.json$/.test(f.path));
+    const bad = files.filter(f => unpushable(f.path, folder));
     if (bad.length) fail('PATH_NOT_ALLOWED', bad.map(f => f.path).join(', '));
-    for (const f of files) {
-      const abs = join(checkoutRoot, f.path);
-      if (f.status !== 'D' && existsSync(abs) && statSync(abs).size > 5 * 1024 * 1024) fail('PATH_NOT_ALLOWED', `${f.path} > 5 MB`);
-    }
+    // Không giới hạn cỡ file (LXRMBRA2: TASK-07 phải commit bộ dữ liệu tới 20 MB, manifest 10 MB bị mốc 5 MB cũ chặn,
+    // commit đã lên main local nên chặn luôn push của BUG-11).
     const j = this.journal;
     const ji = j.item(key);
     if (working.length) {
