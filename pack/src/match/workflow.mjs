@@ -3,7 +3,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { answerCheck, changedFiles, requirementsCheck } from './answers.mjs';
+import { answerCheck, changedFiles, requirementsCheck, strayAnswers } from './answers.mjs';
 import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
@@ -320,6 +320,7 @@ export class Workflow {
       ...block('item_meta', [`id: ${key}`, `type: ${s.type ?? typeOf(key)}`, `verificationKind: ${s.verificationKind ?? 'unknown'}`,
         `return_by: ${tb.returnBy ?? 'unknown'} (UTC)`, ...(tb.checkpointBy ? [`checkpoint_by: ${tb.checkpointBy} (UTC)`] : []),
         `worktree: ${wt.worktreeRoot ?? ''}`, `matchRoot: ${wt.matchRoot ?? ''}`,
+        ...(wt.matchRoot ? [`answers_dir: ${join(wt.matchRoot, 'answers', key)} (the only place for submit.json and evidence/; scripts write there by this absolute path, never a relative answers/ from src/)`] : []),
         ...(wt.issuedRevision ? [`issuedRevision: ${wt.issuedRevision}`] : []), ...(wt.baseRevision ? [`baseRevision: ${wt.baseRevision}`] : []),
         `results_path: ${s.fixResultFile}`, `fix_result_schema: ${FIX_RESULT_SCHEMA_FILE}`].join('\n')),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
@@ -395,6 +396,8 @@ export class Workflow {
     if (r.liveWorktree(key) && ji.worktreeBase) {
       const changed = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []);
       const folder = `${r.session.descriptor.matchId}/`;
+      const stray = strayAnswers(changed, r.session.descriptor.matchId);
+      if (stray.length) problems.push(`answer files outside the match folder's answers/: ${stray.slice(0, 5).join(', ')}; answers/<ID>/ exists only at ${join(paths.matchRoot, 'answers', key)} (a script run from src/ that writes answers/... lands in src/answers/, and graders then read every later submission from there). Delete that copy and write by the absolute answers path`);
       const own = changed.filter(f => f.path.startsWith(folder) && f.status !== 'A').map(f => f.path.slice(folder.length));
       const config = own.filter(p => TEST_CONFIG.test(p));
       if (config.length) problems.push(`test configuration changed: ${config.join(', ')}; restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>) and make your test work with the existing config`);

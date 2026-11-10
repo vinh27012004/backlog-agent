@@ -495,3 +495,17 @@ Tối ưu worktree tiếp theo: thêm cache tải package dùng chung, proof ins
 gộp create/prewarm đồng thời, và bỏ setup của answer-only cả khi sync đổi dependency. 84 test tích hợp liên quan PASS.
 Kiểm tra thêm bằng Yarn 4.17.1 thật trong hai bản sao nhỏ, tắt mạng: cache trống fail đúng YN0080; cache đã có archive
 cho phép cả hai install `--immutable` exit 0, `node_modules` riêng và module chạy được. Không sửa checkout trận cũ.
+
+## #19 · 10/11/2026 · tự luyện `RATH0OHJ` (bộ 12 item như `QDYZMY1K`, pack sau commit `d61ffd1`)
+
+Nộp 12/12 item trong 48m14s, khoảng 135 credit, 61,3M input (root 51,5%, fixer 36,5%, guardian 12%). Judge 10/12
+(TASK-06 J3/J4, CR-07 J1/J4), so với 9/12 ở `QDYZMY1K`; TB thời gian mỗi item 12m13s (−17%), code/test −40%.
+Nhưng grader chấm 0 cả 7 item nộp sau TASK-06 (BUG-09, CR-07, TASK-11, PI-03, TASK-07, TASK-08, BUG-11) với lý do
+`submit.json missing or not JSON: ENOENT … RATH0OHJ/src/answers/<ID>/submit.json`. Nguồn: `git ls-tree` từng
+`gitRevision` trong `.team-work/journal.json`, bundle `runs/judge/RATH0OHJ/`, kết quả chấm của BTC.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L97 | TASK-06 chạy `evidence/derive.mjs` từ `src/` (script đọc `packages/...` tương đối) và ghi `answers/TASK-06/submit.json` tương đối, thành `RATH0OHJ/src/answers/TASK-06/`; integrate `git add -- RATH0OHJ` commit cả bản lạc đó lên main (`6c4fe24`). Từ đó grader tìm submit.json ở `src/answers/<ID>/`; bước kiểm hồ sơ vẫn đọc `answers/` đúng chỗ nên không báo gì | 4 item nộp trước `6c4fe24` không có `src/answers/` và không bị lỗi này; cả 7 item nộp sau đều 0 điểm (620 điểm) | **Đã** sửa: `strayAnswers` (`answers.mjs`) nhận file mới trong một `answers/<ID>/` không ở gốc thư mục trận; `worker_checkpoint candidate` giữ worker lại tới khi xoá bản đó; `integrateCandidate` loại chúng khỏi commit; brief có `answers_dir:` tuyệt đối. Test trong `workflow.test.mjs`, `publish.test.mjs` |
+| L98 | `cr-07-replay.test.ts` luôn ghi CSV/JSON vào `answers/CR-07/evidence/` đã commit mỗi lần bộ test chạy (grader, `run_checks` của item khác) | Chưa thấy làm bẩn main ở trận này, nhưng khi BUG-11 lên main kết quả replay đổi và file đã track bị sửa | Chưa sửa: cân nhắc chặn test mới ghi vào `answers/` khi không có biến môi trường (như `BUG11_REPORT_PATH` của BUG-11) |
+| L99 | CR-07 nộp trước BUG-11 (hạn 20 phút) nên số liệu chính thức chưa có bản sửa của BUG-11: boundary −129 400 000 thay vì −180 000 000; trang không chụp được vì capture từ chối app chế độ custom (cùng lỗi làm BUG-09 chụp hỏng 3 lần, evidence 19m36s so với code 1m45s) | CR-07 PARTIAL (TC-02 FAIL, TC-03/04 NOT_RUN) | Chưa sửa: xem lệch chế độ app (custom/production) giữa `app start` và `capture_evidence` |

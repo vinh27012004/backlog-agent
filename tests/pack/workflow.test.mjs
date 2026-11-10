@@ -1,7 +1,7 @@
 // Kiểm workflow với git/worktree thật; không gọi LLM hay mạng ngoài.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
@@ -417,6 +417,13 @@ test('worker_checkpoint candidate keeps the worker writing until the fix-result,
   assert.match(res.problems.join('\n'), /issued tests changed: src\/tests\/a\.test\.js; graders restore/);
   sh('git', ['checkout', '--', 'M1/src/tests/a.test.js'], f.wt.worktreeRoot);
   writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'b.test.js'), 'test new\n');
+  // RATH0OHJ: script chạy từ src/ ghi answers/<ID>/ tương đối; grader đọc mọi bài nộp sau từ src/answers/.
+  const stray = join(f.wt.matchRoot, 'src', 'answers', f.key);
+  mkdirSync(stray, { recursive: true }); writeFileSync(join(stray, 'submit.json'), '{}\n');
+  res = await checkpoint(args);
+  assert.equal(res.handedOff, false);
+  assert.match(res.problems.join('\n'), /answer files outside the match folder's answers\/: M1\/src\/answers\/BUG-01\/submit\.json/);
+  rmSync(join(f.wt.matchRoot, 'src', 'answers'), { recursive: true });
   res = await checkpoint(args);
   assert.equal(res.handedOff, true, JSON.stringify(res)); assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
 });

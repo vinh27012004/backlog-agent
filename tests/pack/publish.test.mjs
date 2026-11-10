@@ -98,6 +98,9 @@ test('integrate ignores files that differ from HEAD only in line endings, and st
   writeFileSync(join(checkout, 'M1', 'src', 'lib.js'), 'module.exports = 2;\n');
   await assert.rejects(integrateCandidate(rt, 'TASK-01', 'answer'), /WORKTREE_CONFLICT.*M1\/src\/lib\.js/);
   sh('git', ['checkout', '--', 'M1/src/lib.js'], checkout, env);
+  // RATH0OHJ: bản answers/ lạc trong src/ không bao giờ lên main.
+  mkdirSync(join(wt, 'M1', 'src', 'answers', 'TASK-01'), { recursive: true });
+  writeFileSync(join(wt, 'M1', 'src', 'answers', 'TASK-01', 'submit.json'), '{"status":"DONE"}\n');
   const res = await integrateCandidate(rt, 'TASK-01', 'answer');
   assert.equal(res.integrated, true);
   assert.equal(sh('git', ['show', '--format=', '--name-only', 'HEAD'], checkout, env), 'M1/answers/TASK-01/submit.json');

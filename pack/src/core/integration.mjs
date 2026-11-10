@@ -1,5 +1,5 @@
 // Kế hoạch tích hợp bền: nhận diện cherry-pick đã commit nhưng chưa kịp lưu checkpoint.
-import { changedFiles } from '../match/answers.mjs';
+import { changedFiles, strayAnswers } from '../match/answers.mjs';
 import { git, revParse, trackedChanges } from './git.mjs';
 import { fail, oneLine } from './util.mjs';
 
@@ -11,8 +11,10 @@ export async function integrateCandidate(rt, key, message) {
   const outside = files.filter(f => !f.path.startsWith(`${folder}/`));
   if (outside.length) fail('PATH_NOT_ALLOWED', outside.map(f => f.path).join(', '));
   if (ji.integratePlan && files.length) fail('INTEGRATION_PENDING', 'finish the frozen integration before changing the candidate');
-  if (files.length) {
-    await git(['add', '--', folder], { cwd: wt.worktreeRoot });
+  // Chốt cuối khi worker đã đi: bản answers/<ID>/ lạc chỗ (vd src/answers/) không bao giờ lên main (strayAnswers).
+  const stray = strayAnswers(files, folder);
+  if (files.length > stray.length) {
+    await git(['add', '--', folder, ...stray.map(p => `:(exclude)${p}`)], { cwd: wt.worktreeRoot });
     await git(['commit', '-m', oneLine(`${key}: ${message ?? 'work'}`, 120)], { cwd: wt.worktreeRoot });
   }
   const head = await revParse(wt.worktreeRoot);

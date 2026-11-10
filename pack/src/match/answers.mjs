@@ -20,6 +20,15 @@ export async function changedFiles(checkoutRoot, base) {
   return files;
 }
 
+// File mới nằm trong một answers/<ID>/ không ở gốc thư mục trận (vd <folder>/src/answers/TASK-06/). RATH0OHJ: TASK-06
+// chạy script từ src/ ghi `answers/TASK-06/submit.json` tương đối, helper commit cả bản lạc đó lên main; từ đó mọi
+// revision nộp có src/answers/ và grader đọc submit.json ở src/answers/<ID>/ (ENOENT), 7 item sau đều 0 điểm.
+const STRAY_ANSWERS = /^.+\/answers\/[A-Z]+-\d+\//;
+export function strayAnswers(files, folder) {
+  return files.filter(f => f.status === 'A' && f.path.startsWith(`${folder}/`) && STRAY_ANSWERS.test(f.path.slice(folder.length + 1)))
+    .map(f => f.path);
+}
+
 const PASS = /^pass(ed)?$/i;
 const FAIL = /^fail(ed)?$/i;
 const EVIDENCE_FILE = /[A-Za-z0-9][\w.-]*\.(?:png|jpe?g|webp|gif|json|txt|log|md|csv|pdf|html?|xml|zip|webm|mp4)\b/gi;
