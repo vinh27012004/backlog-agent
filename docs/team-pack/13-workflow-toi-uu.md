@@ -374,6 +374,19 @@ dòng -142M fail: sync rồi chạy lại replay là đủ lấy lại 25 điể
 - Candidate từ chối khi test mới của chính item fail ở lần `run_checks` cuối (khớp tên file trong `failing`).
   Expected của test số liệu official lấy từ phép tính theo chuẩn KB, không gõ tay.
 
+## Test đỏ không lên main, PASS phải có evidence MVS (10/11, sau QDYZMY1K)
+
+- PI-03 hết giờ trước khi sửa source và bàn giao chỉ có test tái hiện `pi03-posted-amount.test.ts` (đỏ). Grader chạy test
+  của đội ở commit của từng item: mọi item nộp sau mất `team-tests` (BUG-09 −5, BUG-11 −2). Kiểm "test mới của item fail
+  ở run_checks cuối" không bắt được vì full suite của PI-03 timeout. `parkRedOnlyTests` (trong `worker_checkpoint
+  candidate`, trước khi soạn fix-result): BUG/PI/CR có test mới mà không có thay đổi sản phẩm nào (ngoài `answers/`,
+  test, cấu hình test) thì chuyển các test đó vào `answers/<ID>/evidence/unshipped-tests/` và cảnh báo worker ghi rõ bản
+  sửa không có trong revision. TASK không áp dụng (bộ test của TASK là sản phẩm).
+- BUG-11 kiểm lại TC-03/04 sau sync rồi trỏ sang `transfer-resync.log` thay cho `mvs-tests.log` mà MVS đòi: BTC chấm 0
+  cả hai (−8). Lỗi `<TC> is PASS but its evidence lacks what the MVS requires` (và PASS trích ảnh `*.FAILED-step*`) giờ
+  chặn bàn giao như lỗi schema, không chỉ cảnh báo; thông báo bảo trích file đó, chạy lại kịch bản ra file đó hay báo
+  NOT_RUN.
+
 ## Đo và kiểm
 
 journal.metrics: prepare, code_test, evidence, handoff, blocked, publish; jobs: worktree_setup/publish_item/drop_databases.

@@ -189,7 +189,7 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null,
       const refs = new Set((Array.isArray(r.evidence) ? r.evidence : []).map(e => String(e).split('/').pop()));
       const missing = (required.get(r.id) ?? []).filter(name => !refs.has(name));
       if (missing.length) {
-        problems.push(`${r.id} is PASS but its evidence lacks what the MVS requires: ${missing.map(m => `evidence/${m}`).join(', ')} (capture it or report the scenario as FAIL/NOT_RUN)`);
+        problems.push(`${r.id} is PASS but its evidence lacks what the MVS requires: ${missing.map(m => `evidence/${m}`).join(', ')} (graders score the scenario 0 without it: cite that file when it already holds the passing run, rerun the scenario to it when it is stale, or report the scenario NOT_RUN; extra logs may stay next to it)`);
       }
       // capture_evidence đặt tên ảnh màn hình lúc bước hỏng là *.FAILED-step<N>.png: chẩn đoán, không phải evidence đạt.
       const diagnostics = [...refs].filter(name => /\.FAILED-step\d+\.png$/i.test(name));

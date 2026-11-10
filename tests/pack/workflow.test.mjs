@@ -1099,3 +1099,38 @@ test('worktree remove unlinks linked node_modules first, so the main checkout ke
   assert.equal(removed.removed, true);
   assert.ok(existsSync(join(mainApp, 'node_modules', 'left-pad', 'index.js')), 'main checkout package survived the worktree removal');
 });
+
+// QDYZMY1K PI-03: hết giờ trước khi sửa source, bàn giao chỉ có test tái hiện (đỏ); trên main nó làm BUG-09, BUG-11 mất
+// điểm team-tests. Helper chuyển test đó vào evidence khi không có thay đổi sản phẩm nào đi kèm.
+test('a BUG/PI/CR handoff with new tests but no product change moves those tests to evidence; with a fix they stay', async () => {
+  const f = fixture('PI-03');
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=1;\n');   // không có bản sửa
+  writeFileSync(join(f.wt.matchRoot, 'src', 'amount.test.js'), "test('midpoint', () => { throw new Error('red'); });\n");
+  assert.deepEqual(await f.rt.workflow.parkRedOnlyTests('PI-03'), ['src/amount.test.js']);
+  assert.equal(existsSync(join(f.wt.matchRoot, 'src', 'amount.test.js')), false, 'the red test does not ship');
+  assert.ok(existsSync(join(f.dir, 'evidence', 'unshipped-tests', 'src__amount.test.js')), 'it stays as reproduction evidence');
+  assert.deepEqual(f.ji.unshippedTests, ['src/amount.test.js']);
+
+  const g = fixture('BUG-01');   // fixture có sửa src/lib.js: test đi kèm bản sửa thì giữ
+  writeFileSync(join(g.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
+  assert.deepEqual(await g.rt.workflow.parkRedOnlyTests('BUG-01'), []);
+  assert.ok(existsSync(join(g.wt.matchRoot, 'src', 'lib.test.js')));
+
+  const t = fixture('TASK-08');   // bộ test của TASK là sản phẩm
+  writeFileSync(join(t.wt.matchRoot, 'src', 'lib.js'), 'export const value=1;\n');
+  writeFileSync(join(t.wt.matchRoot, 'src', 'suite.test.js'), "test('spec', () => {});\n");
+  assert.deepEqual(await t.rt.workflow.parkRedOnlyTests('TASK-08'), []);
+});
+
+// QDYZMY1K BUG-11: TC-03/04 PASS trỏ sang transfer-resync.log, thiếu mvs-tests.log mà MVS đòi; BTC chấm 0 cả hai (−8).
+test('a PASS scenario without the evidence its MVS requires blocks the handoff instead of only warning', async () => {
+  const f = fixture('BUG-01');
+  f.rt.itemMvs = () => '# MVS\n\n## TC-1 - the case\n\nRequired evidence: `mvs-tests.log`.\n';
+  writeFileSync(join(f.dir, 'evidence', 'resync.log'), 'ok');
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: ['evidence/resync.log'] }] }));
+  const { problems } = await f.rt.workflow.handoffCheck('BUG-01');
+  assert.ok(problems.some(p => /^TC-1 is PASS but its evidence lacks what the MVS requires: evidence\/mvs-tests\.log/.test(p)), JSON.stringify(problems));
+  writeFileSync(join(f.dir, 'evidence', 'mvs-tests.log'), 'ok');
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: ['evidence/mvs-tests.log', 'evidence/resync.log'] }] }));
+  assert.ok(!(await f.rt.workflow.handoffCheck('BUG-01')).problems.some(p => /is PASS but/.test(p)));
+});

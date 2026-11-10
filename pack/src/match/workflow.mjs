@@ -40,7 +40,10 @@ const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|
 // 30 điểm). Cùng một chuỗi cho RegExp và `git grep -E` (không dùng \b, \s).
 const BROWSER_TEST = '(from|require\\()[ ]*["\'](playwright|playwright-core|@playwright/test|puppeteer|puppeteer-core|selenium-webdriver)["\']|(chromium|firefox|webkit)\\.launch\\(';
 // Lỗi bàn giao mà worker luôn tự sửa được; còn lại (evidence thiếu, PASS chưa đủ chứng cứ…) chỉ báo lại.
-const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid JSON|submit\.json lacks template key|submit\.json status is still)/;
+// Kịch bản PASS thiếu evidence MVS đòi (hay trích ảnh chẩn đoán *.FAILED-step*) cũng chặn: BTC chấm 0 cho kịch bản đó
+// dù đã đạt (QDYZMY1K BUG-11: TC-03/04 kiểm lại sau sync rồi trỏ sang transfer-resync.log thay cho mvs-tests.log, mất
+// 8 điểm). Worker sửa trong một lượt: thêm file MVS đòi (chạy lại test MVS ra file đó nếu cần) hoặc báo NOT_RUN.
+const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid JSON|submit\.json lacks template key|submit\.json status is still|\S+ is PASS but (its evidence lacks what the MVS requires|cites evidence\/))/;
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
 // (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
@@ -474,6 +477,35 @@ export class Workflow {
     const row = this.rt.itemRows?.().find(x => x.key === key);
     return !(row?.minutesLeft != null && row.minutesLeft < DEPENDENCY_REFRESH_MINUTES);
   }
+  // BUG/PI/CR bàn giao chỉ có test mới, không có thay đổi sản phẩm: test tái hiện một lỗi chưa sửa nên chắc chắn đỏ.
+  // Lên main thì grader chạy nó ở commit của mọi item nộp sau và trừ team-tests của chúng (QDYZMY1K: PI-03 hết giờ
+  // trước khi sửa source, pi03-posted-amount.test.ts làm BUG-09 mất 5, BUG-11 mất 2 điểm). Helper chuyển các test đó
+  // vào answers/<ID>/evidence/unshipped-tests/ (vẫn là bằng chứng tái hiện) trước khi soạn fix-result. TASK không áp
+  // dụng (bộ test của TASK là sản phẩm, phải xanh trên app đúng).
+  async parkRedOnlyTests(key) {
+    if (!['BUG', 'PI', 'CR'].includes(typeOf(key))) return [];
+    const r = this.rt, ji = this.item(key);
+    if (!r.liveWorktree(key) || !ji.worktreeBase) return [];
+    const paths = this.paths(key), folder = `${r.session.descriptor.matchId}/`;
+    const changed = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => null);
+    if (!changed) return [];
+    const own = changed.filter(f => f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && f.status !== 'D');
+    const tests = own.filter(f => f.status === 'A' && TEST_FILE.test(f.path));
+    const product = own.filter(f => !TEST_FILE.test(f.path) && !TEST_CONFIG.test(f.path));
+    if (!tests.length || product.length) return [];
+    const dir = join(paths.matchRoot, 'answers', key, 'evidence', 'unshipped-tests');
+    mkdirSync(dir, { recursive: true });
+    const moved = [];
+    for (const f of tests) {
+      const rel = f.path.slice(folder.length), src = join(paths.matchRoot, rel);
+      if (!existsSync(src)) continue;
+      copyFileSync(src, join(dir, rel.replace(/[\\/]/g, '__')));
+      rmSync(src, { force: true });
+      moved.push(rel);
+    }
+    if (moved.length) { ji.unshippedTests = moved; this.rt.journal.save(); }
+    return moved;
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
     const landed = this.dependencyLanded(key);
@@ -483,6 +515,7 @@ export class Workflow {
         warnings: [], hint: `Not handed off: call worker_checkpoint ready_for_evidence (it syncs ${landed.key} in and resumes you), rerun your replay script and update what depends on ${landed.key}, then call candidate again. Screenshots of the page stay valid.` };
     }
     const caught = await this.baselineCatchUp(key);
+    const parked = await this.parkRedOnlyTests(key).catch(() => []);
     const composed = args.result !== undefined ? await this.composeResult(key, args.result) : null;
     if (composed?.problems) {
       return { key, phase: 'candidate', handedOff: false, writesAllowed: true, problems: composed.problems, warnings: [],
@@ -490,6 +523,9 @@ export class Workflow {
     }
     const { problems, warnings } = await this.handoffCheck(key);
     if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
+    if (parked.length) {
+      warnings.unshift(`no product change came with your new tests (${parked.join(', ')}): they reproduce a defect this handoff does not fix, so they would fail every later commit's suite. The helper moved them to answers/${key}/evidence/unshipped-tests/; say in the engineering record that the fix is not in this revision`);
+    }
     if (caught?.synced) {
       problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
     } else if (caught?.error) warnings.push(`could not sync ${owner}'s baseline fix into your worktree (${caught.error}); hand off as observed`);
