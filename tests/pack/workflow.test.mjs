@@ -1165,3 +1165,31 @@ test('PI: bulk company_lookup writes one sorted file and the brief explains sear
   const brief = readFileSync(f.rt.workflow.writeBrief('PI-02', { item: { title: 'PI', descriptionMd: '' }, fixResultFile: 'x', searchLogs: searchLogsHelp(schema), companyFacts: [] }), 'utf8');
   assert.match(brief, /<search_logs>\nsearch_logs input: \{"query":\{"type":"string","maxLength":500\}/);
 });
+
+// LXRMBRA2 PI-03: tra log hàng loạt xong 36 s sau khi worker bàn giao, lượt làm lại không hỏi lại job, 4 trường đáp án trống.
+test('candidate waits for a running bulk log lookup and refuses once until its result was read', async () => {
+  const f = fixture('PI-03');
+  f.rt.itemRows = () => [{ key: 'PI-03', type: 'PI', status: 'OPEN', local: 'started', minutesLeft: 12 }];
+  const job = f.rt.jobs.start('log_lookup', async () => {
+    await new Promise(r => setTimeout(r, 400));
+    return { savedTo: 'company/10-search_logs-bulk.json', entries: 697, complete: true };
+  }, { key: 'PI-03' });
+  assert.match(f.rt.workflow.checkpoint({ backlogItemKey: 'PI-03', phase: 'resume' }).hint, /still running: job_status/);
+  const refused = await f.rt.workflow.candidateCheckpoint({ backlogItemKey: 'PI-03' });
+  assert.equal(job.state, 'done', 'candidate waited for the lookup');
+  assert.equal(refused.handedOff, false);
+  assert.match(refused.problems[0], /has finished and you have not read its result: company\/10-search_logs-bulk\.json \(697 entries, complete: true\)/);
+  assert.equal(f.rt.workflow.unreadLookup('PI-03'), null, 'told once');
+  assert.equal(await f.rt.workflow.lookupBeforeHandoff('PI-03'), null);
+
+  // Worker đã nhận kết quả qua job_status: không chặn. Item sắp đóng: không chờ, không chặn.
+  const seen = f.rt.jobs.start('log_lookup', async () => ({ savedTo: 'x.json', entries: 1, complete: true }), { key: 'PI-03' });
+  await f.rt.jobStatus({ jobId: seen.id, waitSeconds: 5 }, { pi: false });
+  assert.equal(f.rt.workflow.unreadLookup('PI-03'), null);
+  f.rt.jobs.start('log_lookup', () => new Promise(r => setTimeout(() => r({}), 3000)), { key: 'PI-03' });
+  f.rt.itemRows = () => [{ key: 'PI-03', type: 'PI', status: 'OPEN', local: 'started', minutesLeft: 2 }];
+  const t0 = Date.now();
+  assert.equal(await f.rt.workflow.lookupBeforeHandoff('PI-03'), null);
+  assert.ok(Date.now() - t0 < 1000);
+});
+

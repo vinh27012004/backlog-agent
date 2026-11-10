@@ -55,6 +55,8 @@ const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCal
 // của source cũ và mất 25 điểm. Làm mới chỉ cần sync rồi chạy lại script replay (~1 phút): còn từ chừng này phút trở
 // lên thì vẫn đòi làm mới, kể cả trong cửa sổ cơ hội cuối.
 const DEPENDENCY_REFRESH_MINUTES = 3;
+// candidate chờ lần tra log hàng loạt còn chạy (proxy của worker chờ tối đa 118 s).
+const LOOKUP_WAIT_MS = 90_000;
 const ITEM_KEY = /\b(?:TASK|BUG|CR|PI)-\d{1,3}\b/g;
 export function itemDependencies(key, text) {
   const out = [];
@@ -514,8 +516,33 @@ export class Workflow {
     if (moved.length) { ji.unshippedTests = moved; this.rt.journal.save(); }
     return moved;
   }
+  // Lần tra log hàng loạt (log_lookup) của item mà worker chưa nhận kết quả. LXRMBRA2 PI-03: 320 truy vấn mất 452 s
+  // (Company Tools chậm, PI-02 tra cùng lúc); worker bàn giao lúc job còn chạy, job xong 36 s sau, lượt làm lại sau
+  // SYNC_REQUIRED không hỏi lại job, cả 4 trường đáp án để trống (0/75 điểm) dù script suy đáp án đã sẵn.
+  unreadLookup(key) {
+    const jobs = [...(this.rt.jobs?.jobs?.values() ?? [])].filter(j => j.kind === 'log_lookup' && j.key === key && !j.resultSeen);
+    return jobs.find(j => j.state === 'running') ?? jobs.filter(j => j.state === 'done').pop() ?? null;
+  }
+  // candidate: job còn chạy thì chờ nó (tới LOOKUP_WAIT_MS, trừ khi item sắp đóng), xong mà chưa đọc thì từ chối một lần
+  // và đưa đường dẫn file kết quả.
+  async lookupBeforeHandoff(key) {
+    let job = this.unreadLookup(key);
+    if (!job) return null;
+    const row = this.rt.itemRows?.().find(x => x.key === key);
+    const closing = row?.minutesLeft != null && row.minutesLeft < DEPENDENCY_REFRESH_MINUTES;
+    if (job.state === 'running' && !closing) await this.rt.jobs.settle(job.id, LOOKUP_WAIT_MS);
+    if (job.state !== 'done') return null;
+    job.resultSeen = true;
+    if (closing) return null;
+    const res = job.result ?? {};
+    return { key, phase: 'candidate', handedOff: false, writesAllowed: true, warnings: [],
+      problems: [`your bulk log lookup ${job.id} has finished and you have not read its result: ${res.savedTo} (${res.entries} entries, complete: ${res.complete})`],
+      hint: 'Not handed off: compute the answers from that file with your script, write them into submit.json (and the fix-result), then call worker_checkpoint candidate again. If your answers already come from this file, call candidate again as is.' };
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
+    const lookup = await this.lookupBeforeHandoff(key);
+    if (lookup) return lookup;
     const landed = this.dependencyLanded(key);
     if (landed && this.dependencyRefreshFits(key)) {
       return { key, phase: 'candidate', handedOff: false, writesAllowed: true,
@@ -571,8 +598,13 @@ export class Workflow {
     }
     ji.checkpoint = phase;
     this.rt.journal.save();
+    const lookup = phase === 'resume' ? this.unreadLookup(key) : null;
     return { key, phase, writesAllowed: phase === 'resume',
-      hint: phase === 'ready_for_evidence' ? 'Stop writing and end your turn. Root may sync now, then sends a followup to resume; restart the app before final evidence.' : null };
+      hint: phase === 'ready_for_evidence' ? 'Stop writing and end your turn. Root may sync now, then sends a followup to resume; restart the app before final evidence.'
+        : lookup ? (lookup.state === 'done'
+          ? `Your bulk log lookup ${lookup.id} has finished: ${lookup.result?.savedTo} (${lookup.result?.entries} entries, complete: ${lookup.result?.complete}). Compute the answers from it and write them into submit.json before candidate.`
+          : `Your bulk log lookup ${lookup.id} is still running: job_status {jobId: "${lookup.id}", waitSeconds: 110}, then compute the answers from its file before candidate.`)
+          : null };
   }
   // Chỉ xác nhận thread khi worker thực sự gọi proxy: spawn lỗi (hết thread) vẫn được đề xuất lại ngay.
   registerWorker(key) {

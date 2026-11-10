@@ -77,6 +77,11 @@ reached its 12-minute cap before its source fix, so it scored 0 for the fix and 
 4. run_checks {action: "status"}, then worker_checkpoint candidate. If the fix is not green by your checkpoint_by,
    hand off the answers anyway and say the fix is missing; a reproduction test without its fix never ships (the
    helper moves it to evidence).
+5. Never hand off blank report fields while your bulk lookup can still finish: the fix is 25 points, the report
+   fields are 75. A lookup can take minutes when Company Tools is slow: keep derive.mjs ready, and when the job is
+   still running at your return_by call candidate anyway: the helper waits for the job and gives you its file, then
+   run derive.mjs, write the answers and call candidate again. After any resume, check the lookup job first
+   (LXRMBRA2 PI-03: the lookup finished 36 s after a blank handoff and the rework turn never read it).
 
 1. **Locate Failing Frame**:
    - Map incident error stack trace to exact project `file:line`.

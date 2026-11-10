@@ -1492,7 +1492,12 @@ export class Runtime {
 
   jobStatus({ jobId, waitSeconds = 0 }, { pi = true } = {}) {
     // 110 s < tool_timeout_sec 120 (config/codex.toml): một lần gọi chờ hết một job, root đỡ một lượt model.
-    return this.settleJob(jobId, Math.min(110, waitSeconds) * 1000, { pi }).then(v => v ?? fail('JOB_NOT_FOUND', jobId));
+    return this.settleJob(jobId, Math.min(110, waitSeconds) * 1000, { pi }).then(v => {
+      // Người gọi đã nhận kết quả của lần tra log hàng loạt (workflow.unreadLookup).
+      const job = this.jobs.jobs.get(jobId);
+      if (job?.kind === 'log_lookup' && job.state !== 'running') job.resultSeen = true;
+      return v ?? fail('JOB_NOT_FOUND', jobId);
+    });
   }
 
   detectProfile({ path } = {}) {
@@ -1646,6 +1651,7 @@ export class Runtime {
           : 'Some queries are incomplete (listed): the counts from savedTo are lower bounds; narrow those queries (an hours window, ids) and look them up too.' };
     }, { key });
     const settled = await this.jobs.settle(job.id, Math.min(100, Math.max(0, Number(waitSeconds) || 0)) * 1000);
+    if (settled && settled.state !== 'running') job.resultSeen = true;
     return settled?.state === 'running'
       ? { state: 'running', jobId: job.id, hint: `Still collecting: job_status {jobId: "${job.id}", waitSeconds: 110} (start that exec with // @exec: {"yield_time_ms": 120000}).` }
       : settled;
