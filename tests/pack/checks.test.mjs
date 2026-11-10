@@ -151,17 +151,34 @@ test('run_checks records the finished build while the suite still runs, and app 
 });
 
 // ME1X0FFX: typecheck chạy cùng lúc next build đọc .next/types đang bị xoá, báo TS6053 giả. typecheck xong rồi mới build.
-test('run_checks never runs typecheck while the build runs; the suite still runs alongside', async () => {
+function marked(nextjs) {
   const p = project({ typecheck: 'node mark.js typecheck', build: 'node mark.js build', test: 'node mark.js test' });
   const app = join(p.matchRoot, 'src');
   writeFileSync(join(app, 'mark.js'), "const fs=require('fs');const n=process.argv[2];fs.appendFileSync('marks.log',n+' start '+Date.now()+'\\n');"
     + "setTimeout(()=>fs.appendFileSync('marks.log',n+' end '+Date.now()+'\\n'),700);");
+  if (nextjs) writeFileSync(join(app, 'tsconfig.json'), JSON.stringify({ include: ['next-env.d.ts', '**/*.ts', '.next/types/**/*.ts'] }));
+  const marks = () => Object.fromEntries(readFileSync(join(app, 'marks.log'), 'utf8').trim().split(/\r?\n/).map(l => { const [n, e, t] = l.split(' '); return [`${n} ${e}`, Number(t)]; }));
+  return { p, marks };
+}
+
+test('run_checks of a Next.js project never runs typecheck while the build runs; the suite still runs alongside', async () => {
+  const { p, marks } = marked(true);
   const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-02', matchRoot: p.matchRoot });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(res.results.map(r => r.name), ['typecheck', 'build', 'test']);
-  const at = Object.fromEntries(readFileSync(join(app, 'marks.log'), 'utf8').trim().split(/\r?\n/).map(l => { const [n, e, t] = l.split(' '); return [`${n} ${e}`, Number(t)]; }));
+  const at = marks();
   assert.ok(at['build start'] >= at['typecheck end'], JSON.stringify(at));
   assert.ok(at['test start'] < at['build start'], 'the suite does not wait for typecheck and build');
+});
+
+// QXUD1QAI CR-07: typecheck 113 s rồi mới build 78 s, app start chờ build; app lên muộn, không kịp chụp trang.
+test('run_checks of other projects runs typecheck, build and the suite at once', async () => {
+  const { p, marks } = marked(false);
+  const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-02', matchRoot: p.matchRoot });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.results.map(r => r.name), ['typecheck', 'build', 'test']);
+  const at = marks();
+  assert.ok(at['build start'] < at['typecheck end'], `build does not wait for typecheck: ${JSON.stringify(at)}`);
 });
 
 // QDYZMY1K: full suite của PI-02/PI-03 timeout 600 s. PI chỉ typecheck khi không chỉ định checks.

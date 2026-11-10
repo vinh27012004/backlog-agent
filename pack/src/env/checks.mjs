@@ -59,6 +59,17 @@ async function ownChanges(checkout) {
   } catch { return null; }
 }
 
+// typecheck đọc thư mục mà build ghi lại: Next.js (tsconfig include '.next/types/**/*.ts', next build xoá rồi dựng lại
+// thư mục đó; ME1X0FFX: TS6053 giả). Chỉ khi đó mới chạy typecheck rồi build lần lượt.
+export function typecheckReadsBuild(root) {
+  const read = name => { try { return readFileSync(join(root, name), 'utf8'); } catch { return ''; } };
+  if (/\.next[\\/]types/.test(read('tsconfig.json'))) return true;
+  try {
+    const pkg = JSON.parse(read('package.json') || '{}');
+    return Boolean({ ...pkg.dependencies, ...pkg.devDependencies }.next);
+  } catch { return false; }
+}
+
 function itemText(teamWork, key) {
   try {
     const page = JSON.parse(readFileSync(join(teamWork, 'items', key, 'page.json'), 'utf8'));
@@ -225,9 +236,11 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
     const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal })
       .catch(error => ({ name, command: null, state: 'failed', tail: String(error?.message ?? error).slice(0, 600) }))
       .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${LOG[name]}` }) }));
-    // typecheck không chạy cùng lúc với build: tsconfig của Next.js include '.next/types/**/*.ts', next build xoá rồi
-    // dựng lại thư mục đó, tsc đang đọc thì báo TS6053 dù code đúng (ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt vì typecheck
-    // "hỏng" giả ngay trước giờ đóng). Chạy typecheck trước (nhanh, hỏng sớm) rồi build; test song song với cả hai.
+    // typecheck không chạy cùng lúc với build ở project Next.js: tsconfig include '.next/types/**/*.ts', next build xoá
+    // rồi dựng lại thư mục đó, tsc đang đọc thì báo TS6053 dù code đúng (ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt vì
+    // typecheck "hỏng" giả ngay trước giờ đóng); ở đó chạy typecheck trước (nhanh, hỏng sớm) rồi build. Project khác chạy
+    // cả ba cùng lúc: app start chờ build, mà typecheck đứng trước build làm app lên muộn khoảng 2 phút (QXUD1QAI CR-07:
+    // typecheck 113 s rồi build 78 s; trong 9 trận CR-07 hạn 20 phút chỉ một lần kịp chụp trang).
     const byName = {};
     // Build xong thì ghi ngay vào checks.json: app start chỉ chờ build, không chờ cả bộ test (UOMNKT6Z: BUG-09 chờ
     // full suite 8,5 phút, quá 600 s, trước khi được start app để chụp evidence).
@@ -252,8 +265,9 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
         if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
       }
     };
-    if (parallel) await Promise.all([chain(names.filter(n => n !== 'test')), chain(names.filter(n => n === 'test'))]);
-    else await chain(names);
+    if (!parallel) await chain(names);
+    else if (typecheckReadsBuild(profile.root)) await Promise.all([chain(names.filter(n => n !== 'test')), chain(names.filter(n => n === 'test'))]);
+    else await Promise.all(names.map(n => chain([n])));
     if (ac.signal.aborted) {
       if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify({ ...record, state: 'cancelled', results: [], endedAt: new Date().toISOString() }, null, 2));
       return;
