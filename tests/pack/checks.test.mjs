@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { readChecks, runChecks, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
-import { sh, tempDir } from './support.mjs';
+import { localRuntime, sh, tempDir } from './support.mjs';
+import { Runtime } from '../../pack/src/tools.mjs';
 
 function project(scripts) {
   const tw = tempDir('mtm-checks-'), matchRoot = join(tw, 'matches', 'M1', 'M1'), app = join(matchRoot, 'src');
@@ -125,4 +126,15 @@ test('run_checks never runs typecheck while the build runs; the suite still runs
   const at = Object.fromEntries(readFileSync(join(app, 'marks.log'), 'utf8').trim().split(/\r?\n/).map(l => { const [n, e, t] = l.split(' '); return [`${n} ${e}`, Number(t)]; }));
   assert.ok(at['build start'] >= at['typecheck end'], JSON.stringify(at));
   assert.ok(at['test start'] < at['build start'], 'the suite does not wait for typecheck and build');
+});
+
+// QDYZMY1K: full suite của PI-02/PI-03 timeout 600 s. PI chỉ typecheck khi không chỉ định checks.
+test('run_checks of a PI item runs typecheck only unless checks is given', async () => {
+  const p = project({ typecheck: ok('types fine'), build: 'node -e "process.exit(1)"', test: 'node -e "process.exit(1)"' });
+  localRuntime(p.tw, {});
+  const rt = new Runtime({ teamWorkspace: p.tw });
+  const res = await rt.runChecks({ backlogItemKey: 'PI-02', matchRoot: p.matchRoot, waitSeconds: 30 });
+  assert.deepEqual(res.results.map(r => [r.name, r.state]), [['typecheck', 'passed']]);
+  const all = await rt.runChecks({ backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 30 });
+  assert.deepEqual(all.results.map(r => r.name), ['typecheck', 'build', 'test']);
 });

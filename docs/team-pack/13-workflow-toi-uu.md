@@ -387,6 +387,34 @@ dòng -142M fail: sync rồi chạy lại replay là đủ lấy lại 25 điể
   chặn bàn giao như lỗi schema, không chỉ cảnh báo; thông báo bảo trích file đó, chạy lại kịch bản ra file đó hay báo
   NOT_RUN.
 
+## PI nhanh hơn: tra log hàng loạt, chỉ typecheck, không chờ codegraph (10/11, sau QDYZMY1K)
+
+OMZJW0S0: PI mất ~11 phút (prepare 58–64 s, trong đó index codegraph ~45 s mà fixer không dùng; fixer ~10 phút: ~5,5
+phút model, ~2,5 phút tự lật log, hỏi root schema `search_logs`, ~2 phút closing checks). QDYZMY1K (pack có setup
+liên kết chưa có): PI-02 thử `limit`/`pageSize`/`take`, hỏi root schema ở giây 367 rồi lặp 716 truy vấn `TX-xxxx`;
+PI-03 hỏi ở giây 357, lặp 320 truy vấn `SCH-xxxx` và chạm trần 12 phút trước khi sửa source; full suite timeout 600 s.
+
+- `search_logs` (kiểm trên lời gọi thật): tham số `service`, `query`; tối đa 20 dòng mới nhất mỗi lời gọi kèm `total`,
+  không có paging. Dòng (cả tên trường) và query viết thường, cắt thành từ ở mọi ký tự không phải chữ/số; mỗi từ của
+  query phải trùng nguyên vẹn một từ của dòng. Từ giờ `DDtHH` chọn một giờ (ở mọi tháng), không chọn được ngày; số
+  ngắn (`10`, `18`) khớp khắp nơi; không wildcard.
+- Brief PI có khối `<search_logs>` (`searchLogsHelp`): schema thật lấy từ `company_tools`, quy tắc khớp từ kèm ví dụ,
+  cách tra hàng loạt; khối `<report_only_pi>` và skill `backlog-pi` (Form B) dùng nó.
+- `company_lookup {name: "search_logs", backlogItemKey, queries: [{service, query}…] (≤ 2500), hours: {from, to}}`
+  (`match/logs.mjs`, `logLookup`): job `log_lookup` trong helper của root (tool MCP và proxy chỉ chờ ~120 s; trả kết quả
+  trong 100 s hoặc `jobId`). Chạy song song 8, thử lại tới 3 lần (lùi 1–2–4 s), `hours` nhân mỗi truy vấn với từng
+  từ giờ trong khung và bỏ dòng ngoài khung; giờ quá 20 dòng chia theo từ phút. Đủ khi số dòng khác nhau thấy được
+  khớp truy vấn của giờ bằng `total` (nhánh phút trùng số tháng vẫn quá 20 nhưng các dòng đã tới qua phút thật của
+  chúng); còn thiếu thì báo trong `incomplete`. Ghi MỘT file `NN-search_logs-bulk.json` (mọi dòng một lần, sắp theo ts
+  rồi `context.seq`, `complete`). Mô phỏng trên bộ log đầy đủ 4057 dòng (độ trễ 300 ms): `SCH-0001..0320` 697/697 dòng,
+  320 lời gọi, 12 s; rule-engine cả khoảng log 755/755, 744 lời gọi, 29 s; khung release 2025.10.3 370/370, 441 lời
+  gọi, 17 s; cả log 4057/4057, 2244 lời gọi, 91 s. Thời gian thật phụ thuộc giới hạn tốc độ của Company Tools.
+- PI dựng index codegraph nền, không giữ spawn. `run_checks` của PI mặc định chỉ typecheck (không build, không full
+  suite): bản sửa được chấm bằng hidden test, đáp án đua theo thứ tự nộp; fixer chạy test của module bị sửa bằng test_one.
+- Thứ tự Form B (`backlog-pi`, `team-fixer.toml`): sửa trước (red → fix → green), `ready_for_evidence` (typecheck nền),
+  trong lúc đó tra log một lần và suy đáp án bằng script, rồi candidate; quá `checkpoint_by` mà chưa xanh thì vẫn bàn
+  giao đáp án và nói thiếu bản sửa (test tái hiện không đi kèm bản sửa được helper chuyển vào evidence).
+
 ## Đo và kiểm
 
 journal.metrics: prepare, code_test, evidence, handoff, blocked, publish; jobs: worktree_setup/publish_item/drop_databases.

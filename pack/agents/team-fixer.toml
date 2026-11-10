@@ -51,7 +51,7 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    CR: read .agents/skills/backlog-cr/SKILL.md. Walk full impact chain (Route -> DTO -> Service -> DB -> Serialization); cover 4 viewpoints (happy path, boundaries, error codes, backward compatibility).
    PI: read .agents/skills/backlog-references/pi-triage.md and .agents/skills/backlog-pi/SKILL.md. Classify immediately:
    - Form A (report-only, source changes out of scope): DO NOT build/test/run app or edit code. Derive all answers deterministically from logs and company facts using a targeted script in answers/<ID>/evidence/.
-   - Form B (code hotfix): apply minimal fix with reproduction test.
+   - Form B (code hotfix): fix first (red, minimal fix, green with test_one), then ready_for_evidence (typecheck only runs in the background), then derive the answers from ONE bulk search_logs lookup (<search_logs> in the brief) while it runs; never page search_logs in your own loops or guess its parameters.
    TASK: read .agents/skills/backlog-task/SKILL.md. Classify immediately:
    - Form A (answer-only, calculation or questions with no source changes): DO NOT build/test/run app or write production code. Derive all answers deterministically from canonical source and QA data using a fast script in answers/<ID>/evidence/derive.mjs, fill answers/<ID>/submit.json and hand off immediately (< 3 minutes).
    - Form B (feature/endpoint): copy nearest existing project pattern, implement minimal service + tests.

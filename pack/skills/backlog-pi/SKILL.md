@@ -65,6 +65,19 @@ Check the item description, `<materials>`, and `template.json`:
 
 ## Form B Playbook: Live Production Hotfix
 
+Order (QDYZMY1K: both PIs spent 5-8 minutes on hand-made log loops and asking root for the search_logs schema; PI-03
+reached its 12-minute cap before its source fix, so it scored 0 for the fix and its red test hurt every later item):
+1. Fix first: read the KB standard and the code, red test, minimal fix, green run of that test and the touched
+   module's tests (test_one, logs to answers/<ID>/evidence/red.log and green.log). Target: minute 4.
+2. At once worker_checkpoint ready_for_evidence: the helper syncs and runs typecheck in the background (a PI runs no
+   build and no full suite).
+3. While it runs: get the incident data in ONE bulk company_lookup as <search_logs> in the brief explains (the ids or
+   the release windows the KB and the deploy entries point to), write answers/<ID>/evidence/derive.mjs over that file,
+   run it, write submit.json. Never page search_logs by hand and never guess parameters (limit, pageSize, take).
+4. run_checks {action: "status"}, then worker_checkpoint candidate. If the fix is not green by your checkpoint_by,
+   hand off the answers anyway and say the fix is missing; a reproduction test without its fix never ships (the
+   helper moves it to evidence).
+
 1. **Locate Failing Frame**:
    - Map incident error stack trace to exact project `file:line`.
    - Run `git log -p -n 5 -- <file>`: inspect recent changes on that path.

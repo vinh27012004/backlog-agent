@@ -11,6 +11,7 @@ import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
+import { searchLogsHelp } from './logs.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -76,14 +77,14 @@ const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}
 const REPORT_ONLY_PI = `Report-only incident (Form A): the item forbids source changes, so this block is your whole procedure and replaces
 every skill file. Do not read skills, build, test, run the app, use codegraph or edit code: this worktree has no
 dependencies installed.
-- Logs: the helper already fetched every service's logs. <company_facts> lists one file per service with
-  returned/total, and timeline.json merges them sorted by ts. A service marked INCOMPLETE returned only part of its
-  entries: query it again with a narrower query (company_lookup) only when it matters to the incident. These files
-  are already copied into answers/<ID>/evidence/.
+- Logs: <company_facts> lists the newest entries of each service with returned/total, merged in timeline.json; these
+  files are already copied into answers/<ID>/evidence/. A service marked INCOMPLETE that matters to the incident: get
+  ALL its relevant entries in ONE bulk company_lookup as <search_logs> explains (ids or the release windows from the
+  deploy entries), copy the bulk file into answers/<ID>/evidence/ and derive from it; never page by hand.
 - Standards: the kb_search file(s) in <company_facts> hold the incident report rules (how to name the release,
   component, flag, affected records and request ids). Follow them exactly.
 - Turn 1: in one command read timeline.json, the kb_search file(s) and the submit template and schema in <materials>.
-- Turn 2: in one command write answers/<ID>/evidence/derive.mjs that loads evidence/timeline.json and computes every
+- Turn 2: in one command write answers/<ID>/evidence/derive.mjs that loads evidence/timeline.json (and the bulk file) and computes every
   answer field (join the streams per record, compare ts with Date.parse, never sort request ids) and writes
   evidence/derivation.json; run it; then write answers/<ID>/submit.json with every template field, incidentRecord
   (impact, an ordered UTC timeline citing request ids, root cause and why later releases did not cause it,
@@ -215,6 +216,9 @@ export class Workflow {
         const profile = r.detectProfile({ path: worktree.matchRoot });
         const companyFacts = await facts;
         const reportOnly = r.reportOnlyPI(key);
+        // PI: schema thật của search_logs và cách tra cho đủ (QDYZMY1K: fixer PI-02 và PI-03 thử limit/pageSize/take rồi
+        // hỏi root schema ở giây 367 và 357, sau đó tự lặp hàng trăm truy vấn).
+        const logTool = typeOf(key) === 'PI' ? (await r.company?.list?.().catch(() => []) ?? []).find(t => t.name === 'search_logs') : null;
         // PI chỉ báo cáo: log và KB vừa lấy là evidence của câu trả lời, chép sẵn vào answers/<ID>/evidence/ (fixer
         // PI-01 của CA3WKX60 tự chép tay).
         if (reportOnly && worktree.evidenceDir) {
@@ -223,7 +227,7 @@ export class Workflow {
         const out = { item: item.item, relatedEvents: item.relatedEvents ?? [], untrusted: true, ...started, reportOnly,
           worktree, setup: setup ? { jobId: setup.jobId, state: setup.state, skipped: setup.result?.skipped ?? null } : null, profile, skills: itemSkills(ji.type ?? key.split('-')[0], profile?.stack), verificationKind: ji.verificationKind,
           companyFactsDir: join(r.itemDir(key), 'company'), companyFacts, resultsDir: join(r.session.paths.teamWork, 'results'),
-          knowledgeHints: ji.signals?.kb ?? null,
+          knowledgeHints: ji.signals?.kb ?? null, searchLogs: logTool ? searchLogsHelp(logTool.inputSchema) : null,
           fixResultFile: this.nextResultFile(key),
           worker: 'team_fixer' };
         // Brief do helper viết (BTZNI69E: root tự soạn brief, đọc skill của worker, tra Company Tools trước khi spawn;
@@ -331,6 +335,7 @@ export class Workflow {
       ...block('recent_changes', s.remote?.recentChanges ?? null),
       ...block('company_facts', [`dir: ${s.companyFactsDir}`, ...(s.companyFacts ?? []).map(f => `${f.tool}${f.note ? ` (${f.note})` : ''}: ${f.savedTo}`),
         'More lookups: company_lookup {name, arguments, backlogItemKey} (kb_search, search_logs, get_test_data); results are saved in this dir.'].join('\n')),
+      ...block('search_logs', s.searchLogs ?? null),
       ...block('knowledge_hints', s.knowledgeHints ?? null),
       ...block('related_events', s.relatedEvents ?? null),
       ...block('item', [raw.descriptionMd ?? raw.description ?? '', s.startInstruction ? `\nStart instruction: ${s.startInstruction}` : ''].join('')),

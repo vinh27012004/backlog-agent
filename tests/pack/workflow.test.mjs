@@ -1134,3 +1134,27 @@ test('a PASS scenario without the evidence its MVS requires blocks the handoff i
   writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', testResults: [{ id: 'TC-1', result: 'PASS', evidence: ['evidence/mvs-tests.log', 'evidence/resync.log'] }] }));
   assert.ok(!(await f.rt.workflow.handoffCheck('BUG-01')).problems.some(p => /is PASS but/.test(p)));
 });
+
+// QDYZMY1K PI-02/PI-03: thử limit/pageSize/take, hỏi root schema, tự lặp hàng trăm truy vấn. company_lookup hàng loạt:
+// một lời gọi, một file đã gộp và sắp xếp, nói rõ đủ hay thiếu. run_checks của PI chỉ typecheck.
+test('PI: bulk company_lookup writes one sorted file and the brief explains search_logs', async () => {
+  const f = fixture('PI-02', false, { 'src/package.json': JSON.stringify({ name: 'app', private: true, scripts: { typecheck: 'node -e "console.log(1)"', build: 'node -e "process.exit(1)"', test: 'node -e "process.exit(1)"' } }) });
+  const logs = Array.from({ length: 12 }, (_, i) => ({ ts: `2025-10-15T08:${String(10 + i).padStart(2, '0')}:00.000Z`, service: 'rule-engine', message: 'rule.applied', context: { txnId: `TX-${String(i + 1).padStart(5, '0')}`, seq: 3100100 + i } }));
+  const { matchesQuery } = await import('../../pack/src/match/logs.mjs');
+  const schema = { properties: { query: { type: 'string', maxLength: 500 }, service: { type: 'string' } } };
+  f.rt.company = { list: async () => [{ name: 'search_logs', readOnly: true, inputSchema: schema }],
+    invoke: async (name, args) => {
+      const hits = logs.filter(e => (!args.service || e.service === args.service) && matchesQuery(e, args.query ?? '')).reverse();
+      return { content: [{ type: 'text', text: JSON.stringify({ total: hits.length, returned: Math.min(20, hits.length), entries: hits.slice(0, 20) }) }] };
+    } };
+  const res = await f.rt.companyLookup({ name: 'search_logs', backlogItemKey: 'PI-02', queries: logs.map(e => ({ service: 'rule-engine', query: e.context.txnId })) });
+  assert.equal(res.state, 'done', JSON.stringify(res));
+  assert.equal(res.result.entries, 12); assert.equal(res.result.complete, true);
+  const saved = JSON.parse(readFileSync(res.result.savedTo, 'utf8'));
+  assert.deepEqual(saved.entries.map(e => e.context.seq), logs.map(e => e.context.seq), 'sorted by ts then seq');
+
+
+  const { searchLogsHelp } = await import('../../pack/src/match/logs.mjs');
+  const brief = readFileSync(f.rt.workflow.writeBrief('PI-02', { item: { title: 'PI', descriptionMd: '' }, fixResultFile: 'x', searchLogs: searchLogsHelp(schema), companyFacts: [] }), 'utf8');
+  assert.match(brief, /<search_logs>\nsearch_logs input: \{"query":\{"type":"string","maxLength":500\}/);
+});
