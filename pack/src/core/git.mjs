@@ -58,14 +58,23 @@ export async function restoreTracked(cwd, files) {
 // SHA tree của nội dung đang có trong <folder>/ (file đã track, file mới chưa track; trừ file bị ignore và `exclude`).
 // Dựng trên index tạm (GIT_INDEX_FILE) nên không đụng index thật. Cùng nội dung thì cùng SHA, dù ở worktree hay
 // checkout chính, dù đã commit hay chưa: gate lưu SHA này, integrate/commit_and_push so lại.
-export async function contentTree(cwd, folder, exclude = []) {
-  const index = join(tmpdir(), `team-tree-${process.pid}-${randomUUID()}.idx`);
-  const env = { GIT_INDEX_FILE: index };
-  try {
-    await git(['add', '-A', '--', folder, ...exclude.map(p => `:(exclude)${p}`)], { cwd, env, timeoutMs: 120_000 });
-    return (await git(['write-tree'], { cwd, env })).out.split(/\r?\n/).pop().trim();
-  } finally {
-    rmSync(index, { force: true });
+// `git add` hỏng khi một tiến trình đang ghi đúng file đó (LXRMBRA2 BUG-09: capture_evidence chụp snapshot lúc bộ test
+// nền của run_checks ghi lại transfer.test.ts.snap, "failed to insert into database", lần chụp hỏng GIT_FAILED rồi mất
+// khoảng 2 phút). Thử lại với index tạm mới, chờ 0,4–1,2 s giữa các lần; lỗi khác GIT_FAILED thì ném luôn.
+export async function contentTree(cwd, folder, exclude = [], { attempts = 4, delayMs = 400, runGit = git } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const index = join(tmpdir(), `team-tree-${process.pid}-${randomUUID()}.idx`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await runGit(['add', '-A', '--', folder, ...exclude.map(p => `:(exclude)${p}`)], { cwd, env, timeoutMs: 120_000 });
+      return (await runGit(['write-tree'], { cwd, env })).out.split(/\r?\n/).pop().trim();
+    } catch (error) {
+      if (error.code !== 'GIT_FAILED' || attempt >= attempts) throw error;
+    } finally {
+      rmSync(index, { force: true });
+      rmSync(`${index}.lock`, { force: true });
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
   }
 }
 
