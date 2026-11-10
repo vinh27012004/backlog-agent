@@ -37,6 +37,11 @@ Check the item description immediately upon opening:
     integration path (N+1, or a mixed change crossing N), and put the N-1 and N sizes on the cheaper helper or
     single-module call. Build bulk data with one batch call per case. RATH0OHJ TASK-08: five full-path cases at
     499/500/501 took 27 s of a 59 s suite that ran six times.
+  - The grader also runs your suite on a correct build, and one case that fails there loses the whole suite-passes
+    part. Each expectation must be what a spec rule states for that very operation. Leave out a case whose expected
+    value you inferred by combining rules for an operation no rule names, and never change product code to make such
+    a case pass (LXRMBRA2 TASK-08: a case expecting a transfer counterpart's category to clear when the transfer was
+    retargeted to another off-budget account, inferred from the add/move rule, failed on the correct build: 0/7).
 
 ## 1. Acceptance criteria & test viewpoints
 Derive criteria from the complete description and referenced spec, including conditions shared across rule IDs.
