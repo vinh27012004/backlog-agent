@@ -25,7 +25,7 @@ test('an easy item starts on the cheap tier, a plain one on small, and both move
 
 test('a deadline item still starts on its own tier and gets the top model on its last try', () => {
   const plan = modelPlan({ type: 'BUG', modelTier: 'cheap', deadline: true, allowed: ENTERPRISE });
-  assert.deepEqual(names(plan), ['gpt-6-luna/medium', 'gpt-6.1-sol/high', 'gpt-6-astra/medium']);
+  assert.deepEqual(names(plan), ['gpt-6-luna/medium', 'gpt-6.1-sol/high', 'gpt-6-astra/high']);
 });
 
 test('a strong-tier item starts on the strong model; a PI ends on top, a CR without deadline never does', () => {
@@ -38,7 +38,7 @@ test('a strong-tier item starts on the strong model; a PI ends on top, a CR with
 
 test('a tier missing from allowedModels moves up the ladder first, then down', () => {
   const plan = modelPlan({ type: 'BUG', modelTier: 'cheap', deadline: true, allowed: ['gpt-6.1-terra', 'gpt-6-astra'] });
-  assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6-astra/medium', 'gpt-6-astra/medium']);
+  assert.deepEqual(names(plan), ['gpt-6.1-terra/medium', 'gpt-6-astra/high', 'gpt-6-astra/high']);
   const free = modelPlan({ type: 'BUG', modelTier: 'small', deadline: true, allowed: FREE });
   assert.deepEqual(names(free), ['gpt-6-luna/medium', 'gpt-6-luna/medium', 'gpt-6-luna/medium']);
   const noTop = modelPlan({ type: 'PI', modelTier: 'strong', deadline: false, allowed: ['gpt-6-luna', 'gpt-6.1-terra'] });

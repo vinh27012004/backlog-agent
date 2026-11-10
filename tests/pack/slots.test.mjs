@@ -22,11 +22,13 @@ function runtime(rows, maxItemsInFlight = 4) {
   return rt;
 }
 
-test('notice lists items not started while fewer than 4 items run; PI, closed and late items are left out', () => {
+test('notice lists items not started while fewer than 4 items run; a PI needs no slot; closed and late items are left out', () => {
   const rows = [row('CR-01', 'started'), row('TASK-02', 'started'), row('BUG-01', 'submitted'), row('TASK-01', 'todo'),
     row('PI-01', 'todo'), row('BUG-03', 'todo', { status: 'CLOSED' }), row('CR-02', 'todo', { minutesLeft: 3 }), row('BUG-04', 'todo', { minutesLeft: null })];
   const notice = runtime(rows).itemNotice();
-  assert.deepEqual(notice.newItems, ['TASK-01', 'BUG-04']);
+  assert.deepEqual(notice.newItems, ['TASK-01', 'PI-01', 'BUG-04']);
+  assert.deepEqual(notice.answerOnly, ['PI-01']);
+  assert.match(notice.hint, /Needs no slot \(PI \/ answer-only\): start PI-01 now/);
   assert.equal(notice.freeSlots, 2);
   assert.match(notice.hint, /start TASK-01, BUG-04 now/);
   const full = [row('BUG-01', 'started'), row('BUG-02', 'started'), row('CR-01', 'started'), row('TASK-02', 'started'), row('TASK-01', 'todo')];
@@ -106,7 +108,7 @@ test('answer-only items need no slot, are always offered and go before code item
   assert.deepEqual(full.newItems, ['TASK-03', 'TASK-04'], 'no free slot: only the answer-only items');
   assert.deepEqual(full.answerOnly, ['TASK-03', 'TASK-04']);
   assert.equal(full.freeSlots, undefined);
-  assert.match(full.hint, /Answer-only, needs no slot: start TASK-03, TASK-04 now/);
+  assert.match(full.hint, /Needs no slot \(PI \/ answer-only\): start TASK-03, TASK-04 now/);
   assert.doesNotMatch(full.hint, /CR-03/);
 
   // A running answer-only item does not take one of the 4 slots either.

@@ -201,10 +201,10 @@ test('without a usable codegraph index topology is null and the grep part still 
     // Không có checkout: KB vẫn đọc đề, stack unknown.
     const bare = kbInsights(workText(BUG));
     assert.deepEqual([bare.domain, bare.risk_factors], ['unknown', ['db_transaction', 'concurrency']]);
-    assert.match(bare.known_pitfalls, /^State \/ concurrency/);                               // hàng của bug-patterns.md
+    assert.match(bare.known_pitfalls, /^Concurrency & Race Condition/);                       // hàng của bug-patterns.md
     assert.equal(bare.known_pitfall_source.file, 'skills/backlog-references/bug-patterns.md');
     assert.ok(readFileSync(new URL(`../../pack/${bare.known_pitfall_source.file}`, import.meta.url), 'utf8')
-      .split(/\r?\n/)[bare.known_pitfall_source.line - 1].includes('State / concurrency'));
+      .split(/\r?\n/)[bare.known_pitfall_source.line - 1].includes('Concurrency & Race Condition'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

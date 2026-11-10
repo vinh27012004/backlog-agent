@@ -66,7 +66,7 @@ test('PI severity never drops below critical', async () => {
   assert.equal(bug.severity.source, 'jev');
 });
 
-test('PI, CR and hard items always get the strong tier', async () => {
+test('PI, CR, BUG and hard items always get the strong tier', async () => {
   const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "cheap" ở 0.9
   const cr = await d.route('CR-01', ITEM, { difficulty: 'medium' });
   assert.equal(cr.model.value, 'strong');
@@ -77,10 +77,12 @@ test('PI, CR and hard items always get the strong tier', async () => {
   const easy = await d.route('TASK-01', ITEM, { difficulty: 'easy' });
   assert.equal(easy.model.value, 'cheap');
   assert.equal(easy.model.source, 'jev');
-  // Jev chọn cheap cho item medium: luật nâng lên small.
-  const medium = await d.route('BUG-03', ITEM, { difficulty: 'medium' });
+  // Jev chọn cheap cho item medium: luật nâng lên small. BUG giờ luôn strong (decisions.mjs needsStrong), nên dùng TASK.
+  const medium = await d.route('TASK-03', ITEM, { difficulty: 'medium' });
   assert.deepEqual([medium.model.value, medium.model.source, medium.model.jev], ['small', 'rule', 'cheap']);
   assert.match(medium.model.reason, /cheap tier is only for easy items/);
+  const bug = await d.route('BUG-03', ITEM, { difficulty: 'medium' });
+  assert.deepEqual([bug.model.value, bug.model.source], ['strong', 'rule']);
 });
 
 test('a tricky answer-only item gets the strong tier from the first attempt; a plain one stays small', async () => {
