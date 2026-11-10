@@ -2,11 +2,12 @@
 // Repo của BTC có thể kèm env-require/ (README, doctor.ps1...): khi có thì doctor.ps1 là thước đo READY.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { restoreTracked, statusChanged } from '../core/git.mjs';
+import { git, restoreTracked, statusChanged } from '../core/git.mjs';
 import { run } from '../core/jobs.mjs';
 import { baselineOf, runTests } from './testreport.mjs';
 import { randomSecret } from '../core/util.mjs';
-import { packageCache, preparedStep } from './setup-cache.mjs';
+import { packageCache, preparedStep, setupInputFile } from './setup-cache.mjs';
+import { isLinked, linkNodeModules, unlinkNodeModules } from './linked-modules.mjs';
 
 export { failingTests, parseTestCounts } from './testreport.mjs';
 
@@ -194,11 +195,41 @@ const lastLines = (text, n = 8) => String(text).trim().split(/\r?\n/).slice(-n).
 // Môi trường cho worktree của một item: .env chép từ checkout chính (gitignored nên worktree không có) với test DB
 // và (khi stack có lệnh migrate) database dev riêng theo trận và item, rồi cài dependency + generate, rồi migrate +
 // seed database riêng đó (`prisma migrate deploy` tự tạo database chưa có). Probe chỉ chạy test: `appDatabase: false`.
-export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir, appDatabase = true, cacheDir = join(logDir, 'package-cache') }) {
+// Worktree dùng được node_modules liên kết tới checkout chính (linked-modules.mjs) khi: stack node, không có bước
+// generate (Prisma sinh client vào node_modules, dùng chung thì generate của worktree đè lên checkout chính), checkout
+// chính đã cài, và các file quyết định dependency (package.json, lock, .yarnrc…) của worktree như bản BTC phát (bản
+// checkout chính đã cài). Trả null khi được, hoặc lý do không được.
+export async function linkBlocker(profile, main, issuedRevision) {
+  if (profile.stack !== 'node') return `stack ${profile.stack}`;
+  if (profile.commands.generate) return 'the stack generates into node_modules';
+  if (!main.root || !existsSync(join(main.root, 'node_modules'))) return 'main checkout is not installed';
+  if (!issuedRevision) return 'no issued revision to compare dependency files with';
+  const diff = await git(['diff', '--name-only', issuedRevision, '--', '.'], { cwd: profile.root, allowFail: true });
+  if (diff.code !== 0) return 'git diff failed';
+  const changed = diff.out.split(/\r?\n/).filter(Boolean).filter(setupInputFile);
+  return changed.length ? `dependency files changed: ${changed.slice(0, 3).join(', ')}` : null;
+}
+
+export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key, logDir, appDatabase = true, cacheDir = join(logDir, 'package-cache'),
+  linked = false, issuedRevision = null }) {
   const profile = detectProfile(wtMatchRoot);
   const main = detectProfile(mainMatchRoot);
   const out = { profile: { stack: profile.stack, root: profile.relRoot }, steps: [] };
   if (!profile.root) return { ...out, ok: false, failure: 'no application manifest in worktree' };
+  // QDYZMY1K: prepare-source (install + build cả app) cho từng worktree mất 5–13 phút khi 6–7 worktree chạy cùng lúc.
+  // Liên kết node_modules của checkout chính mất dưới 1 s; build để run_checks và app start làm khi cần.
+  let linkedModules = null;
+  if (linked) {
+    const blocker = await linkBlocker(profile, main, issuedRevision).catch(e => String(e?.message ?? e));
+    if (!blocker) {
+      const t0 = Date.now();
+      const res = (() => { try { return linkNodeModules(main.root, profile.root); } catch (e) { unlinkNodeModules(profile.root); return { linked: false, reason: String(e?.message ?? e) }; } })();
+      out.steps.push({ name: 'link-modules', ...res, seconds: Math.round((Date.now() - t0) / 1000) });
+      if (res.linked) linkedModules = res;
+    } else out.steps.push({ name: 'link-modules', linked: false, reason: blocker });
+  }
+  // Cài thật vào worktree từng liên kết: gỡ junction trước, kẻo install ghi xuyên sang checkout chính.
+  if (!linkedModules && isLinked(profile.root)) unlinkNodeModules(profile.root);
   const cache = packageCache(profile, cacheDir);
   out.packageCache = cache.directory;
   const context = { profile, matchRoot: wtMatchRoot, logDir, cacheDirectory: cache.directory };
@@ -216,7 +247,8 @@ export async function prepareWorktreeEnv(job, { wtMatchRoot, mainMatchRoot, key,
   }
   const own = dedicatedAppDatabase(wtMatchRoot, mainMatchRoot);
   out.database = own ? { name: own, dedicated: true } : { dedicated: false };
-  const names = [c.prepare_source ? 'prepare_source' : 'install', 'generate', ...(own ? ['migrate', 'seed'] : [])];
+  const names = [...(linkedModules ? [] : [c.prepare_source ? 'prepare_source' : 'install']), 'generate', ...(own ? ['migrate', 'seed'] : [])];
+  if (linkedModules) out.linkedModules = true;
   for (const name of names) {
     // Seed khi .env vừa tạo hoặc migrate vừa tạo database (đã bị dropWorktreeDatabases xoá sau push rồi dùng lại).
     if (!c[name] || name === 'seed' && !fresh && !out.steps.some(s => s.name === 'migrate' && s.created)) continue;

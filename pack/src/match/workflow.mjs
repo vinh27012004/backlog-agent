@@ -136,14 +136,17 @@ export function environmentText(setup, mainAppRoot = null) {
         `main checkout, which is installed: createRequire(${JSON.stringify(join(mainAppRoot, 'package.json'))}). Read the item's source`,
         'from this worktree; never write, install or run anything in the main checkout.'] : [])].join('\n');
   }
-  if (setup.state === 'done') return `Dependency setup (install, generate, migrate, seed of this item's database) is done: job ${setup.jobId}.`;
+  // QDYZMY1K: node_modules của worktree thường là junction tới bản đã cài ở checkout chính (linked-modules.mjs). Cài
+  // lại ghi xuyên sang checkout chính; git clean -x hay xoá node_modules bằng git/shell xoá luôn file của checkout chính.
+  const linkedRule = 'node_modules here is usually linked to the main checkout\'s install: never run a package install, git clean -x, or delete node_modules in this worktree (it would change or delete the main checkout\'s packages); if a dependency must change, call worker_checkpoint blocked.';
+  if (setup.state === 'done') return [`Dependency setup (install, generate, migrate, seed of this item's database) is done: job ${setup.jobId}.`, linkedRule].join('\n');
   return [`Dependency setup (install, generate, migrate, seed of this item's own database) is still running as job ${setup.jobId}.`,
-    'Read this brief, the skills and the code now; the setup usually needs 30-90 s more. Before your first build,',
+    'Read this brief, the skills and the code now; the setup takes a few seconds when linked, up to 90 s otherwise. Before your first build,',
     'typecheck, test, migration, seed, script that imports a project package, or app start, call',
     `job_status {jobId: "${setup.jobId}", waitSeconds: 110} (start that exec with // @exec: {"yield_time_ms": 120000})`,
     'and repeat while state is running. state done with result.ok true: go on. state failed or result.ok false (it',
     'already retried once): call worker_checkpoint blocked with the failure text. Never install, generate or migrate',
-    'yourself while the job runs: it writes the same node_modules and database.'].join('\n');
+    'yourself while the job runs: it writes the same node_modules and database.', linkedRule].join('\n');
 }
 
 export class Workflow {

@@ -11,6 +11,7 @@ import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
 import { dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
+import { unlinkNodeModules } from './env/linked-modules.mjs';
 import { setupInputFile } from './env/setup-cache.mjs';
 import { modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
@@ -686,6 +687,14 @@ export class Runtime {
     return answerOnlyText(raw?.descriptionMd ?? raw?.description ?? '');
   }
 
+  // node_modules liên kết tới checkout chính cho worktree (linked-modules.mjs; tắt bằng "linkedModules": false).
+  linkOptions() {
+    return { linked: this.runtimeConfig().linkedModules !== false, issuedRevision: this.journal?.data?.initialRevision ?? null };
+  }
+  unlinkWorktreeModules(wt) {
+    try { const root = detectProfile(wt.matchRoot).root; if (root) unlinkNodeModules(root); } catch { /* không có app */ }
+  }
+
   // TASK chỉ trả lời: đề không đổi source, template không có testResults (không chạy test nào).
   answerOnlyTask(key) {
     return typeOf(key) === 'TASK' && this.answerOnlyItem(key) && !Array.isArray(this.itemTemplate(key)?.testResults);
@@ -982,6 +991,7 @@ export class Runtime {
     }
     if (!this.liveWorktree(key)) {
       if (existsSync(wt.worktreeRoot)) {
+        this.unlinkWorktreeModules(wt);
         rmSync(wt.worktreeRoot, { recursive: true, force: true, maxRetries: 3 });   // còn file bị khoá thì worktree add báo lỗi
       }
       let base = await revParse(checkoutRoot);
@@ -1014,7 +1024,8 @@ export class Runtime {
     // prepare_item hỏng để root thử lại.
     const job = this.jobs.start('worktree_setup', async job => {
       const opts = { wtMatchRoot: wt.matchRoot, mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs'),
-        cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache') };
+        cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache'),
+        ...this.linkOptions() };
       const first = await prepareWorktreeEnv(job, opts);
       if (first.ok) return first;
       job.progress.push(`retry after: ${String(first.failure ?? '').split(/\r?\n/).pop()}`);
@@ -1072,6 +1083,8 @@ export class Runtime {
     if (action === 'remove') {
       // App do tool `app` chạy giữ file trong worktree (Windows): dừng trước khi xoá.
       const stoppedApp = stopApp(this.teamWorkspace, key).stopped;
+      // node_modules liên kết: `git worktree remove --force` đi xuyên junction và xoá file của checkout chính.
+      this.unlinkWorktreeModules(wt);
       await git(['worktree', 'remove', '--force', wt.worktreeRoot], { cwd: checkoutRoot, timeoutMs: 120_000, allowFail: true });
       // Windows: file bị khoá làm `worktree remove` bỏ dở (Practice HIET12OA: codegraph.db của TASK-02, root kill server
       // codegraph của cả đội để xoá). Xoá phần còn lại được bao nhiêu thì xoá; đăng ký worktree phải mất, thư mục sót thì kệ.
@@ -1161,7 +1174,8 @@ export class Runtime {
       if (deps.length && !this.reportOnlyPI(key) && !this.answerOnlyTask(key)) {
         const job = this.jobs.start('worktree_setup', async job => prepareWorktreeEnv(job, { wtMatchRoot: wt.matchRoot,
           mainMatchRoot: matchRoot, key, logDir: join(teamWork, 'logs'),
-          cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache') }), { key });
+          cacheDir: join(this.session.paths.local ?? join(this.teamWorkspace, 'team-sdlc-pack', 'local'), 'package-cache'),
+          ...this.linkOptions() }), { key });
         ji.worktreeSetupJob = setupJobId = job.id;
       }
       j.save();

@@ -1085,3 +1085,17 @@ test('phase metrics follow the work, not every resume: blocked waits are separat
   wf.checkpoint({ backlogItemKey: 'TASK-08', phase: 'candidate' });
   assert.deepEqual(phases().slice(-1), [['handoff', 2]]);
 });
+
+// QDYZMY1K: node_modules worktree liên kết tới checkout chính; git worktree remove --force đi xuyên junction và xoá file
+// của checkout chính nếu không gỡ liên kết trước.
+test('worktree remove unlinks linked node_modules first, so the main checkout keeps its packages', async () => {
+  const f = fixture('BUG-01', false, { 'src/package.json': JSON.stringify({ name: 'app', private: true, scripts: { test: 'node -e 1' } }) });
+  const mainApp = join(f.rt.session.paths.matchRoot, 'src');
+  mkdirSync(join(mainApp, 'node_modules', 'left-pad'), { recursive: true });
+  writeFileSync(join(mainApp, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
+  const { linkNodeModules } = await import('../../pack/src/env/linked-modules.mjs');
+  assert.equal(linkNodeModules(mainApp, join(f.wt.matchRoot, 'src')).linked, true);
+  const removed = await f.rt.worktree({ action: 'remove', backlogItemKey: f.key });
+  assert.equal(removed.removed, true);
+  assert.ok(existsSync(join(mainApp, 'node_modules', 'left-pad', 'index.js')), 'main checkout package survived the worktree removal');
+});

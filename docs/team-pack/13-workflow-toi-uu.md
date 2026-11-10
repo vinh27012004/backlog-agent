@@ -222,6 +222,33 @@ Phút đầu fixer chỉ đọc brief, skill và code, chưa cần dependency. T
 - Ước tính: BUG/CR từ helper thấy tới fixer bắt đầu còn khoảng 25–40 s (git worktree, codegraph, brief, một lượt spawn
   của root); TASK chỉ trả lời khoảng 20–30 s. Đo lại bằng bench sau trận kế ("· helper thấy → thợ bắt đầu").
 
+### node_modules liên kết (10/11, sau QDYZMY1K)
+
+QDYZMY1K chạy pack có lệnh setup đã sửa (7fd07aa): mỗi worktree chạy `prepare-source` của BTC (yarn install rồi build
+cả app web). Bước link của yarn build lại gói native (esbuild, argon2, bcrypt) 2m58s, build web 1m23s; 6–7 worktree cùng
+lúc nên job setup mất 5–13 phút mỗi worktree, typecheck của BUG-09 229 s, full suite timeout 600 s ở 5/6 item, PI-03
+hết giờ trước khi sửa source, BUG-11 lên main muộn làm CR-07 không có dữ liệu official. Ở OMZJW0S0 lệnh setup hỏng ngay
+(`yarn` không có trên PATH, 1–2 s) nên không tốn gì; fixer tự `yarn install` khi cần (link 23 s, một mình).
+
+- `linked-modules.mjs`: mỗi thư mục node_modules của app ở checkout chính (gốc và `packages/*/node_modules`) có bản
+  tương ứng trong worktree là thư mục thật chứa junction từng mục: gói bên thứ ba → checkout chính; gói workspace (yarn
+  để junction tuyệt đối vào `packages/` của checkout chính) → `packages/` của worktree; thư mục ẩn tạo rỗng riêng
+  (`.vite`, `.vite-temp`, `.vitest-cache`, `.cache`), trừ `.bin`; file ẩn (`.yarn-state.yml`) chép sang; chép
+  `.yarn/install-state.gz` để `yarn run` coi là đã cài. Đo trên checkout QDYZMY1K: 1227 junction trong 0,56 s; test
+  loot-core 69/69, `yarn run typecheck` 46 s và `lage build:browser` 34 s chạy được, output ở worktree, build của checkout
+  chính không đổi; gỡ 1,6 s, checkout chính còn nguyên.
+- `prepareWorktreeEnv {linked, issuedRevision}` (`linkOptions()`, công tắc `"linkedModules"`): liên kết khi stack node,
+  không có bước `generate` (Prisma sinh client vào node_modules: generate của worktree sẽ đè lên checkout chính), checkout
+  chính đã cài và `git diff <issuedRevision>` của worktree không có file dependency (`setupInputFile`). Khi đó bỏ
+  install/`prepare-source` (không build: `run_checks` và `app start` build khi cần), vẫn migrate/seed database riêng.
+  Không đủ điều kiện thì cài thật như cũ, gỡ junction trước (install ghi xuyên junction sang checkout chính).
+- **`git worktree remove --force` và `git clean -x` đi xuyên junction và xoá file ở thư mục đích** (kiểm trên git for
+  Windows: xoá worktree làm mất file của thư mục được junction tới). `worktree remove` và dọn thư mục worktree sót gọi
+  `unlinkNodeModules` trước; `fs.rmSync` của Node không đi xuyên junction. Khối `<environment>` của brief cấm cài
+  package, `git clean -x` hay xoá node_modules trong worktree.
+- TASK-10/11/12 của bộ 12 item có mục Acceptance criteria nên không được nhận là TASK chỉ trả lời (setup 5–13 phút);
+  giữ nguyên bộ nhận diện (TASK-08 cũng có Acceptance criteria mà phải sửa code), setup liên kết của chúng chỉ còn ~1 s.
+
 ## Bớt lượt model của fixer: run_checks, candidate {result}, skill trong brief (05/11, sau 9O802QWE)
 
 9O802QWE (10/10 item đạt): BUG/CR mất 7–13 phút, trong đó 65–80% là model suy nghĩ (gpt-6.1-sol high, 12–14 s mỗi
