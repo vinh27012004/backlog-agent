@@ -28,6 +28,15 @@ Check the item description immediately upon opening:
     Exercise a representative real entry point across its actual processing boundary and check the records beyond it.
   - Demonstrate observed specification violations on unfixed code, fix production behavior, and verify green without
     relaxing the expected result. If reference/mutant builds are unavailable, report only the detection you observed.
+  - Iterate with the required suite command on the integration directory and the targeted module tests only. Call the
+    full run_checks once, when the source fixes and every case are final: any later edit under the source tree makes
+    that run stale and the whole suite runs again (RATH0OHJ TASK-08: a full run at minute 13 was discarded by later
+    edits; the final 6m43s run started at minute 22). While it runs, write submit.json (every case) and your candidate
+    result, and edit nothing the checks cover.
+  - Keep the suite fast without losing detection: cross each processing boundary once per entry point through the full
+    integration path (N+1, or a mixed change crossing N), and put the N-1 and N sizes on the cheaper helper or
+    single-module call. Build bulk data with one batch call per case. RATH0OHJ TASK-08: five full-path cases at
+    499/500/501 took 27 s of a 59 s suite that ran six times.
 
 ## 1. Acceptance criteria & test viewpoints
 Derive criteria from the complete description and referenced spec, including conditions shared across rule IDs.

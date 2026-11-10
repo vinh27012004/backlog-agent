@@ -8,11 +8,13 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { sourceSnapshot } from '../core/candidates.mjs';
+import { git } from '../core/git.mjs';
 import { runPwsh } from '../core/jobs.mjs';
 import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 import { forgetBuild, locate, readState as appState, rememberBuild, stopApp } from './app.mjs';
 import { detectProfile } from './environment.mjs';
 import { runTests } from './testreport.mjs';
+import { appPrefixOf, testScope } from './test-scope.mjs';
 
 export const CHECKS = ['typecheck', 'build', 'test'];
 const MAX_WAIT_SECONDS = 110;
@@ -37,16 +39,36 @@ function alive(pid) {
 
 const tailOf = (text, max) => String(text ?? '').replace(/\x1b\[[0-9;]*m/g, '').slice(-max).trim();
 
-async function runOne(name, profile, { logFile, scratch }) {
-  const command = name === 'test' ? profile.commands.test_all : profile.commands[name];
+// File item sửa trong worktree, tương đối checkout: thay đổi chưa commit so với HEAD (worktree sync đặt HEAD về main
+// và áp lại thay đổi của item chưa stage) cộng file mới chưa ignore. null khi git lỗi.
+async function ownChanges(checkout) {
+  try {
+    const diff = await git(['diff', '--name-only', 'HEAD', '--'], { cwd: checkout });
+    const untracked = await git(['ls-files', '--others', '--exclude-standard'], { cwd: checkout });
+    return [...diff.out.split(/\r?\n/), ...untracked.out.split(/\r?\n/)].filter(p => p && !p.startsWith('.team-work/'));
+  } catch { return null; }
+}
+
+function itemText(teamWork, key) {
+  try {
+    const page = JSON.parse(readFileSync(join(teamWork, 'items', key, 'page.json'), 'utf8'));
+    return `${page.title ?? ''}\n${page.descriptionMd ?? page.description ?? ''}`;
+  } catch { return ''; }
+}
+
+async function runOne(name, profile, { logFile, scratch, scope }) {
+  const command = name === 'test' ? scope?.command ?? profile.commands.test_all : profile.commands[name];
   if (!command) return { name, command: null, state: 'skipped', reason: `the project profile has no ${name === 'test' ? 'test_all' : name} command` };
   if (name === 'test') {
-    // Báo cáo JSON/JUnit của runner nằm ngoài worktree; chỉ log vào evidence.
+    // Báo cáo JSON/JUnit của runner nằm ngoài worktree; chỉ log vào evidence. Lệnh theo gói không kèm reporter: số
+    // đếm và test hỏng đọc từ log.
     const scratchLog = join(scratch, LOG.test);
-    const t = await runTests(profile, 'test_all', { logFile: scratchLog, timeoutMs: TIMEOUT_MS.test });
+    const run = scope ? { ...profile, testScript: null, commands: { ...profile.commands, test_all: command } } : profile;
+    const t = await runTests(run, 'test_all', { logFile: scratchLog, timeoutMs: TIMEOUT_MS.test });
     try { copyFileSync(scratchLog, logFile); } catch { /* không có log thì thôi */ }
     const ok = !t.res.timedOut && t.res.code === 0;
     return { name, command, state: t.res.timedOut ? 'timeout' : ok ? 'passed' : 'failed', exitCode: t.res.code, ms: t.res.ms,
+      ...(scope ? { scope: { packages: scope.packages, reason: scope.reason } } : {}),
       counts: t.counts ?? null, failing: t.failing.slice(0, 40), ...(ok ? {} : { tail: tailOf(t.res.tail, 1500) }) };
   }
   const res = await runPwsh(command, { cwd: profile.root, timeoutMs: TIMEOUT_MS[name], logFile });
@@ -62,7 +84,8 @@ export function verificationRows(record) {
     const result = c.state === 'passed' ? 'pass' : c.state === 'skipped' ? 'not_run' : c.state === 'failed' || c.state === 'timeout' ? 'fail' : 'not_run';
     const parts = [`run_checks ${c.state}`, c.log ? `log ${c.log}` : null,
       c.counts ? `${c.counts.passed ?? 0}/${c.counts.total ?? 0} passed, ${c.counts.failed ?? 0} failed` : null,
-      c.failing?.length ? `failing: ${c.failing.slice(0, 8).join('; ')}` : null, c.reason ?? null];
+      c.failing?.length ? `failing: ${c.failing.slice(0, 8).join('; ')}` : null, c.reason ?? null,
+      c.scope ? `scoped to ${c.scope.packages.join(', ')} (${c.scope.reason})` : null];
     rows.push({ check: CHECK_LABEL[c.name] ?? c.name, command: c.command ?? null, result, note: parts.filter(Boolean).join('; ').slice(0, 1500) });
   }
   return rows;
@@ -76,7 +99,7 @@ function view(record, { waited = false } = {}) {
       seconds: Math.round((Date.now() - Date.parse(record.startedAt)) / 1000), ...(record.build ? { build: record.build.state } : {}),
       hint: built
         ? 'The build passed and the rest is still running: app start now (it reuses that build) and capture your evidence; call run_checks {action: "status"} for the remaining checks before candidate. Do not run these commands yourself meanwhile.'
-        : `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}). Do not run these commands yourself meanwhile.` };
+        : `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}); it returns as soon as the checks finish. Meanwhile prepare submit.json and your candidate result, and change nothing that the checks cover: an edit makes this run stale. Do not run these commands yourself meanwhile.` };
   }
   const failed = (record.results ?? []).filter(c => c.state === 'failed' || c.state === 'timeout');
   return { state: record.state, runId: record.runId, ok: !failed.length, ms: record.ms, results: record.results,
@@ -86,29 +109,31 @@ function view(record, { waited = false } = {}) {
       : `All checks passed. Logs are in answers/${record.key}/evidence/ and worker_checkpoint candidate copies these results into the fix-result verification.${record.buildRemembered ? ' app start reuses this production build while the source stays unchanged: call it with the default build.' : ''}` };
 }
 
+// Chờ dương nào cũng là chờ tối đa: trả về ngay khi xong, nên chờ dài không mất gì (app start tự chờ phần build).
+// RATH0OHJ: worker truyền waitSeconds 40–50 (72 lần), TASK-08 gọi status 6 lần liền, mỗi lần một lượt model, trong
+// lúc cả bộ test chạy 6m43s. 0 vẫn là không chờ (helper tự khởi động run_checks ở ready_for_evidence).
 async function waitFor(teamWork, key, runId, waitSeconds) {
-  const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
+  const deadline = Date.now() + (Number(waitSeconds) > 0 ? MAX_WAIT_SECONDS : 0) * 1000;
   const mine = running.get(key);
-  if (mine && mine.runId === runId) {
-    await Promise.race([mine.promise, sleep(Math.max(0, deadline - Date.now()))]);
-    return view(readChecks(teamWork, key), { waited: true });
-  }
-  // Lần chạy của tiến trình helper khác (worker khác của cùng item, hay helper đã khởi động lại): đọc file.
   for (;;) {
     const record = readChecks(teamWork, key);
     if (!record || record.runId !== runId || record.state !== 'running') return view(record);
-    if (!alive(record.pid)) {
-      const lost = { ...record, state: 'lost', results: [], endedAt: new Date().toISOString() };
-      writeFileAtomic(checksFile(teamWork, key), JSON.stringify(lost, null, 2));
-      return { ...view(lost), hint: 'The helper process that ran these checks is gone: call run_checks {action: "run"} again.' };
+    if (!mine || mine.runId !== runId) {
+      // Lần chạy của tiến trình helper khác (worker khác của cùng item, hay helper đã khởi động lại): đọc file.
+      if (!alive(record.pid)) {
+        const lost = { ...record, state: 'lost', results: [], endedAt: new Date().toISOString() };
+        writeFileAtomic(checksFile(teamWork, key), JSON.stringify(lost, null, 2));
+        return { ...view(lost), hint: 'The helper process that ran these checks is gone: call run_checks {action: "run"} again.' };
+      }
     }
     if (Date.now() >= deadline) return view(record, { waited: true });
-    await sleep(1000);
+    const step = sleep(Math.min(1000, Math.max(0, deadline - Date.now())));
+    await (mine && mine.runId === runId ? Promise.race([mine.promise, step]) : step);
   }
 }
 
 export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey: key, matchRoot, checks = CHECKS,
-  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS }) {
+  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   const where = locate(teamWorkspace, matchRoot);
@@ -143,9 +168,13 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   mkdirSync(evidenceDir, { recursive: true });
   mkdirSync(scratch, { recursive: true });
   mkdirSync(dirname(checksFile(teamWork, key)), { recursive: true });
+  // Bộ test chỉ gồm các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
+  const scoped = names.includes('test') && scopeTests && hasGit
+    ? testScope({ profile, text: itemText(teamWork, key), changed: await ownChanges(checkout), appPrefix: appPrefixOf(checkout, profile) })
+    : { scope: null };
   const runId = `${Date.now().toString(36)}-${process.pid}`;
   const record = { runId, key, pid: process.pid, state: 'running', checks: names, parallel: Boolean(parallel),
-    matchRoot: where.matchRoot, startedAt: new Date().toISOString() };
+    matchRoot: where.matchRoot, startedAt: new Date().toISOString(), ...(scoped.scope ? { testScope: scoped.scope.packages } : {}) };
   // Build ghi đè thư mục build mà app (dev hay production) của item đang chạy dùng.
   if (names.includes('build') && appState(teamWorkspace, key)) { stopApp(teamWorkspace, key); record.appStopped = true; }
   writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
@@ -153,7 +182,7 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   const promise = (async () => {
     const t0 = Date.now();
     if (names.includes('build')) forgetBuild(teamWorkspace, profile.root);
-    const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch })
+    const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope })
       .catch(error => ({ name, command: null, state: 'failed', tail: String(error?.message ?? error).slice(0, 600) }))
       .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${LOG[name]}` }) }));
     // typecheck không chạy cùng lúc với build: tsconfig của Next.js include '.next/types/**/*.ts', next build xoá rồi

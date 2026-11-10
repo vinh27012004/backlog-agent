@@ -41,7 +41,8 @@ the existing callers you re-ran as `[regression] ...`, next to the red and green
   its boundary, even when each individual list is smaller. Include duplicates/order variations only where the
   specification constrains them; do not assert unspecified matching or ordering choices.
 - Keep this targeted: use focused helper boundary checks and representative module interactions rather than every
-  rule at every size. Do not shrink production limits or change issued test configuration to simulate a crossing.
+  rule at every size. N-1, N and N+1 need not all go through the slow full path: one full-path case past the boundary
+  per entry point, the other sizes on the helper itself. Do not shrink production limits or change issued test configuration to simulate a crossing.
   If the actual boundary cannot be exercised within the allowed resources, report that coverage as unverified.
 
 ## File export (CSV and similar)

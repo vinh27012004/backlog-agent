@@ -415,6 +415,20 @@ PI-03 hỏi ở giây 357, lặp 320 truy vấn `SCH-xxxx` và chạm trần 12 
   trong lúc đó tra log một lần và suy đáp án bằng script, rồi candidate; quá `checkpoint_by` mà chưa xanh thì vẫn bàn
   giao đáp án và nói thiếu bản sửa (test tái hiện không đi kèm bản sửa được helper chuyển vào evidence).
 
+## Bộ test của run_checks theo gói grader chạy (10/11, sau RATH0OHJ)
+
+- RATH0OHJ: `yarn test` (lage) chạy mọi workspace của Actual; riêng `web` (desktop-client) 6m08s, lần chạy cuối của
+  TASK-08 6m43s, trong khi đề BUG/CR ghi "The grader runs the loot-core tests" và item chỉ sửa loot-core.
+- `env/test-scope.mjs`: đề (page.json) có câu "the grader runs the <gói> tests" và <gói> khớp một workspace có script
+  test (tên gói, đuôi sau `/` hay tên thư mục) thì bước test chỉ chạy gói đó (`yarn workspace <tên> test`, `pnpm
+  --filter`, `npm test --workspace=`), cộng mọi workspace có file item sửa (git diff HEAD + file mới). File sửa trong app
+  mà ngoài mọi workspace (package.json gốc, tsconfig, lockfile) thì chạy cả bộ. Đề ghi "the whole test suite" hay không
+  nêu gói (TASK-08) thì chạy cả bộ như cũ. Kết quả test mang `scope {packages, reason}`, dòng verification ghi
+  `scoped to …`; lệnh theo gói không kèm reporter JSON, số đếm đọc từ log. Typecheck và build vẫn chạy cả repo.
+- Rủi ro còn lại: grader chấm thêm gói khác mà đề không nêu, và một thay đổi trong gói được chấm làm hỏng test của gói
+  khác mà item không sửa. Tắt: `"scopedTests": false`.
+
+
 ## Đo và kiểm
 
 journal.metrics: prepare, code_test, evidence, handoff, blocked, publish; jobs: worktree_setup/publish_item/drop_databases.

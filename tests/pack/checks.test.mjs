@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { readChecks, runChecks, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
+import { detectProfile } from '../../pack/src/env/environment.mjs';
+import { namedTestPackages, testScope } from '../../pack/src/env/test-scope.mjs';
 import { localRuntime, sh, tempDir } from './support.mjs';
 import { Runtime } from '../../pack/src/tools.mjs';
 
@@ -16,6 +18,25 @@ function project(scripts) {
   return { tw, matchRoot, teamWork: join(tw, 'matches', 'M1', '.team-work') };
 }
 const ok = text => `node -e "console.log('${text}')"`;
+
+// Project npm workspaces: core và web có test, docs không; một commit để run_checks thấy file item sửa.
+const GRADER = 'The grader runs the core tests itself on your submitted revision.';
+function workspaceProject() {
+  const p = project({ test: ok('all ran') });
+  const app = join(p.matchRoot, 'src');
+  writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'app', private: true, packageManager: 'npm@10.0.0',
+    workspaces: ['packages/*'], scripts: { test: ok('all ran') } }));
+  for (const [dir, scripts] of [['core', { test: ok('core ran') }], ['web', { test: ok('web ran') }], ['docs', {}]]) {
+    mkdirSync(join(app, 'packages', dir), { recursive: true });
+    writeFileSync(join(app, 'packages', dir, 'package.json'), JSON.stringify({ name: `@x/${dir}`, version: '1.0.0', scripts }));
+    writeFileSync(join(app, 'packages', dir, 'index.js'), 'export const v = 1;\n');
+  }
+  const checkout = join(p.tw, 'matches', 'M1');
+  sh('git', ['init', '-q'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'issued'], checkout);
+  return p;
+}
 
 test('run_checks runs typecheck, build and the full suite, logs each to evidence and records the result', async () => {
   const p = project({ typecheck: ok('types fine'), build: ok('built'), test: ok('Tests  2 passed (2)') });
@@ -52,7 +73,8 @@ test('run_checks returns running while the checks outlast the wait, and status p
   assert.equal(first.state, 'running'); assert.match(first.hint, /action: "status"/);
   const same = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 0 });
   assert.equal(same.runId, first.runId, 'a second run call joins the running one');
-  const done = await runChecks({ teamWorkspace: p.tw, action: 'status', backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 30 });
+  // RATH0OHJ: worker gọi status với waitSeconds 40–50 rồi lặp lại; chờ dương nào cũng chờ tới khi xong.
+  const done = await runChecks({ teamWorkspace: p.tw, action: 'status', backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 1 });
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.ok, true);
 });
 
@@ -137,4 +159,40 @@ test('run_checks of a PI item runs typecheck only unless checks is given', async
   assert.deepEqual(res.results.map(r => [r.name, r.state]), [['typecheck', 'passed']]);
   const all = await rt.runChecks({ backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 30 });
   assert.deepEqual(all.results.map(r => r.name), ['typecheck', 'build', 'test']);
+});
+
+// RATH0OHJ: `yarn test` chạy mọi workspace, riêng web mất 6m08s dù đề nói "The grader runs the loot-core tests".
+test('the item naming the package the grader tests narrows the suite to it plus the packages the item changed', () => {
+  assert.deepEqual(namedTestPackages('The grader runs the loot-core tests itself. The grader runs the whole test suite.'), ['loot-core']);
+  assert.deepEqual(namedTestPackages('the grader runs the tests itself on your submitted revision'), []);
+  const p = workspaceProject();
+  const profile = detectProfile(p.matchRoot);
+  const scope = changed => testScope({ profile, text: GRADER, changed, appPrefix: 'M1/src' });
+  assert.deepEqual(scope([]).scope.packages, ['@x/core']);
+  assert.deepEqual(scope(['M1/src/packages/core/a.js', 'M1/answers/BUG-05/submit.json', 'M1/README.md']).scope.packages, ['@x/core']);
+  assert.deepEqual(scope(['M1/src/packages/web/view.js']).scope.packages, ['@x/core', '@x/web']);
+  assert.deepEqual(scope(['M1/src/packages/docs/intro.js']).scope.packages, ['@x/core'], 'a package without tests adds nothing');
+  assert.equal(scope(['M1/src/tsconfig.json']).scope, null, 'a change outside every workspace runs the whole suite');
+  assert.equal(testScope({ profile, text: 'The grader runs the whole test suite.', changed: [], appPrefix: 'M1/src' }).scope, null);
+  assert.equal(testScope({ profile, text: 'The grader runs the api tests.', changed: [], appPrefix: 'M1/src' }).scope, null, 'no such workspace');
+  assert.match(scope([]).scope.command, /^npm test --workspace='@x\/core'$/);
+});
+
+test('run_checks runs only the named package, adds a changed one and keeps the whole suite when switched off', async () => {
+  const p = workspaceProject();
+  const page = join(p.teamWork, 'items', 'BUG-05');
+  mkdirSync(page, { recursive: true });
+  writeFileSync(join(page, 'page.json'), JSON.stringify({ title: 'Bug', descriptionMd: GRADER }));
+  const log = () => readFileSync(join(p.matchRoot, 'answers', 'BUG-05', 'evidence', 'full-suite.log'), 'utf8');
+  const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 60 });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.results[0].scope.packages, ['@x/core']);
+  assert.match(log(), /core ran/); assert.doesNotMatch(log(), /web ran|all ran/);
+  assert.match(verificationRows(readChecks(p.teamWork, 'BUG-05'))[0].note, /scoped to @x\/core \(the item says the grader runs the core tests\)/);
+  writeFileSync(join(p.matchRoot, 'src', 'packages', 'web', 'view.js'), 'export const v = 2;\n');
+  const both = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 60 });
+  assert.deepEqual(both.results[0].scope.packages, ['@x/core', '@x/web']);
+  assert.match(log(), /core ran/); assert.match(log(), /web ran/);
+  const off = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 60, force: true, scopeTests: false });
+  assert.equal(off.results[0].scope, undefined); assert.match(log(), /all ran/);
 });

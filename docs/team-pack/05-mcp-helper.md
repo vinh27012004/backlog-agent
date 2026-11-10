@@ -521,6 +521,7 @@ pack/src/
     codegraph.mjs               # dựng index codegraph cho checkout chính và worktree (§5.21)
     testreport.mjs              # chạy test baseline với reporter JSON/JUnit, id từng test
     checks.mjs                  # run_checks: typecheck, build, cả bộ test của worktree (§5.27)
+    test-scope.mjs              # bộ test của run_checks thu về gói đề nói grader chạy
   decide/                       # ra quyết định
     decisions.mjs jev.mjs       # điểm quyết định: Jev trước, luật code dự phòng (D9)
     signals.mjs                 # đặc trưng item cho triage: grep, topology codegraph, KB
