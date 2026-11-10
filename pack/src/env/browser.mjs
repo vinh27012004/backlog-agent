@@ -282,7 +282,9 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     const appState = join(teamWorkspace, 'team-sdlc-pack', 'local', 'apps', `${context.backlogItemKey}.json`);
     if (existsSync(appState)) {
       const running = JSON.parse(readFileSync(appState, 'utf8'));
-      if (resolve(running.matchRoot) !== resolve(where.matchRoot) || running.mode !== context.appMode) fail('EVIDENCE_APP_MISMATCH', 'running app worktree/mode differs from evidence context');
+      // App chạy bằng lệnh riêng (custom, README của project) không có mode dev/production: nhận appMode nào worker khai
+      // (RATH0OHJ L99, LXRMBRA2 BUG-09: capture bị từ chối, worker hỏi root rồi mới chụp được, giữ khoá app_data 15 phút).
+      if (resolve(running.matchRoot) !== resolve(where.matchRoot) || (running.mode !== 'custom' && running.mode !== context.appMode)) fail('EVIDENCE_APP_MISMATCH', 'running app worktree/mode differs from evidence context');
       if (running.snapshot && JSON.stringify(running.snapshot) !== JSON.stringify(snapshot)) {
         // Nói rõ cái gì đổi để worker biết chính nó vừa sửa file nào sau khi start app.
         const changed = running.snapshot.source !== snapshot.source
