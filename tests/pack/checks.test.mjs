@@ -18,6 +18,14 @@ function project(scripts) {
   return { tw, matchRoot, teamWork: join(tw, 'matches', 'M1', '.team-work') };
 }
 const ok = text => `node -e "console.log('${text}')"`;
+// Một check hỏng thì run_checks trả về ngay khi các check khác còn chạy: hỏi status tới khi cả lần chạy xong.
+async function finished(p, key, res) {
+  for (let i = 0; i < 100 && res.state === 'running'; i++) {
+    await new Promise(r => setTimeout(r, 300));
+    res = await runChecks({ teamWorkspace: p.tw, action: 'status', backlogItemKey: key, matchRoot: p.matchRoot, waitSeconds: 0 });
+  }
+  return res;
+}
 
 // Project npm workspaces: core và web có test, docs không; một commit để run_checks thấy file item sửa.
 const GRADER = 'The grader runs the core tests itself on your submitted revision.';
@@ -58,7 +66,7 @@ test('run_checks runs typecheck, build and the full suite, logs each to evidence
 
 test('run_checks reports a failing check with its tail and skips a check the profile lacks', async () => {
   const p = project({ typecheck: 'node -e "console.error(\'TS2322: bad type\'); process.exit(2)"', test: ok('ok') });
-  const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'CR-01', matchRoot: p.matchRoot, parallel: false });
+  const res = await finished(p, 'CR-01', await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'CR-01', matchRoot: p.matchRoot, parallel: false }));
   assert.equal(res.ok, false);
   const [typecheck, build] = res.results;
   assert.equal(typecheck.state, 'failed'); assert.match(typecheck.tail, /TS2322/);
@@ -157,7 +165,7 @@ test('run_checks of a PI item runs typecheck only unless checks is given', async
   const rt = new Runtime({ teamWorkspace: p.tw });
   const res = await rt.runChecks({ backlogItemKey: 'PI-02', matchRoot: p.matchRoot, waitSeconds: 30 });
   assert.deepEqual(res.results.map(r => [r.name, r.state]), [['typecheck', 'passed']]);
-  const all = await rt.runChecks({ backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 30 });
+  const all = await finished(p, 'BUG-02', await rt.runChecks({ backlogItemKey: 'BUG-02', matchRoot: p.matchRoot, waitSeconds: 30 }));
   assert.deepEqual(all.results.map(r => r.name), ['typecheck', 'build', 'test']);
 });
 
@@ -170,7 +178,7 @@ test('the item naming the package the grader tests narrows the suite to it plus 
   const scope = changed => testScope({ profile, text: GRADER, changed, appPrefix: 'M1/src' });
   assert.deepEqual(scope([]).scope.packages, ['@x/core']);
   assert.deepEqual(scope(['M1/src/packages/core/a.js', 'M1/answers/BUG-05/submit.json', 'M1/README.md']).scope.packages, ['@x/core']);
-  assert.deepEqual(scope(['M1/src/packages/web/view.js']).scope.packages, ['@x/core', '@x/web']);
+  assert.equal(scope(['M1/src/packages/web/view.js']).scope, null, 'two packages: the whole suite runs them in parallel');
   assert.deepEqual(scope(['M1/src/packages/docs/intro.js']).scope.packages, ['@x/core'], 'a package without tests adds nothing');
   assert.equal(scope(['M1/src/tsconfig.json']).scope, null, 'a change outside every workspace runs the whole suite');
   assert.equal(testScope({ profile, text: 'The grader runs the whole test suite.', changed: [], appPrefix: 'M1/src' }).scope, null);
@@ -178,7 +186,7 @@ test('the item naming the package the grader tests narrows the suite to it plus 
   assert.match(scope([]).scope.command, /^npm test --workspace='@x\/core'$/);
 });
 
-test('run_checks runs only the named package, adds a changed one and keeps the whole suite when switched off', async () => {
+test('run_checks runs only the named package and the whole suite when a second package changed or when switched off', async () => {
   const p = workspaceProject();
   const page = join(p.teamWork, 'items', 'BUG-05');
   mkdirSync(page, { recursive: true });
@@ -191,8 +199,31 @@ test('run_checks runs only the named package, adds a changed one and keeps the w
   assert.match(verificationRows(readChecks(p.teamWork, 'BUG-05'))[0].note, /scoped to @x\/core \(the item says the grader runs the core tests\)/);
   writeFileSync(join(p.matchRoot, 'src', 'packages', 'web', 'view.js'), 'export const v = 2;\n');
   const both = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 60 });
-  assert.deepEqual(both.results[0].scope.packages, ['@x/core', '@x/web']);
-  assert.match(log(), /core ran/); assert.match(log(), /web ran/);
+  assert.equal(both.results[0].scope, undefined); assert.match(log(), /all ran/);
   const off = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-05', matchRoot: p.matchRoot, checks: ['test'], waitSeconds: 60, force: true, scopeTests: false });
   assert.equal(off.results[0].scope, undefined); assert.match(log(), /all ran/);
+});
+
+// LXRMBRA2 BUG-11: build hỏng ở giây 138, worker chờ bộ test tới giây 425 mới đọc được lỗi.
+test('a check that fails while the suite still runs is reported at once with its tail; run after an edit cancels and restarts', async () => {
+  const p = project({ build: 'node -e "console.error(\'TS2322: bad type in new test\'); process.exit(2)"',
+    test: 'node -e "setTimeout(() => console.log(\'Tests  1 passed (1)\'), 20000)"' });
+  sh('git', ['init', '-q'], join(p.tw, 'matches', 'M1'));
+  const t0 = Date.now();
+  const first = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-06', matchRoot: p.matchRoot, checks: ['build', 'test'], waitSeconds: 60 });
+  assert.equal(first.state, 'running', JSON.stringify(first));
+  assert.ok(Date.now() - t0 < 15000, 'did not wait for the suite');
+  assert.deepEqual(first.failed.map(c => [c.name, c.state]), [['build', 'failed']]);
+  assert.match(first.failed[0].tail, /TS2322/); assert.match(first.hint, /build already failed/);
+  const same = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-06', matchRoot: p.matchRoot, checks: ['build', 'test'], waitSeconds: 60 });
+  assert.equal(same.runId, first.runId, 'unchanged source: the same failing run');
+  // Worker sửa lỗi: lần chạy cũ bị huỷ (bộ test 20 s của nó không chạy hết), lần mới chạy trên source đã sửa.
+  writeFileSync(join(p.matchRoot, 'src', 'package.json'), JSON.stringify({ name: 'app', packageManager: 'npm@10.0.0',
+    scripts: { build: ok('built'), test: ok('Tests  1 passed (1)') } }));
+  const t1 = Date.now();
+  const second = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-06', matchRoot: p.matchRoot, checks: ['build', 'test'], waitSeconds: 60 });
+  assert.equal(second.state, 'done', JSON.stringify(second)); assert.equal(second.ok, true);
+  assert.notEqual(second.runId, first.runId);
+  assert.ok(Date.now() - t1 < 15000, 'the old suite was cancelled');
+  assert.equal(readChecks(p.teamWork, 'BUG-06').runId, second.runId, 'the cancelled run does not overwrite the new record');
 });

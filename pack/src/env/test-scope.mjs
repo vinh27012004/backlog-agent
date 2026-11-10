@@ -3,6 +3,8 @@
 // TASK-08 chờ bộ test cuối 6m43s. Chỉ thu hẹp khi đề nêu tên gói grader chạy và gói đó là một workspace có script
 // test; workspace nào có file item sửa cũng được thêm vào. File sửa nằm trong app mà ngoài mọi workspace (config gốc,
 // lockfile…) thì chạy cả bộ. Mọi trường hợp khác ("the whole test suite", đề không nêu gì) vẫn chạy cả bộ.
+// Từ hai gói trở lên cũng chạy cả bộ: runner của repo (lage) chạy các gói song song, còn lệnh theo gói chạy lần lượt
+// (LXRMBRA2 CR-07: core rồi web, 5 + 6 phút, hết 600 s).
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -55,14 +57,10 @@ const matches = (ws, token) => {
   return name === t || name.endsWith(`/${t}`) || ws.dir.split('/').pop().toLowerCase() === t;
 };
 
-function scopedCommand(profile, names) {
+function scopedCommand(profile, name) {
   const m = profile.packageManagerCommand ?? profile.packageManager;
-  const one = name => (profile.packageManager === 'yarn' ? `${m} workspace ${quote(name)} test`
-    : profile.packageManager === 'pnpm' ? `${m} --filter ${quote(name)} test` : `npm test --workspace=${quote(name)}`);
-  if (names.length === 1) return one(names[0]);
-  // Chạy hết các gói kể cả khi một gói hỏng, rồi trả mã lỗi khác 0 nếu có gói hỏng.
-  if (process.platform !== 'win32') return `f=0; ${names.map(n => `${one(n)} || f=1`).join('; ')}; exit $f`;
-  return `$failed = 0; ${names.map(n => `${one(n)}; if ($LASTEXITCODE) { $failed = $LASTEXITCODE }`).join('; ')}; exit $failed`;
+  return profile.packageManager === 'yarn' ? `${m} workspace ${quote(name)} test`
+    : profile.packageManager === 'pnpm' ? `${m} --filter ${quote(name)} test` : `npm test --workspace=${quote(name)}`;
 }
 
 // {packages, command, reason} khi thu hẹp được; null (kèm lý do ở `why`) khi phải chạy cả bộ.
@@ -86,8 +84,8 @@ export function testScope({ profile, text, changed, appPrefix }) {
     if (ws.test && !picked.includes(ws) && !added.includes(ws)) added.push(ws);
   }
   const packages = [...picked, ...added].map(ws => ws.name);
-  return { scope: { packages, command: scopedCommand(profile, packages),
-    reason: `the item says the grader runs the ${named.join(', ')} tests${added.length ? `; ${added.map(w => w.name).join(', ')} added for changed files` : ''}` } };
+  if (packages.length > 1) return { scope: null, why: `${packages.join(', ')} are in scope: the whole suite runs them in parallel` };
+  return { scope: { packages, command: scopedCommand(profile, packages[0]), reason: `the item says the grader runs the ${named.join(', ')} tests` } };
 }
 
 export const appPrefixOf = (checkout, profile) => posix(relative(checkout, profile.root)) || '.';

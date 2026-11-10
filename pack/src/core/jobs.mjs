@@ -21,7 +21,7 @@ export function killTree(pid) {
 }
 
 // Trả {code, timedOut, ms, tail}. `tail` là phần cuối output đã che secret.
-export function run(cmd, args, { cwd, env, timeoutMs = 120_000, logFile = null, input = null, tailBytes = 6000 } = {}) {
+export function run(cmd, args, { cwd, env, timeoutMs = 120_000, logFile = null, input = null, tailBytes = 6000, signal = null } = {}) {
   return new Promise(resolve => {
     const t0 = Date.now();
     let out = '';
@@ -41,8 +41,12 @@ export function run(cmd, args, { cwd, env, timeoutMs = 120_000, logFile = null, 
     if (input !== null) child.stdin.end(input); else child.stdin.end();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; killTree(child.pid); }, timeoutMs);
+    // signal: người gọi huỷ (run_checks chạy lại sau khi một check hỏng); cây tiến trình bị giết như khi hết giờ.
+    const onAbort = () => killTree(child.pid);
+    if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
     const finish = code => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       log?.end();
       resolve({ code, timedOut, ms: Date.now() - t0, tail: redact(out.slice(-tailBytes)).replace(/\x1b\[[0-9;]*m/g, ''), stdout });
     };
