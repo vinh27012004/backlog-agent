@@ -6,7 +6,7 @@ import { app, forgetBuild, readState as appState, stopApp } from './env/app.mjs'
 import { captureEvidence } from './env/browser.mjs';
 import { runChecks } from './env/checks.mjs';
 import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
-import { CompanyTools } from './match/company.mjs';
+import { CompanyTools, companyLimits } from './match/company.mjs';
 import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
@@ -118,7 +118,7 @@ export class Runtime {
     this.writer = null;
     this.journalObj = null;
     this.gm = new GameMaster({ session: this.session, http: this.http, progress: () => this.progress });
-    this.company = new CompanyTools({ session: this.session, http: this.http });
+    this.company = new CompanyTools({ session: this.session, http: this.http, limits: () => companyLimits(this.runtimeConfig().companyLimits) });
     this.poller = null;
     this.preGame = null;          // poll trước START_GAME (startPreGameWatch)
     this.prewarming = new Map();  // key → promise dựng sẵn worktree trước START_GAME

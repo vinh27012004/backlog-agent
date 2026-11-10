@@ -301,7 +301,10 @@ Có trên trang trận từ 26/10; technical guide 0.5.1 và source Player 0.9.3
   nhiều khả năng được chấm.
 - Lỗi: HTTP 401/403 (key sai, bị thu hồi, thiếu scope, đội không thuộc trận), 404 (Match ID lạ); lỗi nghiệp vụ
   nằm trong kết quả tool với `isError: true` và `{"error":{"code","message"}}`.
-- Rate limit **120 request/phút mỗi API key**.
+- Rate limit **120 request/phút mỗi API key**, thêm **burst 20 request/10 giây** (người dùng xác nhận 10/11/2026).
+  Helper giữ cả hai cửa sổ (18/10 s, 110/60 s, `match/company.mjs`) và gửi lại sau HTTP 429 theo Retry-After.
+  BTC trả lời (10/11): sẽ nâng burst lên **60 request/10 giây** và hiện các giới hạn trên trang `/match/<match-id>`.
+  Tới khi helper đọc được trang đó: đổi bằng `"companyLimits": [[10000, 55], [60000, 110]]` trong runtime.json.
 
 Hệ quả cho thiết kế (chưa đưa vào 05):
 - Không khai được `[mcp_servers.company]` kiểu Codex native, vì Codex khởi động trước khi có key: bearer chỉ

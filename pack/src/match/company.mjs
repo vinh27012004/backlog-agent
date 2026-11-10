@@ -1,14 +1,29 @@
 // Proxy tới Company Tools: MCP server riêng của trận (03 §9). Key chỉ nằm trong helper;
-// kết quả là dữ liệu untrusted. Giới hạn 120 request/phút dùng chung cho cả đội.
+// kết quả là dữ liệu untrusted. Server giới hạn mỗi API key 120 request/phút và burst 20 request/10 giây, dùng chung
+// cho cả đội (mọi worker tra qua helper của root). LXRMBRA2: helper chỉ giữ cửa sổ 60 s (100 request), nên một job tra
+// log hàng loạt (8 lời gọi song song) bắn liền tới 100 request đầu phút, vượt burst; lỗi bị job thử lại và bỏ qua.
 import { HelperError, fail, sleep } from '../core/util.mjs';
 
-const WINDOW_MS = 60_000;
-const MAX_PER_WINDOW = 100;      // chừa khoảng trống dưới 120 của server
+// [cửa sổ ms, số request tối đa], chừa khoảng trống dưới giới hạn của server (đồng hồ hai bên lệch nhau). BTC (10/11)
+// sẽ nâng burst lên 60/10 giây và hiện giới hạn trên trang /match/<id>; tới khi helper đọc được trang đó, đổi bằng
+// "companyLimits" trong runtime.json (vd [[10000, 55], [60000, 110]]).
+export const COMPANY_LIMITS = [[10_000, 18], [60_000, 110]];
+// Giá trị hợp lệ: mảng 1–4 cặp [ms 1000–600000, max 1–1000] số nguyên; sai thì dùng mặc định.
+export function companyLimits(value) {
+  const ok = Array.isArray(value) && value.length >= 1 && value.length <= 4 && value.every(p => Array.isArray(p) && p.length === 2
+    && Number.isInteger(p[0]) && p[0] >= 1000 && p[0] <= 600_000 && Number.isInteger(p[1]) && p[1] >= 1 && p[1] <= 1000);
+  return ok ? value.map(([ms, max]) => [ms, max]) : COMPANY_LIMITS;
+}
+// HTTP 429: chờ theo Retry-After (tối đa 10 s, không có thì 5 s) rồi gửi lại, tối đa 2 lần.
+const RETRY_429 = 2;
 
 export class CompanyTools {
-  constructor({ session, http }) {
+  constructor({ session, http, limits = COMPANY_LIMITS }) {
     this.session = session;
     this.http = http;
+    // Mảng, hoặc hàm trả mảng (đọc lại runtime.json mỗi lần, đổi được giữa trận).
+    this.limits = limits;
+    this.stats = { requests: 0, throttledMs: 0, rejected429: 0 };
     this.sessionId = null;
     this.protocolVersion = null;
     this.tools = null;
@@ -20,16 +35,36 @@ export class CompanyTools {
     return `${this.session.gameMasterOrigin}/api/v1/mcp/${encodeURIComponent(this.session.descriptor.matchId)}`;
   }
 
+  // Mọi cửa sổ trượt cùng lúc: chờ tới khi request mới không vượt cửa sổ nào.
   async throttle() {
+    const t0 = Date.now();
+    const limits = typeof this.limits === 'function' ? this.limits() : this.limits;
     for (;;) {
-      const now = Date.now();
-      this.sent = this.sent.filter(t => now - t < WINDOW_MS);
-      if (this.sent.length < MAX_PER_WINDOW) { this.sent.push(now); return; }
-      await sleep(WINDOW_MS - (now - this.sent[0]) + 50);
+      const now = Date.now(), longest = Math.max(...limits.map(([ms]) => ms));
+      this.sent = this.sent.filter(t => now - t < longest);
+      let wait = 0;
+      for (const [ms, max] of limits) {
+        const inWindow = this.sent.filter(t => now - t < ms);
+        if (inWindow.length >= max) wait = Math.max(wait, ms - (now - inWindow[inWindow.length - max]) + 50);
+      }
+      if (!wait) { this.sent.push(now); this.stats.requests++; this.stats.throttledMs += now - t0; return; }
+      await sleep(wait);
     }
   }
 
   async rpc(method, params, { notify = false } = {}) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.rpcOnce(method, params, { notify });
+      } catch (error) {
+        if (error.code !== 'COMPANY_RATE_LIMITED' || attempt >= RETRY_429) throw error;
+        this.stats.rejected429++;
+        await sleep(error.retryMs);
+      }
+    }
+  }
+
+  async rpcOnce(method, params, { notify = false } = {}) {
     const key = this.session.secrets.apiKey;
     if (!key) fail('NOT_CONFIGURED', 'company tools need the team API key (GAME phase)');
     await this.throttle();
@@ -46,6 +81,11 @@ export class CompanyTools {
     if (res.status === 404 && this.sessionId && !notify) {
       this.sessionId = null;          // phiên MCP hết hạn: khởi tạo lại một lần
       throw new HelperError('COMPANY_SESSION_EXPIRED');
+    }
+    if (res.status === 429) {
+      const after = Number(res.headers.get('retry-after'));
+      throw Object.assign(new HelperError('COMPANY_RATE_LIMITED', 'HTTP 429 from Company Tools'),
+        { retryMs: Math.min(10_000, Number.isFinite(after) && after > 0 ? after * 1000 : 5_000) });
     }
     if (notify) return null;
     if (res.status < 200 || res.status >= 300) fail('COMPANY_TOOLS_ERROR', `HTTP ${res.status}`);
