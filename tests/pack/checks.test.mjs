@@ -117,11 +117,17 @@ test('app start waits for a run_checks build of the same item instead of buildin
   const file = join(p.teamWork, 'items', 'BUG-04', 'checks.json');
   mkdirSync(join(p.teamWork, 'items', 'BUG-04'), { recursive: true });
   writeFileSync(file, JSON.stringify({ runId: 'r-9', state: 'running', pid: process.pid, checks: ['typecheck', 'build', 'test'] }));
-  const t0 = Date.now();
-  const res = await app({ teamWorkspace: p.tw, action: 'start', backlogItemKey: 'BUG-04', matchRoot: p.matchRoot, waitSeconds: 1 });
+  const res = await app({ teamWorkspace: p.tw, action: 'start', backlogItemKey: 'BUG-04', matchRoot: p.matchRoot, waitSeconds: 0 });
   assert.equal(res.state, 'waiting_for_checks', JSON.stringify(res)); assert.equal(res.runId, 'r-9');
-  assert.ok(Date.now() - t0 >= 900, 'it waited before giving up');
-  assert.match(res.hint, /call app start again/);
+  assert.match(res.hint, /call app start again with waitSeconds 110/);
+  // QXUD1QAI CR-07: chờ dương nào cũng chờ tới 110 s và đi tiếp ngay khi build của run_checks xong.
+  setTimeout(() => writeFileSync(file, JSON.stringify({ runId: 'r-9', state: 'running', pid: process.pid, checks: ['typecheck', 'build', 'test'],
+    build: { state: 'passed' } })), 1500);
+  const t0 = Date.now();
+  const started = await app({ teamWorkspace: p.tw, action: 'start', backlogItemKey: 'BUG-04', matchRoot: p.matchRoot, waitSeconds: 1 });
+  assert.notEqual(started.state, 'waiting_for_checks', JSON.stringify(started));
+  assert.ok(Date.now() - t0 >= 1400 && Date.now() - t0 < 60_000, `went on once the build was recorded (${Date.now() - t0} ms)`);
+  await app({ teamWorkspace: p.tw, action: 'stop', backlogItemKey: 'BUG-04' });
 });
 
 // UOMNKT6Z: BUG-09 chờ full suite quá 600 s mới được start app. Build xong là ghi ngay, app start không chờ bộ test.

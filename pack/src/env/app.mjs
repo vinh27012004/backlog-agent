@@ -16,7 +16,12 @@ import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const FIRST_PORT = 3100;
 const LAST_PORT = 3199;
-const MAX_WAIT_SECONDS = 50;
+// Một lần gọi chờ tối đa 110 s (< tool_timeout_sec 120) và trả về ngay khi app sẵn sàng; chờ dương nào cũng là chờ tối
+// đa. QXUD1QAI CR-07: app start trả "starting" sau 50 s lúc 16:45:56, app lên lúc 16:46:22, worker không hỏi lại và
+// bàn giao không có ảnh ở 16:47:39 (mất 19 điểm). Hạn chung cho chờ build của run_checks và chờ app trả lời.
+const MAX_WAIT_SECONDS = 110;
+const deadlineOf = waitSeconds => Date.now() + (Number(waitSeconds) > 0 ? MAX_WAIT_SECONDS : 0) * 1000;
+const WAIT_HINT = 'waitSeconds 110 (start that exec with // @exec: {"yield_time_ms": 120000}); it returns as soon as the app answers';
 const PORT_RETRIES = 3;
 const WRAPPER = "const [cmd, ...args] = JSON.parse(process.argv[1]); "
   + "const r = require('child_process').spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true }); process.exit(r.status ?? 1);";
@@ -163,8 +168,7 @@ async function responds(port) {
 // Chờ app trả lời HTTP (bất kỳ mã nào), tiến trình chết, hoặc hết waitSeconds. Chỉ `ready` khi tiến trình của mình còn
 // sống: L7TZXHII trả `ready` vì app lạ trên port trả lời trong lúc app của item đã chết vì EADDRINUSE. App chết vì
 // port bị chiếm (lệnh start chỉ chạy sau khi build xong) thì start lại không build trên port khác, tối đa PORT_RETRIES lần.
-async function settle(teamWorkspace, key, waitSeconds) {
-  const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
+async function settle(teamWorkspace, key, deadline) {
   for (;;) {
     const s = readState(teamWorkspace, key);
     if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
@@ -192,7 +196,7 @@ async function settle(teamWorkspace, key, waitSeconds) {
     if (Date.now() >= deadline) {
       return { state: 'starting', port: s.port, pid: s.pid, log: s.log, seconds: Math.round((Date.now() - Date.parse(s.startedAt)) / 1000),
         ...(s.reusedBuild ? { reusedBuild: s.reusedBuild } : {}),
-        hint: 'Still building or starting: call app status with waitSeconds (up to 50).' };
+        hint: `Still building or starting: call app status with ${WAIT_HINT}. Prepare your capture steps meanwhile.` };
     }
     await sleep(1000);
   }
@@ -211,9 +215,8 @@ async function noteBuild(teamWorkspace, key, s) {
 // run_checks của chính item đang build thư mục này (helper tự chạy nó sau sync ở ready_for_evidence): chờ nó xong để
 // dùng lại bản build, thay vì build chồng lên cùng thư mục .next (08OQBPW8: app tự build 56 s rồi run_checks build
 // lại). Trạng thái đọc từ file vì run_checks có thể chạy trong helper của root.
-async function checksBuilding(where, key, waitSeconds) {
+async function checksBuilding(where, key, deadline) {
   const file = join(dirname(where.logDir), 'items', key, 'checks.json');
-  const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
   for (;;) {
     let rec = null;
     try { rec = JSON.parse(readFileSync(file, 'utf8')); } catch { /* chưa có run_checks */ }
@@ -221,7 +224,7 @@ async function checksBuilding(where, key, waitSeconds) {
     if (rec?.state !== 'running' || !(rec.checks ?? []).includes('build') || rec.build || !alive(rec.pid)) return null;
     if (Date.now() >= deadline) {
       return { state: 'waiting_for_checks', runId: rec.runId,
-        hint: 'run_checks is still building this worktree: call app start again with waitSeconds 50; it starts as soon as that build is done and reuses it, while the test suite may still run.' };
+        hint: `run_checks is still building this worktree: call app start again with ${WAIT_HINT}; it starts as soon as that build is done and reuses it, while the test suite may still run.` };
     }
     await sleep(1000);
   }
@@ -274,7 +277,8 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   if (action === 'stop') return stopApp(teamWorkspace, key);
-  if (action === 'status') return settle(teamWorkspace, key, waitSeconds);
+  const deadline = deadlineOf(waitSeconds);
+  if (action === 'status') return settle(teamWorkspace, key, deadline);
   if (action !== 'start') fail('INVALID_ARGUMENT', 'action');
   if (!['production', 'dev'].includes(mode)) fail('INVALID_ARGUMENT', 'mode');
 
@@ -292,13 +296,13 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
       if (saved.matchRoot === where.matchRoot) commands = saved;
     } catch { /* chưa có lệnh riêng */ }
   }
-  const waiting = await checksBuilding(where, key, waitSeconds);
+  const waiting = await checksBuilding(where, key, deadline);
   if (waiting) return waiting;
   // Start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là tiến trình mới; build lại khi source hay môi
   // trường khác bản build còn trong thư mục.
   stopApp(teamWorkspace, key);
   await launch(teamWorkspace, key, where, mode, build, 0, null, commands);
-  return settle(teamWorkspace, key, waitSeconds);
+  return settle(teamWorkspace, key, deadline);
 }
 
 // Lần thử lại vì port (retries > 0) ghi tiếp vào log để vẫn thấy dòng EADDRINUSE trước đó, không build, và mang theo
