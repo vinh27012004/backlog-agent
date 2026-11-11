@@ -388,6 +388,11 @@ chỗ dính là luật chấm. Chờ "lên main" là quá muộn với item có 
   apply --check` rồi áp vào worktree item chờ; file mới chép thẳng. Item chờ cũng sửa một file đó, patch không áp
   sạch, hay worker nhận đã sửa bản chép trước thì không chép gì. Ghi `sharedFix {from, files, fingerprint, at}` và sự
   kiện `DEPENDENCY_READY`; lần sau chỉ chép lại khi nội dung đổi (gỡ bản cũ rồi áp bản mới).
+- `pullFromDependencies(key)`, ở prepare của item chờ ngay sau khi worktree của nó dựng xong (2026-11-11, sau
+  QDO8W480): item được chờ đã qua `ready_for_evidence` (có `workerPhase`) và chưa lên main thì chép ngay, và khối
+  `<depends_on>` của brief ghi bản sửa đã có sẵn cùng danh sách file. QDO8W480: CR-05 gọi `ready_for_evidence` ở phút
+  19,5, worktree của CR-08 tới phút 19,9 mới có nên lần chép đó bỏ qua CR-08; CR-05 handoff lại ở phút 38,4, CR-08
+  (hạn 15 phút) nộp không có handler của CR-05 và được 0/110.
 - Báo item chờ một lần: candidate từ chối (đang viết), hint của resume hay `ready_for_evidence`, hoặc `nextActions`
   `refresh_candidate {reason: dependency_ready}` khi đã bàn giao (giữ publish, còn ≥ 3 phút). Worker chạy lại replay,
   so với phép tính độc lập; bản chép làm hỏng build/test thì tự gỡ (`git checkout HEAD -- <file>`) và bàn giao không có nó.
