@@ -203,3 +203,45 @@ test('next apps get -p for the port; mode dev and no start script run dev; other
   writeFileSync(join(java, 'pom.xml'), '<project/>');
   assert.match(appCommand(java, 3105).error, /start the app by hand/);
 });
+
+// OMZJW0S0/UOMNKT6Z BUG-09: README của project build web app rồi chạy một server riêng phục vụ nó, với biến môi trường
+// trỏ tới thư mục dữ liệu; lệnh start chung chạy sai app và fixer mất 2,5–3 phút tự khởi động server bằng tay.
+test('custom commands from the README build in their folder, serve with {port}/{data}/{matchRoot} env and are kept for restarts', { timeout: 120_000 }, async t => {
+  const tw = join(tempDir('mtm-app-'), 'BUN');
+  const matchRoot = appFolder(tw, 'BUG-09');
+  const web = join(matchRoot, 'src', 'packages', 'web'), server = join(matchRoot, 'src', 'packages', 'server');
+  mkdirSync(web, { recursive: true }); mkdirSync(server, { recursive: true });
+  writeFileSync(join(web, 'build.cjs'), "require('fs').mkdirSync('build', { recursive: true }); require('fs').writeFileSync('build/index.html', 'web build');\n");
+  writeFileSync(join(server, 'app.cjs'), [
+    "const fs = require('fs'), path = require('path');",
+    "if (!fs.existsSync(process.env.APP_FILES)) { console.error('missing ' + process.env.APP_FILES); process.exit(1); }",
+    "require('http').createServer((req, res) => res.end(fs.readFileSync(path.join(process.env.WEB_ROOT, 'index.html'), 'utf8') + ' on ' + process.env.APP_PORT))",
+    "  .listen(Number(process.env.APP_PORT), '127.0.0.1');", ''].join('\n'));
+  t.after(() => stopApp(tw, 'BUG-09'));
+  const custom = {
+    build: [{ command: 'node build.cjs', cwd: 'src/packages/web' }],
+    start: { command: 'node app.cjs', cwd: 'src/packages/server' },
+    env: { APP_PORT: '{port}', APP_FILES: '{data}/server-files', WEB_ROOT: '{matchRoot}/src/packages/web/build' },
+  };
+  const first = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, custom });
+  assert.equal(first.state, 'ready', JSON.stringify(first));
+  assert.equal(first.mode, 'custom');
+  assert.equal(await body(first.url), `web build on ${first.port}`);
+  assert.ok(existsSync(join(tw, 'matches', 'M1', '.team-work', 'app-data', 'BUG-09', 'server-files')), 'the data folder an env value names is created outside the worktree');
+
+  // Start lại không gửi custom: dùng lệnh đã nhớ; build:false bỏ bước build.
+  writeFileSync(join(web, 'build', 'index.html'), 'kept build');
+  const again = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, build: false });
+  assert.equal(again.state, 'ready', JSON.stringify(again));
+  assert.equal(await body(again.url), `kept build on ${again.port}`);
+
+  // {} quên lệnh riêng: quay về lệnh chung của project (script start).
+  const plain = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, custom: {} });
+  assert.equal(plain.state, 'ready', JSON.stringify(plain));
+  assert.equal(await body(plain.url), 'BUG-09 built');
+
+  await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, custom: { start: { command: 'node x.cjs', cwd: '../..' } } }),
+    e => e.code === 'PATH_NOT_ALLOWED');
+  await assert.rejects(app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, custom: { build: ['node b.cjs'] } }),
+    e => e.code === 'INVALID_ARGUMENT' && /custom\.start\.command/.test(e.message));
+});

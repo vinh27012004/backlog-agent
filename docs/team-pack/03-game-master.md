@@ -139,8 +139,13 @@ E1OOHQ5U/
 - `env-require/` là quy trình chuẩn bị BTC đưa kèm, xong khi `doctor.ps1` in `Environment status: READY`
   (xem [09 §7](09-dong-goi-va-van-hanh.md#7-chuẩn-bị-máy-thi-làm-một-lần-trước-2610)). Phần cần quyền admin
   (cài PostgreSQL 16 cổng **5433**, chạy `db-setup.sql` bằng superuser) phải làm tay **trước** trận;
-  `setup_environment` chỉ làm phần còn lại: `src/.env`, `prepare-source.ps1` (`pnpm install --frozen-lockfile`
-  + `pnpm run build`), `pnpm prisma migrate deploy`, `pnpm db:seed`, `doctor.ps1`.
+  `setup_environment` chỉ làm phần còn lại: `src/.env`, script `prepare-source.ps1` của BTC (install + build),
+  generate/migrate/seed theo profile, rồi `doctor.ps1` và baseline tests. Baseline tests chạy trên checkout chính, nên
+  file đã track mà test ghi lại (vd `*.snap` bị vitest ghi lại bằng LF, practice 85WTXFLQ) được `git checkout --` về bản
+  phát ngay sau đó (`restoredAfterTests`); file đã bẩn trước khi chạy test giữ nguyên. Khi không có script prepare, helper dùng
+  lệnh suy ra nhưng vẫn build trước doctor. Worktree cũng chạy script prepare riêng, không dùng chung `node_modules`.
+  Yarn có `yarnPath` hoặc release đóng gói trong repo được gọi bằng `node <yarnPath>` ở mọi lệnh, gồm app start;
+  Yarn 2+ dùng `install --immutable`, Yarn 1 giữ `--frozen-lockfile`. Lệnh không tồn tại phải trả exit khác 0.
 - Test làm rỗng test DB trước mỗi case: mỗi worktree chạy test song song phải có `TEST_DATABASE_URL` riêng
   (chỉ đổi tên database, vd `.../freelanceos_test_task02`). Gate đặt biến này theo lane.
 - "Bẫy" đã thấy: Prisma in thông báo nâng lên bản major pre-release, không được làm theo; `package.json`
@@ -296,7 +301,10 @@ Có trên trang trận từ 26/10; technical guide 0.5.1 và source Player 0.9.3
   nhiều khả năng được chấm.
 - Lỗi: HTTP 401/403 (key sai, bị thu hồi, thiếu scope, đội không thuộc trận), 404 (Match ID lạ); lỗi nghiệp vụ
   nằm trong kết quả tool với `isError: true` và `{"error":{"code","message"}}`.
-- Rate limit **120 request/phút mỗi API key**.
+- Rate limit **120 request/phút mỗi API key**, thêm **burst 20 request/10 giây** (người dùng xác nhận 10/11/2026).
+  Helper giữ cả hai cửa sổ (18/10 s, 110/60 s, `match/company.mjs`) và gửi lại sau HTTP 429 theo Retry-After.
+  BTC trả lời (10/11): sẽ nâng burst lên **60 request/10 giây** và hiện các giới hạn trên trang `/match/<match-id>`.
+  Tới khi helper đọc được trang đó: đổi bằng `"companyLimits": [[10000, 55], [60000, 110]]` trong runtime.json.
 
 Hệ quả cho thiết kế (chưa đưa vào 05):
 - Không khai được `[mcp_servers.company]` kiểu Codex native, vì Codex khởi động trước khi có key: bearer chỉ

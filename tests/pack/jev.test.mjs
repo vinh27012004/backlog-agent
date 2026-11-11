@@ -66,26 +66,23 @@ test('PI severity never drops below critical', async () => {
   assert.equal(bug.severity.source, 'jev');
 });
 
-test('PI, CR and hard items always get the strong tier; Jev skips review only for easy items', async () => {
-  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "cheap" ở 0.9, reviewer p_yes 0.1
+test('PI, CR, BUG and hard items always get the strong tier', async () => {
+  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));   // mock: model "cheap" ở 0.9
   const cr = await d.route('CR-01', ITEM, { difficulty: 'medium' });
   assert.equal(cr.model.value, 'strong');
   assert.equal(cr.model.source, 'rule');
   assert.equal(cr.model.jev, 'cheap');
-  assert.equal(cr.reviewer.value, true);
-  assert.match(cr.reviewer.reason, /only for easy items/);
   const hard = await d.route('BUG-02', ITEM, { difficulty: 'hard' });
   assert.equal(hard.model.value, 'strong');
-  assert.equal(hard.reviewer.value, true);
   const easy = await d.route('TASK-01', ITEM, { difficulty: 'easy' });
   assert.equal(easy.model.value, 'cheap');
   assert.equal(easy.model.source, 'jev');
-  // Jev chọn cheap cho item medium: luật nâng lên small.
-  const medium = await d.route('BUG-03', ITEM, { difficulty: 'medium' });
+  // Jev chọn cheap cho item medium: luật nâng lên small. BUG giờ luôn strong (decisions.mjs needsStrong), nên dùng TASK.
+  const medium = await d.route('TASK-03', ITEM, { difficulty: 'medium' });
   assert.deepEqual([medium.model.value, medium.model.source, medium.model.jev], ['small', 'rule', 'cheap']);
   assert.match(medium.model.reason, /cheap tier is only for easy items/);
-  assert.equal(easy.reviewer.value, false);
-  assert.equal(easy.reviewer.source, 'jev');
+  const bug = await d.route('BUG-03', ITEM, { difficulty: 'medium' });
+  assert.deepEqual([bug.model.value, bug.model.source], ['strong', 'rule']);
 });
 
 test('a tricky answer-only item gets the strong tier from the first attempt; a plain one stays small', async () => {
@@ -100,15 +97,9 @@ test('a tricky answer-only item gets the strong tier from the first attempt; a p
   assert.equal(codeChange.model.value, 'small');
 });
 
-test('a PI always gets a reviewer (in parallel with its gate) and errors fall back to code rules', async () => {
+test('Jev errors fall back to code rules: a PI gets the strong tier', async () => {
   const d = new Decider(new JevClient(CONFIG));          // không key, không transport → JEV_ERROR → luật code
   const r = await d.route('PI-01', ITEM, { difficulty: 'medium' }, { minutesLeft: 20 });
-  assert.equal(r.reviewer.value, true);
-  assert.match(r.reviewer.reason, /parallel with the gate/);
-  const vetoed = await new Decider(new JevClient(CONFIG, { transport: mockTransport }))      // Jev nói "không" (0.1)
-    .route('PI-01', ITEM, { difficulty: 'easy' }, { minutesLeft: 20 });
-  assert.equal(vetoed.reviewer.jev, 0.1);
-  assert.equal(vetoed.reviewer.value, true, 'Jev cannot drop the reviewer of a PI');
   assert.equal(r.model.value, 'strong');
   assert.equal(r.model.source, 'rule');
   assert.match(r.model.reason, /API key missing/);
@@ -122,11 +113,11 @@ test('intake asks triage and route in one request and logs the rule answer next 
       { logFile: join(dir, 'decisions.ndjson') });
     const { triage, route } = await d.intake('CR-01', ITEM, { pendingItems: 2, minutesLeft: 15 });
     assert.equal(bodies.length, 1);
-    assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['difficulty', 'injection', 'model', 'reviewer', 'severity']);
+    assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['difficulty', 'injection', 'model', 'severity']);
     assert.equal(triage.difficulty.value, 'easy');
     assert.equal(route.model.value, 'strong');
     const lines = readFileSync(join(dir, 'decisions.ndjson'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
-    assert.equal(lines.length, 5);
+    assert.equal(lines.length, 4);
     const difficulty = lines.find(l => l.name === 'difficulty');
     assert.deepEqual([difficulty.source, difficulty.value, difficulty.rule, difficulty.jev], ['jev', 'easy', 'medium', 'easy']);
     const model = lines.find(l => l.name === 'model');
@@ -167,22 +158,6 @@ test('root_cause_confirmed needs the code conditions; Jev can only veto', async 
   const confirmed = await d.rootCauseConfirmed('PI-01', { ...report, hypotheses: [
     { cause: 'rate divided twice', check: 'repro test', verdict: 'confirmed', evidence: 'src/rates.ts:42' }] });
   assert.equal(confirmed.value, true);
-});
-
-test('next_action never offers submit when the gate failed', async () => {
-  const d = new Decider(new JevClient(CONFIG, { transport: mockTransport }));
-  const failed = await d.nextAction('BUG-02', ITEM, { gatePassed: false, attempts: 1, maxAttempts: 3, minutesLeft: 12 });
-  assert.deepEqual(failed.allowed, ['retry', 'drop']);
-  assert.ok(['retry', 'drop'].includes(failed.value));
-  const late = await d.nextAction('BUG-02', ITEM, { gatePassed: false, attempts: 3, maxAttempts: 3, minutesLeft: 3 });
-  assert.equal(late.value, 'drop');
-  assert.equal(late.source, 'rule');
-  const ok = await d.nextAction('BUG-02', ITEM, { gatePassed: true, attempts: 1, maxAttempts: 3, minutesLeft: 12 });
-  assert.equal(ok.value, 'submit');
-  // Cùng chữ ký lỗi lần thứ 3: hết retry dù còn lượt và còn giờ.
-  const stuck = await d.nextAction('BUG-02', ITEM, { gatePassed: false, attempts: 2, maxAttempts: 4, minutesLeft: 12, sameFailureCount: 3 });
-  assert.equal(stuck.value, 'drop');
-  assert.equal(stuck.source, 'rule');
 });
 
 test('after repeated errors Jev pauses and decisions fall back at once', async () => {

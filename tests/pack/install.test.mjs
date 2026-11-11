@@ -1,22 +1,30 @@
 // Installer: kết quả phải qua đúng bước kiểm của Player (verifyTeamRuntime) và cài lại idempotent.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { REPO, hasPlayer, install, McpClient, player, tempDir } from './support.mjs';
+import { REPO, hasPlayer, install, localRuntime, McpClient, player, tempDir } from './support.mjs';
+import { Runtime } from '../../pack/src/tools.mjs';
+
+test('compactStartFrame defaults on and disabling it installs the verbatim START instruction', () => {
+  const tw = join(tempDir('mtm-compact-'), 'BUN');
+  install(tw);
+  const skill = join(tw, '.agents', 'skills', 'team-orchestrator', 'SKILL.md');
+  assert.match(readFileSync(skill, 'utf8'), /For START_GAME_V4/);
+  localRuntime(tw, { compactStartFrame: false }); install(tw);
+  assert.match(readFileSync(skill, 'utf8'), /Configure the Player frame verbatim/);
+  assert.doesNotMatch(readFileSync(skill, 'utf8'), /For START_GAME_V4/);
+  assert.match(new Runtime({ teamWorkspace: tw }).definitions().find(t => t.name === 'configure_session').description, /Configure the Player frame verbatim/);
+});
 
 // Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
-test('every subagent is told which skills and references to read', () => {
-  const prompt = role => readFileSync(join(REPO, 'pack', 'agents', `team-${role}.toml`), 'utf8');
-  const fixer = prompt('fixer');
-  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/retry-playbook.md', 'backlog-references/evidence-playbook.md']) {
+test('the fixer is told which skills and references to read; it is the only subagent profile', () => {
+  const fixer = readFileSync(join(REPO, 'pack', 'agents', 'team-fixer.toml'), 'utf8');
+  for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/evidence-playbook.md', 'backlog-references/domain-checks.md']) {
     assert.ok(fixer.includes(f), `fixer prompt names ${f}`);
   }
-  assert.match(prompt('reviewer'), /read the skill named in the brief/);
-  assert.match(prompt('pi-hypothesis'), /backlog-references\/pi-triage\.md/);
-  const playbook = readFileSync(join(REPO, 'pack', 'skills', 'backlog-references', 'retry-playbook.md'), 'utf8');
-  assert.doesNotMatch(playbook, /previous change is gone/, 'the pack keeps the worktree between attempts');
+  assert.deepEqual(readdirSync(join(REPO, 'pack', 'agents')).sort(), ['team-fixer.toml', 'team-orchestrator.toml']);
 });
 
 test('installed pack passes Player verifyTeamRuntime', { skip: !hasPlayer }, async () => {
@@ -44,7 +52,7 @@ test('reinstall is idempotent and keeps foreign AGENTS.md content', () => {
   assert.match(after[3], /player block/);
   assert.equal((after[3].match(/TEAM-PACK:BEGIN/g) ?? []).length, 1);
   // FMC0ZXFC: auto-review chặn submit vì không thấy ai cho phép luật cơ hội cuối.
-  assert.match(after[3], /Last-chance rule \(authorized by the team\)[\s\S]*`submit_work` with `lastChance`/);
+  assert.match(after[3], /Last-chance rule \(authorized by the team\)[\s\S]*`submit_work` \(or `publish_item`\) with `lastChance`/);
   assert.match(after[0], /runtime-server\.mjs"\]/);
 });
 
@@ -59,13 +67,13 @@ test('installed helper answers initialize and tools/list', async () => {
     const list = await client.request('tools/list');
     const names = list.result.tools.map(t => t.name);
     for (const n of ['configure_session', 'prepare_checkout', 'setup_environment', 'login_match', 'report_ready', 'refresh_match',
-      'start_work', 'run_gate', 'record_verification', 'commit_and_push', 'submit_work', 'wait_for_update', 'company_call']) {
+      'start_work', 'prepare_item', 'publish_item', 'commit_and_push', 'submit_work', 'wait_for_update', 'company_call']) {
       assert.ok(names.includes(n), n);
     }
     for (const t of list.result.tools) assert.equal(t.inputSchema.additionalProperties, false, t.name);
     // readOnlyHint = không qua auto_review: đúng các tool chỉ đọc, không thêm tool ghi nào.
     const readOnly = list.result.tools.filter(t => t.annotations.readOnlyHint).map(t => t.name).sort();
-    assert.deepEqual(readOnly, ['app_data', 'candidate_preflight', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'next_actions', 'read_item', 'result_handoff', 'wait_for_update', 'worker_checkpoint']);
+    assert.deepEqual(readOnly, ['app_data', 'company_lookup', 'company_tools', 'decide', 'detect_profile', 'job_status', 'match_state', 'next_actions', 'read_item', 'wait_for_update', 'worker_checkpoint']);
     const bad = await client.request('nope/method');
     assert.equal(bad.error.code, -32601);
     const notConfigured = await client.request('tools/call', { name: 'match_state', arguments: {} });
@@ -82,4 +90,23 @@ test('installed helper answers initialize and tools/list', async () => {
   assert.deepEqual(failed.filter(id => !['codex trust', 'codex features', 'machine config', 'codegraph'].includes(id)), []);
   assert.ok(report.checks.some(c => c.id === 'codegraph' && /not installed/.test(c.detail)));
   assert.ok(report.checks.some(c => c.id === 'codex features'));
+});
+
+// 03/11: capture_evidence chạy trên playwright-core cài cạnh runtime/. Đã có đúng phiên bản thì không gọi npm;
+// --no-playwright (chỉ cho test) để lại cảnh báo. Cài lỗi thì installer dừng (không thử được mà không có mạng).
+test('installer keeps playwright-core of the pinned version next to runtime/', () => {
+  const tw = join(tempDir('mtm-pw-'), 'BUN');
+  const skipped = install(tw);
+  assert.equal(skipped.playwright, null);
+  assert.ok(skipped.warnings.some(w => w.startsWith('PLAYWRIGHT_NOT_INSTALLED')));
+  const cfg = JSON.parse(readFileSync(join(REPO, 'pack', 'config', 'playwright.json'), 'utf8'));
+  const pkgDir = join(tw, 'team-sdlc-pack', 'playwright', 'node_modules', cfg.package);
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: cfg.package, version: cfg.version }));
+  const res = spawnSync(process.execPath, [join(REPO, 'pack', 'scripts', 'install.mjs'), '--team-workspace', tw, '--no-codegraph'],
+    { encoding: 'utf8', env: { ...process.env, npm_config_offline: 'true' } });
+  const out = JSON.parse(res.stdout.trim().split('\n').pop());
+  assert.equal(out.status, 'READY', res.stdout);
+  assert.equal(out.playwright, cfg.version);
+  assert.ok(!out.warnings.some(w => w.startsWith('PLAYWRIGHT')));
 });

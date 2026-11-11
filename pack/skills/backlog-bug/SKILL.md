@@ -1,59 +1,81 @@
 ---
 name: fix-bug
-description: Fix a BUG item in any stack. Reproduce with a failing test first, find the root cause, make the minimal fix, pass the MVS scenario.
+description: Fix a BUG item in any stack with maximum accuracy (10/10 Grader criteria) and ultra-fast resolution. Locate via inverted git blame, write non-tautological reproduction tests, fix root causes, and verify the 3 boundaries.
 ---
 
-# BUG
+# BUG Resolution Playbook
 
-A BUG reports wrong behaviour, usually with a log or stack trace. The organizers verify it with an
-MVS scenario that must pass, and they check that nothing else broke.
+In MTM, BUG tasks are scored on **Pass / Accuracy (J1–J10 criteria)** and **Speed**.
+Every minute saved frees up slots and increases team ranking. High accuracy requires zero guesswork and zero regressions.
 
-## 1. Read the evidence (do not open many files yet)
-- **Error signature** = exception/error type + the first stack frame inside project code
-  (skip framework, library and runtime frames). This is what "reproduced" means.
-- If there is no stack trace: the signature is the wrong value or behaviour
-  ("expected X, got Y" for input Z).
-- Classify the bug with `.agents/skills/backlog-references/bug-patterns.md`; it tells you where to look first.
+---
 
-## 2. Locate
-- Start from the error signature and the entry point. Use codegraph (`codegraph_callers`, `codegraph_callees`, `codegraph_impact`) to walk from the entry
-  point (endpoint / job / handler) to the failing frame.
-- Read only the methods on that path. Check recent commits on those files:
-  `git log -n 10 --oneline -- <files>`; a recent change is often the cause.
+## 1. Ultra-Fast Defect Localization (< 2 Minutes)
+Do not browse random files or read broad documentation. Follow the **Inverted 3-Step Localization**:
+1. **Failing Stack Frame / Symptom**:
+   - From error text / stack trace: pick the **top frame inside project code** (skip framework, runtime, and third-party libraries).
+   - If no stack trace: locate the handler/function that produces the incorrect field ("expected X, got Y").
+2. **Git Differential Focus (Suspect #1)**:
+   - In MTM competitions, 90% of bugs are introduced by a recent commit or refactoring!
+   - Run: `git log -p -n 5 -- <file>` on the failing file.
+   - Check what was recently added, renamed, or modified. A recent diff matching the symptom reveals the root cause in under 60 seconds.
+3. **Trace to the Source (Rule of Root Cause - J2)**:
+   - **Fix where the wrong value is PRODUCED, never where it is noticed.**
+   - *Forbidden*: Catching and ignoring errors, adding null checks that hide missing data, special-casing the exact input from the prompt, or hacking the caller instead of fixing the underlying function.
 
-## 3. Reproduce first (no production change before this)
-- Write the smallest test that fails **for the reported reason**, at the lowest layer that shows it:
-  a unit test of the faulty function if possible, an API/integration test only if the bug is in
-  wiring, mapping, serialization, validation or persistence.
-- Put it next to the existing tests of that class/module, follow their style and fixtures.
-  Isolate test data (unique IDs, teardown or rollback) so shared state does not break other tests.
-- Run only that test (see `test_one` in the project profile). Confirm it fails with the signature.
-  If it passes on the unfixed code, it checks the wrong behaviour: fix the test before you touch production
-  code (the gate rejects a test that passes on the unfixed code).
-- Cannot reproduce in ~1/3 of your time? Stop before changing production code. Return `partial`, record
-  what you tried and the remaining hypotheses in `verification`, and ask root for the next investigation.
-  Missing test commands or an unavailable probe mean unverified reproduction, never a passing proof.
+---
 
-## 4. Root cause, then fix
-- Write the root cause in one or two sentences: which code, which condition, why wrong.
-- Fix **the cause**. Not acceptable: catching and ignoring the error, a null check that hides missing
-  data, special-casing the exact input from the item, changing the test's expectation.
-- Smallest change that is correct for all inputs, not only the reported one. Think about the
-  neighbours of the failing input (null/empty, zero, negative, boundary, other locales/time zones).
-- Same bug pattern elsewhere in the same function/class? Fix it there too and say so; do not go hunting
-  across the codebase. Clean up any temporary debug code (`console.log`, `print`, `debugger`, stubs).
+## 2. Non-Tautological Reproduction Test (J5 Protection)
+Before modifying any production code, write a minimal reproduction test:
+- **Anti-Tautology Rule**:
+  - The test **MUST call existing project functions, endpoints, or classes** with the failing input.
+  - **CRITICAL**: Never create a new helper function and then write a test that only tests your new helper! (Grader rejects self-referential tests as failing J5).
+- **Placement & Isolation**:
+  - Place next to existing test files of that module, following the project's test syntax and runner conventions.
+  - Isolate test data (unique IDs, teardown/rollback) to avoid breaking baseline tests.
+- **Fail-Before Verification**:
+  - Run ONLY this test using `test_one` from the project profile (takes 2–4 seconds).
+  - Confirm it **FAILS** with the exact reported error signature.
+  - If it passes on unfixed code, the test does not reproduce the bug—fix the test before touching production code.
 
-## 5. Verify
-1. Reproduction test: failed before, passes now.
-2. Existing tests of the touched classes/modules.
-3. MVS: run each MVS scenario from the brief and make it pass. Its log is the evidence.
-4. Build of the touched module(s).
+---
 
-## Report
-- `root_cause`: the one-to-two sentence explanation.
-- `summary`: what changed and why, in terms a reviewer can check in the diff.
-- `tests_added`: the reproduction test(s).
+## 3. Minimal Root-Cause Fix & The 3-Boundary Check (J3 & J4 Protection)
+- **Minimal Diff (J3)**:
+  - Keep changes surgical (typically 1–10 lines).
+  - Do not refactor unrelated methods, reformat untouched code, or leave debug statements (`console.log`, `print`, `debugger`, stubs).
+- **The 3-Boundary Safety Check (J4)**:
+  When fixing the condition, always verify three cases to prevent regressions:
+  1. *The Failing Case*: The reported input now produces the correct result.
+  2. *The Baseline / Existing Callers*: Normal existing inputs continue to work identically (e.g. default currency, standard user role).
+  3. *Boundary / Edge Values*:
+     - Arithmetic / numeric: `0`, negative numbers, boundary thresholds (`<` vs `<=`), rounding modes.
+     - Collections / strings: `null`, `undefined`, empty string `""`, empty array `[]`.
+     - Time / dates: UTC midnight `00:00:00`, month/year rollover, timezone offsets.
 
-## Done when
-Reproduction test failed before and passes after · related tests pass · MVS passes (or is reported
-as not runnable) · diff contains only the fix and its tests, with no debug leftovers.
+---
+
+## 4. Focused Verification Loop (Save 5–10 Minutes)
+- **During Coding**:
+  - Do NOT run the entire repo test suite repeatedly!
+  - Loop exclusively with `test_one` on your reproduction test until it **PASSES**.
+- **Post-Fix Verification**:
+  1. Reproduction test passes.
+  2. Touched module tests pass.
+  3. Run MVS scenario(s) and confirm output matches requirements.
+  4. Build of touched modules succeeds.
+- **When the brief has `<needed_by>`** (another item, often with a deadline, is right only with your fix in its
+  source): fix the product code first and call worker_checkpoint ready_for_evidence as soon as the reproduction and
+  the touched module tests are green, before any screenshot or full-suite work. The helper copies your product changes
+  (not tests, not test configuration, not answers/) into the waiting worktrees at that moment. After it, change tests
+  and evidence freely but keep the product code stable: a later product change reaches them only when it is copied
+  again at your candidate, which can be too late. LXRMBRA2 BUG-11: the fix was green at minute 7.5 but reached main at
+  minute 25, after CR-07 (20-minute deadline) had handed off without it and lost 41 points.
+
+---
+
+## 5. Artifact & Evidence Checklist (J1 & J9 Protection)
+- Check `<required_evidence>` and the item description:
+  - Every requested artifact (PNG screenshots, `.txt`, `.csv`, `.log`) must be present in `answers/<ID>/evidence/` and declared in `evidenceFiles`.
+  - Non-UI artifacts (`.txt`, `.json`, `.csv`, `.log`) must be generated via scripts or command piping, never via browser.
+- Checkpoint candidate immediately after verification.

@@ -1,11 +1,10 @@
 # 05 · Đặc tả MCP helper `team_runtime`
 
-**Cập nhật 31/10:** [13](13-workflow-toi-uu.md) mô tả prepare_item, candidate_preflight, result_handoff,
-worker_checkpoint, next_actions, publish_item, cache và download. Luồng này thay ví dụ cũ mặc định spawn verifier
-hoặc worker mới cho mọi retry; các API cũ bên dưới giữ để tương thích.
+**Cập nhật 03/11:** [13](13-workflow-toi-uu.md) mô tả luồng duy nhất còn lại: prepare_item, worker_checkpoint,
+next_actions, publish_item. Gate, reviewer, solver và các tool của chúng đã bỏ (§5, ghi chú 03/11).
 
 Helper là phần **code** quan trọng nhất của pack: giữ credential, nói chuyện với Game Master, ghi progress
-log, điều khiển git, chạy gate. Root gọi helper qua MCP; LLM không tự gọi HTTP, không tự viết JSON log,
+log, điều khiển git. Root gọi helper qua MCP; LLM không tự gọi HTTP, không tự viết JSON log,
 không tự `git push`.
 
 ## 1. Vai trò và ranh giới
@@ -84,7 +83,7 @@ không tự `git push`.
       "worktree": ".team-work/wt/BUG-01", "publishedRevision": "<sha>",
       "submitIntent": {"n": 0, "clientSubmissionId": "<uuid>", "gitRevision": "<sha>", "body": "<chuỗi JSON đã gửi>"},
       "receipt": {"id": "<submission.id>", "receivedAt": "..."},
-      "jobs": [{"id": "job-4-run_gate", "kind": "run_gate", "state": "done", "startedAt": "...", "ms": 155000}],
+      "jobs": [{"id": "job-4-publish_item", "kind": "publish_item", "state": "done", "startedAt": "...", "ms": 55000}],
       "endedAt": "...", "outcome": "SUBMITTED"
     }
   }
@@ -101,11 +100,20 @@ không tự `git push`.
 
 ## 5. Danh mục tool
 
+> **03/11 (bỏ verified mode):** pack chỉ còn một luồng: một `team_fixer` code, chạy test, chụp evidence rồi
+> `publish_item {fixResultFile}` ghi candidate, integrate, push và nộp nguyên kết quả đó. Đã bỏ `run_gate`,
+> `record_verification`, `candidate_preflight`, `result_handoff`, pre-gate, gate main, hard gate (`GATE_REQUIRED` /
+> `GATE_STALE`), `run_gate` qua proxy, điểm `next_action` của `decide`, cùng `pack/src/gate/{gate,probe,logs}.mjs` và
+> ba agent `team_reviewer`, `team_pi_hypothesis`, `team_verifier`. Kiểm answer, evidence và yêu cầu của đề
+> (`pack/src/match/answers.mjs`) chỉ ra cảnh báo (`warnings` của `publish_item`, `answerWarnings` của
+> `commit_and_push`). Regression và fail-before giờ là việc của fixer (`pack/agents/team-fixer.toml`, bước 3). Các
+> ghi chú theo ngày bên dưới giữ lại làm lịch sử; mô tả đầy đủ của phần đã bỏ nằm trong git trước ngày này.
+>
 > **Bản đã dựng (pack 0.1.0, 26/10):** `configure_session`, `prepare_checkout`, `setup_environment`, `login_match`,
 > `report_ready`, `refresh_match`, `match_state`, `read_item` (mới), `start_work`, `worktree`, `run_gate` (thêm
 > `tests-guard`, kiểm `submit.json` theo `submit.schema.json`, `baselineFailures`, `allowTestChange`), `record_verification`,
 > `commit_and_push`, `submit_work`, `report_progress`, `wait_for_update`, `job_status`, `detect_profile` (A),
-> `capture_evidence` (A, mới: Edge headless qua CDP), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9;
+> `capture_evidence` (A, mới: Edge headless qua CDP; từ 03/11 qua Playwright, §5.25), `company_tools`/`company_call` (mới: proxy Company Tools, 03 §9;
 > từ 29/10 `company_call {backlogItemKey}` tự lưu kết quả vào `.team-work/items/<ID>/company/<nn>-<tool>.json` và trả
 > `savedTo`, vì ở TOKXKPBV chuẩn xuất CSV của CR-01 chỉ nằm trong brief, reviewer và người chấm không đối chiếu được).
 > `decide` (Jev, mới: `pack/src/decide/jev.mjs`, `decisions.mjs`). **Chưa dựng:** `condense_log` (chữ ký lỗi và rút log đã có
@@ -116,7 +124,7 @@ không tự `git push`.
 > `submit.json` (§5.11), gate trả `signature` + `repeat`, lần 3 thì `next_action` thôi đề xuất retry.
 > **Cùng ngày, mục 5–7, 9, 10:** check `test-quality` (`weak_test`), kết quả test máy đọc theo id, chạy lại test
 > flaky, `tests-kept`, `fail-before` trên worktree probe (§5.10).
-> **Mục 13:** `capture_evidence` có bước `route` / `unroute` (CDP `Fetch`): trình duyệt tự trả lời request khớp `url`
+> **Mục 13:** `capture_evidence` có bước `route` / `unroute` (CDP `Fetch`, từ 03/11 `context.route` của Playwright): trình duyệt tự trả lời request khớp `url`
 > (chuỗi con hoặc mẫu `*`, lọc `method`) bằng `status` + `body`, `abort` (`TimedOut`, `Failed`, `InternetDisconnected`…)
 > hoặc làm chậm `delayMs` rồi cho đi tiếp; `times` giới hạn số lần, luật mới nhất thắng. Dùng cho MVS kiểu "khi API lỗi
 > / quá hạn thì hiện…" mà không phải sửa code (hard gate sẽ chặn) hay tắt server/database dùng chung. Kết quả có
@@ -144,8 +152,8 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.7 | `match_state` | R | GAME | Bảng trạng thái gọn + thứ tự gợi ý (không gọi mạng) |
 | 5.8 | `start_work` | R | GAME | Start Work + lưu vật liệu + event |
 | 5.9 | `worktree` | R | GAME | `create` / `integrate` / `sync` / `remove` / `status` |
-| 5.10 | `run_gate` | R (job) | GAME | Gate trên worktree hoặc checkout chính |
-| 5.11 | `record_verification` | R | GAME | Tạo `BACKLOG_TESTS` từ kết quả checker + gate |
+| 5.10 | ~~`run_gate`~~ | | | Đã bỏ 03/11 |
+| 5.11 | ~~`record_verification`~~ | | | Đã bỏ 03/11; `publish_item` tự ghi `BACKLOG_TESTS` |
 | 5.12 | `commit_and_push` | R | GAME | Kiểm answer + path, commit, push, xác minh SHA |
 | 5.13 | `submit_work` | R | GAME | Nộp idempotent, ghi biên nhận |
 | 5.14 | `report_progress` | R | mọi | Event do root quyết định (blocker, BLOCKED/FAILED, RESTARTED, ENDED) |
@@ -154,23 +162,33 @@ trong ~45 s; kết quả tới qua `wait_for_update` (sự kiện `JOB_DONE`) ho
 | 5.17 | `detect_profile` | A | mọi | Nhận diện stack và lệnh build/test cho một path |
 | 5.20 | `app_data` | A | mọi | Khoá database dùng chung của app khi seed / tạo dữ liệu kịch bản (mục 8) |
 | 5.21 | (codegraph) | A | mọi | Không phải tool của helper: MCP server thứ hai, helper chỉ dựng index |
-| 5.22 | (proxy) | subagent | GAME | Không phải tool mới: helper của subagent chuyển `read_item`, `run_gate {fixResultFile}`, `job_status`, `worktree status` sang helper của root |
-| 5.18 | `condense_log` | A | mọi | Rút gọn log lỗi, trả chữ ký |
+| 5.22 | (proxy) | subagent | GAME | Không phải tool mới: helper của subagent chuyển `read_item`, `job_status`, `worktree status`, `worker_checkpoint` sang helper của root |
+| 5.18 | ~~`condense_log`~~ | | | Chưa từng dựng; bỏ cùng gate 03/11 |
 | 5.19 | `decide` | R | GAME | Quyết định nhanh bằng Jev, có luật dự phòng (D9) |
+| 5.27 | `run_checks` | A | mọi | Typecheck, build, cả bộ test của worktree, song song, log vào evidence (05/11) |
 
 ### 5.1 `configure_session`
 
-- **Input**: `{frame: string}`, là nguyên văn từ dòng marker (vd `START_GAME_V4`) tới hết các khối
-  policy. Root chép **y nguyên**, không sửa.
+- **Input**: `{frame: string}`. PREPARE_GAME_V2 và các frame RESUME chép nguyên văn từ marker tới hết policy.
+  Với START_GAME_V4, mặc định chỉ chép marker và descriptor gồm `schemaVersion`, `type`, `requestId`,
+  `playerSessionId`, `teamId`, `matchId`, `apiKeySecret`, `apiKeyLength`, `apiKeySha256`, `apiKeyScopes`,
+  `gameMasterApiUrl`, `allowedApiOrigins`; giữ nguyên từng giá trị, bỏ khối policy. Frame đầy đủ vẫn được nhận.
+  Helper kế thừa path, URL trang trận, repository và model policy từ descriptor PREPARE đã kiểm trong RAM.
+  Khi thiếu submission policy, helper dựng đủ trường MTM_SUBMISSION_POLICY_V1 theo Player 0.9.44 từ
+  checkoutRoot/matchRoot (path dùng `/`, template, answer/evidence chuẩn, thư mục cấm và instruction).
+  `compactStartFrame: true` trong `pack/config/runtime.json`; đổi thành `false` rồi cài lại để skill trở về
+  “Configure the Player frame verbatim”. Có thể ghi đè bằng `team-sdlc-pack/local/runtime.json`.
 - **Kiểm**: marker hợp lệ và khớp `descriptor.type`; `schemaVersion`; id; path tuyệt đối, nằm trong
   TeamWorkspace và đúng công thức (`checkoutRoot = TW/matches/<matchId>`,
   `matchRoot = checkoutRoot/<folder>`, `progressLogFile = TW/team-sdlc-pack/logs/<matchId>.progress.ndjson`);
   `repository.folder == matchId`; origin `https` (loopback chỉ khi `MTM_TEAM_TEST_MODE=1`); bearer có
   độ dài UTF-8 và SHA-256 khớp `apiKeyLength`/`apiKeySha256`; `apiKeyScopes` có `submission:create` (hoặc `submissions:create` như guide ghi, T13);
-  `playerSessionId` không đổi so với lần configure trước trong cùng tiến trình.
+  `playerSessionId`, `matchId`, `teamId` không đổi so với lần configure trước trong cùng tiến trình.
 - `START_GAME` cần `username`/`password` từ lượt PREPARE. Thiếu (helper đã bị khởi động lại) thì trả
   `NEEDS_PREPARATION_FRAME`, và root gọi lại `configure_session` với frame PREPARE còn trong lịch sử
   thread, rồi gửi lại frame START.
+- RESUME_GAME_V1 đầy đủ vẫn tự khôi phục với username/password như trước; chỉ rút gọn khi helper còn PREPARE
+  trong RAM. Secret vẫn qua `registerSecret`, không xuất trong kết quả, journal hay log.
 - **Output** (không secret): `{phase, matchId, teamId, paths, restartAttempt, models: {orchestratorModel, allowedModels},
   log: {bytes, restartCount, backlogs: {ID: status}, openBlockers: [...]}, journal: {...tóm tắt}, next: [...]}`.
 - **Lỗi**: `INVALID_FRAME`, `PATH_OUTSIDE_WORKSPACE`, `API_KEY_INTEGRITY_MISMATCH`, `SESSION_MISMATCH`.
@@ -252,7 +270,7 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   phút mỗi lượt và `checkpointBy` = phút 6 (`PI_CHECKPOINT_MIN`): chưa xác nhận được giả thuyết nào thì fixer trả
   `partial` kèm `hypotheses` để root cho kiểm song song. `match_state` lặp lại `returnBy` cho mỗi item chưa đóng để lần thử
   lại lấy hạn mới; trận PAUSED thì hạn thật lùi lại, root đọc lại sau khi trận chạy tiếp.
-  `triage.models` = `{fixer: [lần 1, lần 2, …], reviewer, piHypothesis}`, mỗi phần tử
+  `triage.models` = `{fixer: [lần 1, lần 2, …], evidence}`, mỗi phần tử
   `{model, reasoning_effort, tier}` hoặc `null` ([06 §9](06-agents-va-skills.md#9-chọn-model)).
 - PI: trước triage, `git fetch` nhánh được giao (helper vốn chỉ fetch khi push bị từ chối) rồi trả `remote` =
   `{fetched, newCommits: [{sha, author, date, subject, files}], merged, recentChanges, note?}`. Có commit mới, main không
@@ -260,27 +278,27 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   `note` nói lý do (fixer đọc bằng `git show`). Root đưa `remote` vào brief làm `<recent_changes>` ("cái gì vừa thay đổi"
   là nghi phạm số một, SRE / PagerDuty).
 - **Test fail ở baseline** (Practice #6 HIET12OA: một test cũ trái ý định của app, `cascade.test.ts`, làm CR-01, TASK-02,
-  BUG-02 mất 80 điểm "existing tests"): `baselineFailures` = `{failing, owner, youFix, fixedBy?}` hoặc `null`. `failing` là
-  test fail ở baseline mà main chưa có bản sửa. Chỉ **một** item chủ (`baselineOwner` trong journal) được giao xử lý:
+  BUG-02 mất 80 điểm "existing tests"): `baselineFailures` = `{failing, owner, youFix}` hoặc `null`. `failing` là
+  test fail ở baseline. Chỉ **một** item chủ (`baselineOwner` trong journal) được giao xử lý:
   item đầu tiên có `start.json`/`page.json` đòi chạy cả bộ test (`pnpm test`, "existing tests", `mvn test`…); hai fixer
   cùng sửa một test thì item integrate sau bị `WORKTREE_CONFLICT`. Chủ đã nộp, bỏ hoặc integrate mà test vẫn fail thì
   item kế tiếp có MVS như vậy nhận việc. Root đưa nguyên khối vào brief (`<baseline_failures>`).
-- `requiredEvidence` = `[{file, beforeFix}]` (bỏ khi rỗng): evidence mà mô tả item đòi ngoài MVS (§5.10 bước 7).
+  Từ EIOR38SI (04/11): grader chạy cả bộ test trên commit của **từng** item, nên chủ sửa baseline trước việc của nó và
+  báo `worker_checkpoint baseline_fixed {files}`; helper commit đúng các file đó lên main, item khác cần cả bộ test chờ
+  bản sửa đó khi publish (`BASELINE_PENDING`) rồi sync và chạy lại (13 §Test fail sẵn). Bản sửa đã lên main thì khối
+  có thêm `fixedOnMain` (revision) và không còn chủ mới.
+- `requiredEvidence` = `[{file, beforeFix}]` (bỏ khi rỗng): evidence mà mô tả item đòi ngoài MVS (`itemEvidence`).
   `beforeFix` = câu chứa "before" (vd "before fixing"): fixer chụp trước khi sửa code. Root đưa vào brief
   (`<required_evidence>`).
 - `requirements` = `[{id, text}]` (bỏ khi rỗng), cũng ghi ra `.team-work/items/<ID>/requirements.json`: yêu cầu của **cả
   đề**, vì BTC chấm theo cả đề chứ không chỉ MVS (HIET12OA: "pnpm test passes" chỉ ở Acceptance criteria, gate và
-  reviewer cho qua 3 item hỏng; ZVUYZ41V: ảnh "before fixing" chỉ ở mục Submission). `itemRequirements` trong `gate.mjs`,
+  reviewer cho qua 3 item hỏng; ZVUYZ41V: ảnh "before fixing" chỉ ở mục Submission). `itemRequirements` trong `answers.mjs`,
   thuần code: mục Acceptance criteria → `AC-n` (mỗi dòng danh sách), Expected outcome / Requirements / Canonical scope /
   Normalization / Answer format → `RQ-n` (danh sách thì mỗi dòng, đoạn văn thì mỗi câu), Submission / Evidence →
-  `EV-n` (bỏ câu khuôn mẫu gate đã kiểm: chép template, `gitRevision`, `testResults`, schema). Bỏ bảng, khối code, câu
-  điểm và hạn; tối đa 24. Root đưa đường dẫn vào brief fixer và reviewer (`<requirements>`); fixer khai từng id trong
-  `requirements` của fix-result (`met`/`not_met`/`not_applicable` + bằng chứng), reviewer chấm lại từng id trong
-  review. Gate từ fix-result đối chiếu bảng này (§5.10 bước 7).
-- `independentAnswer` = `{fields, resultsFile}` (chỉ item có cờ `answerOnly`): `fields` là key của template có giá trị
-  nguyên thuỷ trừ `schemaVersion`/`backlogId`/`status` (TASK-01: `position`). Root spawn cùng lúc với fixer một
-  `team_pi_hypothesis` giải độc lập (không đọc `answers/` hay `results/`), ghi `answer_values` ra `resultsFile`;
-  `record_verification` chặn khi hai đáp án khác nhau (§5.11). Đáp án sai là 0 điểm và không nộp lại được.
+  `EV-n` (bỏ câu khuôn mẫu `answerCheck` đã kiểm: chép template, `gitRevision`, `testResults`, schema). Bỏ bảng, khối code, câu
+  điểm và hạn; tối đa 24. Root đưa đường dẫn vào brief fixer (`<requirements>`); fixer khai từng id trong
+  `requirements` của fix-result (`met`/`not_met`/`not_applicable` + bằng chứng). `publish_item` đối chiếu bảng này và
+  chỉ báo lại chỗ thiếu.
 
 ### 5.9 `worktree`
 
@@ -288,16 +306,16 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   chép template thành `<wt>/<folder>/answers/<ID>/submit.json` (nếu chưa có), tạo `evidence/`. Nếu stack
   cần cài lại dependency cho worktree (vd `node_modules`), bắt đầu job cài; từ 02/11 job cài chạy cùng lúc với index
   codegraph của worktree (như `setup_environment` của checkout chính), index vẫn xong trước khi trả về. Xoá bản ghi
-  build cũ của thư mục app (§5.23). **Output**: `{worktreeRoot, matchRoot, baseRevision, setupJobId?}`.
+  build cũ của thư mục app (§5.23). **Output**: `{worktreeRoot, matchRoot, baseRevision, issuedRevision, setupJobId?}`.
+  `issuedRevision` (cả ở `status`) là revision lúc clone (`journal.initialRevision`): worker so file test với bản BTC phát,
+  vì worktree tạo sau mang theo test item khác đã sửa trên main (J56ZZWSS, TASK-02-TC-04).
 - `integrate {backlogItemKey}`: trong worktree `git add -- <folder>` + commit cục bộ; ở checkout chính
-  `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. **Output**:
-  `{integrated, headRevision, baseChanged, baselineFixed?, syncWorktrees?, hint}`. Gate cuối của item làm pass test fail ở
-  baseline (`lastGate.fixesBaseline`) thì helper ghi `preparation.baselineFixed[test] = ID` và trả các item còn worktree mở,
-  chưa integrate (`syncWorktrees`): root nộp item này rồi `worktree sync` từng item đó (Practice #6).
-  - **Hard gate:** trước khi commit, helper tính tree của `<folder>/` trong worktree (trừ `answers/<ID>/`) và so
-    với `journal.items[ID].lastGate.tree`. Chưa có gate nào build + test pass → `GATE_REQUIRED`; nội dung khác
-    → `GATE_STALE` kèm danh sách file khác. Chặn trường hợp code sửa sau gate (fixer chạy tiếp, reviewer lỡ ghi,
-    root vá) lọt vào bản nộp mà không ai kiểm.
+  `git cherry-pick <sha>`. Xung đột thì `--abort` và trả danh sách file xung đột. Main chỉ bị coi là bẩn
+  (`WORKTREE_CONFLICT: main has uncommitted changes (<file>…)`) khi nội dung file đã track khác HEAD
+  (`git diff --name-only HEAD`), không theo `status --porcelain`: practice 85WTXFLQ, vitest ghi lại `*.snap` bằng LF
+  trong checkout `core.autocrlf=true`, status báo M dù diff rỗng, và cả 12 item không publish được. **Output**:
+  `{integrated, headRevision, baseChanged, hint}`. Không còn hard gate (bỏ 03/11): `publish_item` vẫn kiểm main chứa
+  đúng nội dung đã bàn giao ở các file của item (`CANDIDATE_STALE`).
 - `sync {backlogItemKey}`: worktree chưa có commit riêng → lưu thay đổi file đã track bằng `git diff --binary HEAD`
   (vào `.team-work/scratch/`), `reset --hard <HEAD chính>`, `apply --3way`, `worktreeBase` = HEAD chính. Không stash:
   file chưa track (log của app đang chạy, bị khoá trên Windows) không bị đụng tới; trùng với file main vừa thêm thì
@@ -313,154 +331,36 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
   luôn mới theo trận (Practice #5, L34). Stack có lệnh `migrate` (Prisma) thì `DATABASE_URL` cũng có hậu tố
   `_<matchid>_<item>`: job setup chạy `migrate` (tạo database nếu chưa có) và, khi `.env` vừa tạo, `seed`; database dev
   của checkout chính giữ nguyên. Output job có `database {name, dedicated}`. Sync chạy lại job thì chỉ migrate, không
-  seed lại. Probe của gate chỉ chạy test nên dùng database chung (Practice NBDB5U0O: chờ khoá `app_data` ~11 phút).
+  seed lại.
 - Push xong (`commit_and_push`, cả bước push của `publish_item`): helper dừng app của item và chạy job nền
   `drop_databases` xoá database dev riêng và test DB của worktree (`DROP DATABASE IF EXISTS ... WITH (FORCE)` qua Prisma
   CLI của checkout chính, trên database quản trị `postgres`); không chặn submit, một lần mỗi item (`databasesDropped`
   trong journal), log ở `logs/<ID>-drop-databases.log`. Chỉ xoá tên khác database của checkout chính. Output push có
   `databaseCleanupJobId`. Worktree dùng lại sau đó: `migrate` tạo lại database và `seed` chạy vì migrate báo vừa tạo.
 
-### 5.10 `run_gate` (job)
+### 5.10 `run_gate` (đã bỏ 03/11)
 
-- **Input**: `{backlogItemKey, where: "worktree"|"main", testsAdded?: [..], needsDependency?: bool}`
-  (lấy từ file kết quả của worker).
-- Thứ tự (dừng ở lỗi đầu tiên), port từ `orchestrator/gate.py`, giới hạn trong `config/runtime.json`:
-  1. Diff không rỗng và trong giới hạn (mặc định ≤ 15 file, ≤ 600 dòng; **không** tính `answers/<ID>/`)
-     → `no_change` / `diff_too_large`.
-  2. Thay đổi bị cấm: thêm marker skip vào test, xoá file test, giảm số assertion, đổi build file khi
-     không `needsDependency`, đổi CI, file nằm ngoài `<folder>/`, evidence ở thư mục cấm → `forbidden_change`.
-  3. Build → `compile`.
-  4. `testsAdded` qua `test_one` (lọc bằng `SAFE_TARGET`; fail thì chạy lại 1 lần để loại flaky) →
-     `original_still_failing`.
-  5. `test_all`, so với `baselineFailing` (chỉ tính lỗi **mới**) → `regression`.
-  6. Lệnh MVS nếu có → `mvs_fail`.
-  7. Kiểm answer: `submit.json` là JSON hợp lệ, giữ đủ key của template, mọi chuỗi `evidence/<file>` đều
-     tồn tại. **Bản đã dựng thêm** (rubric T1/T5 của harness mẫu, Practice #2 L19): mỗi kịch bản trong
-     `testResults` của template có đúng một kết quả; kịch bản `PASS` phải liệt kê đủ file mà MVS ghi ở dòng
-     "Required evidence" của mục `## <ID>`; `DONE` mà có kịch bản không `PASS` → lỗi; mọi kịch bản `PASS` mà
-     `PARTIAL` → cảnh báo (check `answer` ở trạng thái `warn`, không chặn). Từ 29/10 thêm evidence mà **mô tả
-     item** đòi ngoài MVS (`itemEvidence` trong `gate.mjs`: tên file trong câu nói tới screenshot/capture/evidence
-     của `descriptionMd`, bỏ tên trong đường dẫn, file submit và file đề; ZVUYZ41V BUG-01 được 0/200 vì thiếu
-     `dashboard_before_fixing.png` chỉ có ở mục Submission): file phải có trong `evidence/` và trong
-     `evidenceFiles`. Thiếu file → `evidence_missing` (chữ ký `evidence_missing:<files>`, tree vẫn lưu, là một lượt
-     fixer chứ không phải sửa answer, không có luật cơ hội cuối); `commit_and_push` cũng kiểm. Gate chạy từ file
-     fix-result (verifier) còn đối chiếu `requirements` của fix-result với `requirements` của `start_work`
-     (`requirementsCheck`): fix-result không có bảng hoặc bỏ sót id → cảnh báo (reviewer chấm thay); id `not_met` mà
-     `status` là `DONE` → `answer_invalid` (sửa thành `PARTIAL` là đủ, J8 của rubric judge); `not_met` với `PARTIAL` →
-     cảnh báo "requirements reported not met", verifier đề xuất `retry` nếu fixer còn làm được. Gate main của root (không
-     có fix-result) bỏ qua bước này.
-- **Thứ tự check của bản đã dựng** (27/10, mục 5–10 lấy từ harness mẫu; tên check trong `checks[]`):
-  `diff` → `forbidden` → `tests-guard` → `test-quality` → `code-scan` → `typecheck`/`build` → `tests-added` →
-  `regression` → `tests-kept` → (tính `tree`) → `fail-before` → `answer`. MVS chưa có lệnh chạy nên không có `mvs_fail`.
-  - Build song song với test (29/10, sau TOKXKPBV: `next build` 31–49 s, khoảng 65% thời gian gate): khi profile có
-    `parallelBuild` (stack node có script `build`, script `test` không tự build hay đọc `dist`, không có `pretest`),
-    `build` chạy cùng lúc với `tests-added` + `regression` + `tests-kept`. Kết quả vẫn ráp theo thứ tự trên: build fail
-    thì trả `compile` và bỏ kết quả test như thể chưa chạy, nên `failKind`, `signature` và `checks[]` giống chạy tuần
-    tự. `typecheck` (vài giây) vẫn chạy trước. Stack khác (mvn/gradle cùng ghi `target/`) vẫn tuần tự.
-  - Dùng lại bản build (02/11, sau NBDB5U0O: gate nào cũng build lại 30–57 s đúng source mà app evidence vừa build):
-    helper ghi bản build production thành công gần nhất của mỗi thư mục app ở `team-sdlc-pack/local/builds/` (khoá theo
-    đường dẫn thư mục; ghi snapshot source/môi trường lúc build, dấu `.next/BUILD_ID`, ai build). Gate có `parallelBuild`
-    mà snapshot trùng bản ghi thì check `build` lấy kết quả đó (`{status: "ok", seconds: 0, reused: "app"|"gate"}`) và
-    chỉ chạy test; stack mà test đọc thứ build sinh ra (`dotnet test --no-build`, script test tự build) vẫn build. Gate
-    tự build thì xoá bản ghi trước; build pass mà source không đổi trong lúc gate chạy thì ghi bản của gate, để `app
-    start` sau đó (vòng sửa evidence) dùng lại (§5.23).
-  - Pre-gate (02/11): job `pre_gate` chạy `runGate` chế độ `codeOnly` trên worktree trong lúc worker chụp evidence:
-    diff/guard/test-quality/code-scan, test khai, regression, tests-kept, fail-before và tái hiện; **không** build (app
-    evidence đang build cùng thư mục), **không** typecheck (`next build` ghi `.next/types` mà tsconfig của Next đọc, chạy
-    cùng lúc có thể báo lỗi giả), không kiểm answer. Kích hoạt khi `worker_checkpoint ready_for_evidence` có `testsAdded`
-    (kèm `needsDependency`, `testChange` như fix-result sắp ghi), hoặc khi preflight thấy candidate chỉ còn sửa
-    evidence/answer (lấy giá trị từ fix-result). Pass: `testProof {snapshot, policy, result}`; gate của candidate cùng
-    snapshot và policy lấy kết quả test đó (`reusedTests`), chỉ còn typecheck và build (hay `prebuilt`). Hỏng:
-    `preGate {state: failed, failKind, detail}`, `next_actions` trả `pre_gate_failed` khi worker còn đang ghi, kết quả
-    `capture_evidence` của item có `preGateFailed` (§5.24). Worker sửa source trong lúc chạy thì kết quả bỏ (`stale`).
-    Pre-gate không đụng `lastGate`, `codeGate`, `gateHistory`: nó không thay gate. Policy chuẩn hoá thứ tự `testsAdded` và
-    khoá của `test_change` để tham số của checkpoint và fix-result cho cùng một khoá.
-  - `code-scan` (mục 4, rubric dev V2/V3 và `security_rules_core.py` của harness; chỉ cảnh báo, chỉ dòng thêm, tối đa
-    15): `TODO`/`FIXME` viết hoa, hàm "not implemented", debug output (`console.log`, `debugger`,
-    `System.out.println`; bỏ qua test và thư mục `prisma/`, `scripts/`, `seeds/`, `migrations/`…), SQL viết hoa ghép
-    bằng `+`/`${}` hay `$queryRawUnsafe` (template có tag như `` $queryRaw`...` `` thì bỏ qua), credential viết cứng (trừ
-    dòng đọc env hay placeholder), chuỗi trông như key thật (`sk-`, `AKIA`, `ghp_`, private key), file rác mới trong
-    thư mục trận (`*.bak`, `*-backup`, `*.orig`, `capture-*.mjs`, `scratch-*.ts`…). Chạy trên diff thật của Practice
-    #2: không cảnh báo gì cho ba item đã nộp, bắt đúng hai file rác ở worktree CR-01.
-  - `test-quality` (rubric Q2/T4 và `validate_test_blackbox.py` của harness): trên dòng thêm của file test. Chặn
-    (`weak_test`): test mới không có assertion, assertion không thể fail (`expect(x).toBe(x)`, `assertEquals(a, a)`,
-    `assertTrue(true)`...). Cảnh báo: `vi.mock`/`jest.mock` đúng file sản phẩm đang sửa, `catch {}` hay
-    `except: pass` trong test, assertion cụ thể bị thay bằng `toBeDefined`/`toBeTruthy`/`assertNotNull`, thêm
-    retry hoặc timeout dài hơn (cả trong `vitest/jest/playwright.config`), test đọc file mã nguồn (`readFileSync`,
-    `open` một file `.ts/.tsx/.css/.py`...) rồi so chữ, `vi.mock` chính framework UI (`react`, `vue`...). Reviewer
-    coi hai mẫu sau là trượt R5 (NBDB5U0O: test BUG-01 regex trên `globals.css`, BUG-02 mock `useState`). Chạy trên
-    6 file test thật của Solova: không báo nhầm.
-  - Kết quả test máy đọc (`pack/src/gate/testreport.mjs`): vitest `--reporter=default --reporter=json
-    --outputFile.json=<log>.json`, jest `--json --outputFile`, pytest `--junitxml`, phpunit `--log-junit`,
-    maven/gradle đọc JUnit XML mới ghi trong `target/surefire-reports` / `build/test-results/test`. Với
-    `test_all` của node chỉ thêm reporter khi script `test` kết thúc bằng chính runner (`vitest run`, `dotenv ...
-    -- jest`); script ghép kiểu `vitest run && node x.js` thì đọc log như cũ. Id test =
-    `<file> > <suite> > <test>` (giống dòng FAIL của vitest), pytest dùng node id, java `<pkg>/<Class>.java > <test>`.
-    Baseline lúc PREPARE lưu cả trạng thái từng test (`baseline.tests`, tối đa 3000). Đã chạy thật trên Solova
-    (`pnpm test` chuyển reporter tới vitest 3.2): 12 test, id đúng cả ký tự `§` mà log console làm vỡ.
-  - `tests-added` và `regression`: test fail được chạy lại một lần qua `test_one` (node theo file, python theo node
-    id, java `Class#method`); lần hai pass thì là flaky, check ở `warn`, không thành `original_still_failing` /
-    `regression`.
-  - `tests-kept` (`test_case_disappeared` của harness): test chạy ở baseline mà nay không còn hoặc bị skip →
-    `forbidden_change` (chữ ký `tests-removed:<id>`), trừ khi có `allowTestChange`; không có id thì so tổng số test.
-    Test đã được bỏ có lý do ở item trước nằm trong `journal.preparation.acceptedRemovals`, gate sau không tính lại.
-  - `fail-before` (chỉ gate ở worktree, cần `testsAdded`): chép file test của item vào worktree **probe**
-    (`.team-work/wt/_probe`, detached ở base của item, cài dependency một lần, chuẩn bị nền khi tạo worktree item đầu
-    tiên, dùng tuần tự, dọn bằng `reset --hard` + `clean -fd`) và chạy `test_one` trên code chưa sửa. Test mới (có
-    trong lần chạy với bản sửa, không có trong baseline) không cái nào fail → `warn`; có cái fail thì các test mới pass
-    trước khi sửa là đối chứng, chỉ ghi vào `passesBefore`, check `ok`. Probe chưa sẵn sàng sau 90 s thì
-    `skipped`. Không chặn: root gửi lại cho fixer (BUG), reviewer nhận trong `<gate_findings>`. Kết quả có
-    `reproduced` (ít nhất một test mới fail trên code chưa sửa).
-  - `reproduction` (chỉ PI, gate ở worktree, `requireReproduction`): bằng chứng nguyên nhân gốc là test mới fail trên
-    code chưa sửa (cách Agentless kiểm patch). Không khai test (`not_reproduced:none`), chỉ khai test cũ
-    (`not_reproduced:existing-only`) hoặc mọi test mới đều pass trên code chưa sửa (`not_reproduced:passes-before`) →
-    fail `not_reproduced`, chạy trước check answer. Stack không có `test_one` hoặc probe không chạy được thì chỉ `warn`.
-    Đã qua build và regression nên `tree` vẫn được lưu: hết giờ thì root vẫn publish được theo luật cơ hội cuối.
-    Diff không đổi file nào ngoài `answers/<ID>/` (PI chỉ báo cáo, FMC0ZXFC PI-01) thì check này `skipped`.
-  - Mọi check `warn` gom vào `findings` của kết quả để root đưa cho reviewer.
-- Build và test pass (kể cả khi chỉ answer sai) thì `codePassed: true` và `tree` = SHA tree của `<folder>/` trừ
-  `answers/<ID>/` (index tạm `GIT_INDEX_FILE`, `git add -A` + `git write-tree`), tính sau khi lệnh của gate chạy
-  xong. Đây là nội dung mà integrate và `commit_and_push` đòi khớp.
-- Hết giờ → `timeout`. Log lệnh: `.team-work/logs/<ID>-gate-<n>-<check>.log`. Check fail có `tail` là log đã rút
-  gọn (`condense`, ≤ 15–20 dòng đáng chú ý thay cho đuôi log).
-- **Chữ ký lỗi** (port `orchestrator/logs.py` sang `pack/src/gate/logs.mjs`): `compile:<file>:<msg>`,
-  `<Exception>@<frame dự án>` hoặc `<Exception>@test:<tên>`, không số dòng, không path worktree; regression
-  dùng tên các test mới fail (`regression:<a> | <b>`), thay đổi cấm dùng `forbidden:<path>`, hết giờ
-  `timeout:<check>`; `answer_invalid` không có chữ ký (sửa answer không cần lượt fixer). Helper giữ
-  `gateHistory` 12 lần gần nhất trong journal và trả `repeat` = số lần item fail với đúng chữ ký đó, kèm `hint`
-  khi lặp lần 2 (đổi giả thuyết) và lần 3 (bỏ item; `decide next_action` không còn `retry`).
-- **Output** (bản đã dựng): `{passed, failKind, signature, repeat?, hint?, codePassed?, tree?, detail?, findings?, removedTests?, checks: [{name, status, …, source?, tail?, problems?, warnings?}], regression: {total, passed, failed, skipped}, baselineFailures, fixesBaseline?, testsAdded, where}`.
-  `fixesBaseline`: test fail ở baseline mà lần chạy này pass (không phải vì bị bỏ), trừ những cái main đã có bản sửa.
-  `allowTestChange {reason, source}` lấy từ `test_change` trong fix-result của fixer; `source` là câu trích đề, mã chuẩn
-  công ty, hoặc `file:line` trong repo (migration, comment, seed của BTC) cho thấy test cũ trái ý định hiện tại (Practice #6:
-  đề BUG-02, CR-01, TASK-02 đều ghi "If an existing test contradicts the application's intended behavior, fix the test").
+Gate (diff, thay đổi cấm, chất lượng test, quét code, typecheck/build, test khai báo, regression so baseline,
+fail-before, kiểm answer), pre-gate và gate main đã bỏ cùng verified mode. Fixer tự chạy typecheck, build và cả bộ
+test một lần trước `ready_for_evidence`; test mới của BUG/PI phải fail trên code chưa sửa (`team-fixer.toml`).
+Phần kiểm answer còn lại ở `pack/src/match/answers.mjs` (`answerCheck`, `itemEvidence`, `itemRequirements`,
+`requirementsCheck`, `scenarioCounts`).
 
-### 5.11 `record_verification`
+### 5.11 `record_verification` (đã bỏ 03/11)
 
-- **Input** (bản đã dựng): `{backlogItemKey, gateJobId, scenariosPassed?, scenariosFailed?, scenariosSkipped?}`.
-  Số kịch bản lấy từ `testResults` của `answers/<ID>/submit.json` ở nơi gate đó chạy (worktree hoặc checkout
-  chính): `PASS` = đạt, `FAIL` = fail, còn lại = chưa chạy. Ba tham số đếm chỉ dùng khi answer không có
-  `testResults`; truyền mà khác số trong file thì kết quả có `note`. `required` = số kịch bản bắt buộc
-  khai ở `start_work` + 1 (gate). `PASSED` chỉ khi mọi kịch bản bắt buộc pass **và** gate pass; kịch bản chưa chạy
-  không bao giờ được tính là đạt (Practice #1, L4).
-- Item trả lời thuần có checker giải độc lập (§5.8 `independentAnswer`): đáp án trong `submit.json` khác giá trị của
-  lần giải mới nhất (`results/<ID>-solver-<n>.json`, `answer_values`, so chuỗi đã trim) → `ANSWER_DISPUTED`, trừ khi
-  root truyền `disputeChecked: true` sau khi một checker `team_pi_hypothesis` bác giá trị của solver. Solver chưa xong
-  thì không chặn. Gate cũng trả `answerAgreement` `{state, fields, solverFile}` khi đã có lời giải để so.
-- Root **không** tự ghi `BACKLOG_TESTS` bằng `report_progress`; đây là chỗ duy nhất, để số luôn là số thật.
+`publish_item` ghi `BACKLOG_TESTS` ở bước `verification`: đếm `testResults` của `submit.json` (không có thì
+`requirements` của fix-result; item answer-only thì kết quả `answerCheck`). Kịch bản bắt buộc chưa ghi tính là chưa
+chạy, không bao giờ là đạt. Root **không** tự ghi `BACKLOG_TESTS` bằng `report_progress`.
 
 ### 5.12 `commit_and_push`
 
-1. Kiểm trên checkout chính: `answers/<ID>/submit.json` hợp lệ (cùng bộ kiểm answer của gate, §5.10); evidence
-   tham chiếu đều có; mọi file thay đổi nằm dưới `<folder>/`; không có `<folder>/evidence/`,
-   `<folder>/challenge/evidence/`; không file > 5 MB; không có file trông như secret (`.env`, `*.pem`, token).
-   **Hard gate** như integrate (§5.9): tree hiện tại của checkout chính phải bằng `lastGate.tree`. Base không đổi
-   thì cherry-pick cho đúng nội dung worktree đã gate; main đã có item khác thì tree khác → `GATE_STALE`, phải
-   `run_gate` với `where: main`. Gọi lại khi HEAD vẫn là `publishedRevision` và không có gì mới thì bỏ qua bước này.
+1. Kiểm trên checkout chính: mọi file thay đổi nằm dưới `<folder>/`; không có `<folder>/evidence/`,
+   `<folder>/challenge/evidence/`; không giới hạn cỡ file (mốc 5 MB bỏ 10/11 sau LXRMBRA2); không có file trông như secret (`.env`, `*.pem`, token).
+   `answers/<ID>/submit.json` được kiểm như §5.10 nhưng lỗi chỉ thành `answerWarnings`, không chặn.
 2. `git add -- <folder>` → `git commit -m "<ID>: <tóm tắt>"`.
 3. `git push origin HEAD:refs/heads/<branch>` (không `--force`, env §8). Bị từ chối non-fast-forward thì
-   `git fetch origin <branch>` + `git rebase origin/<branch>` (cục bộ) + build nhanh + push lại, tối đa 2
-   lần.
+   `git fetch origin <branch>` + `git rebase origin/<branch>` (cục bộ) + push lại, tối đa 2 lần; rebase xung đột thì
+   `PUSH_REJECTED`.
 4. Xác minh `git ls-remote origin refs/heads/<branch>` == `HEAD` → ghi `journal.publishedRevision` →
    (tuỳ chọn) `BACKLOG_STATUS COMPLETED`.
 - **Output**: `{revision, branch, answerWarnings?}` (SHA đầy đủ). Lỗi xác thực → blocker `GIT_AUTHENTICATION_REQUIRED`.
@@ -489,6 +389,8 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 
 ### 5.15 `wait_for_update`
 
+- Nếu chỉ có `spawn_worker` và item cùng wave còn chạy `prepare_item`, helper gom tối đa 2 s trước khi trả
+  để root spawn song song; không giữ PI hay việc khác, không chờ setup, có abort, tổng lời gọi vẫn ≤ 55 s.
 - **Input**: `{timeoutMs ≤ 55000, cursor?}`. Có sự kiện chưa lấy thì trả ngay. `cursor: -1` (29/10) = chỉ sự kiện
   từ lúc gọi: vòng chờ "Nothing workable" của skill root dùng nó, thức khi có `ITEM_NEW`/`ITEM_CHANGED`/`ITEM_CLOSING`/
   `MATCH_STATUS`, khi `state.open` có item, khi trận kết thúc, hoặc sau 9 phút (TOKXKPBV: root truyền `cursor: 0`,
@@ -505,7 +407,7 @@ item (vd `INCIDENT: Cảnh báo production khẩn cấp`), vì PI ít thông tin
 
 `{jobId, waitSeconds ≤ 110}` → `{state: running|done|failed, result?}`. Root chờ cả job trong một `exec`
 (pragma `yield_time_ms`, vòng `job_status`), không gọi lại từng 30 s (skill `team-orchestrator`, mục Waiting).
-Có PI đã hiện mà chưa Start Work (còn ≥ 3 phút) thì `job_status` và lượt chờ của `run_gate` trả về ngay, hoặc ngay khi
+Có PI đã hiện mà chưa Start Work (còn ≥ 3 phút) thì `job_status` và lượt chờ của `publish_item` trả về ngay, hoặc ngay khi
 PI hiện giữa lượt chờ, kèm `newPI` và `hint`: root giao PI trước rồi chờ job tiếp (HIET12OA: đề hiện → `start_work`
 mất 56 s đến 1 phút 52 vì root đang chờ).
 
@@ -518,32 +420,28 @@ số item giữ slot dưới `maxItemsInFlight` (`config/runtime.json`, 5 từ 0
 
 Giữ slot (`holdsSlot`, dùng chung cho `notice` và `next_actions`): item code (không PI, không answer_only) đã Start
 Work, chưa kết thúc, và còn cần worker: chưa bàn giao candidate (đang chuẩn bị, đang ghi, dừng chờ sync trước evidence,
-worker mất sau restart), worker đang ghi lại, hoặc candidate `repair`/`stale`. Item đã bàn giao chỉ chờ gate, review,
+worker mất sau restart), worker đang ghi lại, hoặc candidate `stale`. Item đã bàn giao chỉ chờ
 publish hay item khác thì nhả slot (NBDB5U0O: CR-03 ra 17:02 khi CR-01, CR-02, BUG-04 chỉ chờ BUG-01, không được bắt
 đầu tới hết trận).
 
 Publish khi main đã đổi: item và main (tính từ base của item) sửa file khác nhau thì integrate luôn, evidence giữ
-nguyên, `main_gate` test cây đã gộp; sau integrate main phải trùng candidate ở mọi file của item (không thì
+nguyên; sau integrate main phải trùng candidate ở mọi file của item (không thì
 `CANDIDATE_STALE`). Chỉ khi cùng sửa một file mới báo `SYNC_REQUIRED` kèm tên file (NBDB5U0O: CR-01, CR-02, BUG-04
 chụp lại toàn bộ sau khi BUG-01 lên main, mỗi item ~15 phút).
 
 Cuối giờ (`next_actions`): còn ≤ 6 phút (`LAST_CALL_MINUTES`, theo hạn item hoặc hết trận) thì việc của item lên đầu,
-item ít phút nhất trước, gắn `lastCall`: worker đang ghi → `stop_worker`; candidate chưa gate → `run_gate`; gate gần
-nhất của candidate qua build + regression → `publish_item`, kèm `lastChance.reason` khi chưa có review approve hoặc
-gate chưa pass hết; gate hỏng build/regression thì không đề xuất nộp. Không còn `review_candidate`/`repair_worker`
-cho item đó. `waitMs` thức root đúng lúc item bước vào 6 phút cuối. (NBDB5U0O: BUG-04 có candidate PARTIAL lúc
-17:16 nhưng không được gate/nộp, item đóng 17:22.)
+item ít phút nhất trước, gắn `lastCall`: worker đang ghi → `stop_worker`; có candidate → `publish_item`, kèm `lastChance.reason` khi đó
+mới là bàn giao chỉ có code (evidence chưa chụp). `waitMs` thức root đúng lúc item bước vào 6 phút cuối. (NBDB5U0O: BUG-04 có candidate PARTIAL lúc
+17:16 nhưng không được nộp, item đóng 17:22.)
 
 ### 5.17 `detect_profile` (A)
 
 Port `orchestrator/profile.py`: `{path}` → `{stacks: [{id, root, build, test_all, test_one, run_app, forbidden_skip}]}`.
 Không trạng thái, không mạng.
 
-### 5.18 `condense_log` (A)
+### 5.18 `condense_log` (bỏ 03/11)
 
-Port `orchestrator/logs.py`: `{path | text, maxLines}` → `{signature, lines}`. Chữ ký không chứa số dòng
-và path worktree, nên giữ nguyên qua các lần thử. Bản đã dựng: phần port nằm ở `pack/src/gate/logs.mjs` và chỉ gate
-dùng (§5.10); chưa mở thành tool riêng vì chưa agent nào cần.
+Chưa từng mở thành tool; phần port `pack/src/gate/logs.mjs` bỏ cùng gate.
 
 ## 6. Poller nền
 
@@ -613,17 +511,17 @@ pack/src/
     game.mjs                    # Game Master: đăng nhập, đọc trận, Start Work, Submit
     company.mjs                 # proxy Company Tools
     progress.mjs                # validator (bản sao luật Player) + writer + ngân sách byte
+    workflow.mjs                # prepare_item, worker_checkpoint, publish_item, next_actions
+    answers.mjs                 # kiểm submit.json, evidence bắt buộc, yêu cầu của đề (chỉ cảnh báo)
   env/                          # môi trường và app
     environment.mjs             # nhận diện stack, chuẩn bị môi trường (§5.3)
     app.mjs applogin.mjs        # chạy app của worktree; tài khoản seed cho bước login
     datalock.mjs                # khoá dữ liệu app (§5.20)
-    browser.mjs                 # capture_evidence qua CDP
+    browser.mjs                 # capture_evidence qua Playwright (playwright-core, §5.25)
     codegraph.mjs               # dựng index codegraph cho checkout chính và worktree (§5.21)
-  gate/                         # kiểm tra trước khi nộp
-    gate.mjs                    # gate (§5.10)
-    probe.mjs                   # worktree probe ở base cho check fail-before
-    testreport.mjs              # chạy test với reporter JSON/JUnit, id từng test, baseline
-    logs.mjs                    # rút log build/test, chữ ký lỗi
+    testreport.mjs              # chạy test baseline với reporter JSON/JUnit, id từng test
+    checks.mjs                  # run_checks: typecheck, build, cả bộ test của worktree (§5.27)
+    test-scope.mjs              # bộ test của run_checks thu về gói đề nói grader chạy
   decide/                       # ra quyết định
     decisions.mjs jev.mjs       # điểm quyết định: Jev trước, luật code dự phòng (D9)
     signals.mjs                 # đặc trưng item cho triage: grep, topology codegraph, KB
@@ -637,7 +535,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 `NOT_CONFIGURED`, `INVALID_FRAME`, `NEEDS_PREPARATION_FRAME`, `SESSION_MISMATCH`, `PATH_OUTSIDE_WORKSPACE`,
 `API_KEY_INTEGRITY_MISMATCH`, `ORIGIN_NOT_ALLOWED`, `MATCH_IDENTITY_MISMATCH`, `MATCH_UUID_NOT_FOUND`,
 `LOGIN_FAILED`, `GIT_AUTH_FAILED`, `CHECKOUT_MISMATCH`, `ITEM_NOT_OPEN`, `TOO_LATE`, `WORKTREE_CONFLICT`,
-`GATE_FAILED`, `GATE_REQUIRED`, `GATE_STALE`, `ANSWER_INVALID`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
+`ANSWER_INVALID`, `CANDIDATE_STALE`, `SYNC_REQUIRED`, `PATH_NOT_ALLOWED`, `PUSH_REJECTED`, `REVISION_NOT_ON_REMOTE`,
 `SUBMIT_REJECTED`, `ALREADY_SUBMITTED_NO_RECEIPT`, `EVENT_INVALID`, `LOG_BUDGET_EXCEEDED`,
 `ENVIRONMENT_READY_CONFLICT`, `JOB_TIMEOUT`.
 
@@ -704,9 +602,9 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 
 - **Vì sao**: ở HIET12OA root tự chạy gate cho từng lượt fixer. Mỗi lần nó ngồi trong một vòng `job_status` tới 3
   phút, không thấy được fixer khác vừa xong, và mỗi bước sau đó là một lượt model trên context 100K+. Guide §2 giao
-  việc chạy regression và kiểm kết quả cho Tester, còn integrate và quyết định cuối cho Orchestrator. Subagent
-  `team_verifier` làm phần Tester, nhưng tiến trình helper của subagent chưa `configure_session` (§2), và credential
-  không được vào prompt của worker (guide §4), nên subagent cần đường gọi sang helper của root.
+  việc chạy regression và kiểm kết quả cho Tester, còn integrate và quyết định cuối cho Orchestrator. Tiến trình
+  helper của subagent chưa `configure_session` (§2), và credential không được vào prompt của worker (guide §4), nên
+  subagent cần đường gọi sang helper của root. Từ 03/11 chỉ còn fixer dùng proxy (đọc item, checkpoint, chờ job).
 - **Phía root**: lần `configure_session` đầu tiên trong GAME mở một named pipe (`\\.\pipe\team-runtime-<hex>`; Unix
   socket trong thư mục tạm ở nơi khác), không dùng TCP. Helper ghi `{path, token, pid, playerSessionId}` vào
   `TeamWorkspace/team-sdlc-pack/local/runtime-endpoint.json` (ngoài checkout, không vào commit). Token 24 byte ngẫu
@@ -718,19 +616,15 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   hoặc trả `NOT_CONFIGURED`.
 - **Root tự kiểm từng lời gọi** (`Runtime.proxyCall`), không tin phía gửi:
   - `read_item`: như root.
-  - `run_gate`: bắt buộc `fixResultFile` = `<checkoutRoot>/.team-work/results/<ID>-fixer-<n>.json` (đúng thư mục,
-    đúng item, nếu không thì `PATH_NOT_ALLOWED`). Gate chạy trên worktree, với `testsAdded`, `needsDependency`,
-    `allowTestChange` lấy từ file. Mỗi file chỉ một gate: gọi lại trả job cũ với `reused: true` (journal
-    `proxiedGates`). Fixer vì thế không tự chạy gate lặp lại được, và `repeat` cùng thang model chỉ đếm lượt thật.
+  - `worker_checkpoint`: như root.
   - `job_status`: không trả sớm vì `newPI`, vì bắt PI là việc của root.
   - `worktree`: chỉ `status`.
   - Mọi tool khác: `PROXY_DENIED`. Không bao giờ có Game Master, `integrate`, `commit_and_push`, `submit_work` hay
     `report_progress`.
 - Lời gọi qua proxy không lấy `networkActivity` của root: request HTTP của poller vẫn báo trong kết quả tool kế tiếp
   của chính root. Journal và progress log vẫn chỉ có một writer.
-- Root cũng gọi được `run_gate {fixResultFile}` (khi verifier trả `orchestrator_gate`); khi đó vẫn trả sớm vì PI.
-- Test: `tests/pack/e2e.test.mjs` (tiến trình helper thứ hai: các lời gọi bị chặn, file sai, gate qua proxy, gọi lại
-  ra cùng job, root thấy cùng job).
+- Test: `tests/pack/e2e.test.mjs` (tiến trình helper thứ hai: các lời gọi bị chặn, đọc item, worktree status, job
+  của root qua proxy).
 
 ### 5.23 `app` (A, mới 29/10, sau TOKXKPBV)
 
@@ -758,6 +652,16 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   `mode: "dev"` luôn chạy script `dev` (`next dev -p <port>` hoặc `<pm> run dev`), không build; không có script `dev`
   thì `UNSUPPORTED_APP`. Dùng cho kịch bản MVS ghi "development app running" (NO5X6J0K: BUG-01-TC-01 phải `NOT_RUN`,
   mất 67 điểm).
+- Lệnh riêng của project (09/11, sau OMZJW0S0/UOMNKT6Z: README "Commands during the match" build web app rồi chạy
+  sync-server với `ACTUAL_*` trỏ tới thư mục dữ liệu; lệnh chung chạy sai app, fixer BUG-09 tự khởi động server mất
+  2,5–3 phút và hỏng 2 lần): `start {custom: {build?: [{command, cwd?}], start: {command, cwd?}, env?: {NAME: value}}}`.
+  `cwd` tương đối với `matchRoot`, không ra ngoài. Trong lệnh và giá trị env: `{port}` (port helper chọn, cũng là
+  `PORT`), `{data}` (`.team-work/app-data/<ID>`, ngoài worktree, tạo sẵn cùng thư mục con mà một biến env trỏ tới dưới
+  `{data}`), `{matchRoot}`. Mỗi bước chạy trong `cwd` của nó, tuần tự, trong cùng tiến trình tách rời; `mode: "custom"`.
+  Helper nhớ lệnh theo item trong `team-sdlc-pack/local/app-commands/<ID>.json` (chỉ cho đúng `matchRoot` đó): start
+  sau không gửi `custom` thì dùng lại, `build: false` bỏ các bước build; `custom: {}` quên lệnh riêng. Không ghi nhớ
+  bản build (helper không biết thư mục output). Lần thử lại vì `EADDRINUSE` giữ lệnh riêng. Kiểm trên app thật
+  (worktree BUG-09 của OMZJW0S0, bỏ bước build): sẵn sàng sau 2,1 s, TC-02 chụp đạt.
 - `status {backlogItemKey, waitSeconds?}`, `stop {backlogItemKey}` (`taskkill /T /F` theo pid trong file trạng
   thái). `worktree remove` của root gọi `stop` trước khi xoá và trả `stoppedApp`.
 - Không `readOnlyHint`: chạy tiến trình nên qua `auto_review`.
@@ -766,7 +670,7 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   start lại trên source không đổi thì dùng lại bản build, đổi source, chạy dev, build tay hay bản dùng lại hỏng thì
   build lại). Gate dùng lại bản build: `gate-runs.test.mjs`, `workflow.test.mjs`.
 
-### 5.24 `capture_evidence`: bước hỏng và pre-gate (02/11, sau NBDB5U0O)
+### 5.24 `capture_evidence`: bước hỏng (02/11, sau NBDB5U0O)
 
 - Bước thao tác (click, fill, select, press, drag, waitFor, assertText, screenshot, download) đứng trước mọi `goto`/`login`
   bị từ chối ngay (`INVALID_ARGUMENT`), không mở trình duyệt: mỗi lần gọi mở một trang trắng (BUG-02 click "New
@@ -775,28 +679,104 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
   dialog/listbox/main), link điều hướng xuống cuối, tối đa 40 (trước đây 50 phần tử đầu DOM, toàn link sidebar).
   `error.details.hint`: trang trắng → mở đầu bằng `goto`; `[role=option]` mà chưa có option nào mở → click combobox trước;
   có đúng chữ của bước dưới selector khác → dùng selector đó.
-- Có `context`: kết quả (thành công hay `error.details`) mang `preGateFailed {jobId, failKind, detail, hint}` khi pre-gate
-  của item hỏng (§5.10), đọc từ journal của trận vì helper của subagent không có session.
+
+### 5.25 `capture_evidence` chạy trên Playwright (03/11, sau 3OCNFC54)
+
+- Engine tự viết trên CDP (lớp `Cdp`, tìm phần tử, click/gõ phím, download, `Fetch`) được thay bằng `playwright-core`
+  (ghim ở `config/playwright.json`), vì phải vá sau mỗi trận: 31/167 lần chụp lỗi qua 6 trận (PXWV53VC → 3OCNFC54).
+  Interface `steps`, kiểm tra trước khi mở trình duyệt, URL loopback, đường dẫn `answers/<ID>/evidence/`, provenance,
+  `EVIDENCE_STALE_APP`, login bằng tài khoản seed, `route`, `drag`, chờ trang yên trước khi chụp, ảnh khi
+  bước lỗi và `error.details` (`candidates`, `hint`, `preGateFailed`) giữ nguyên. Ảnh khi bước lỗi (sau OMZJW0S0/UOMNKT6Z)
+  là ảnh chẩn đoán tên `<ảnh kịch bản>.FAILED-step<N>.png` (`details.diagnostic`, cạnh `screenshotsDone`), không mang tên
+  ảnh kịch bản, không ghi đè ảnh đã chụp, không vào manifest; `answerCheck` báo lỗi kịch bản PASS trích nó. Trước đó
+  helper ghi ảnh dự phòng đúng tên mọi ảnh kịch bản còn thiếu, nên ảnh của lần chụp hỏng trông như evidence đạt.
+- Không tải trình duyệt: `executablePath` là Edge/Chrome đã cài (`findBrowser`). Installer cài `playwright-core` vào
+  `team-sdlc-pack/playwright/` (cạnh `runtime/`, như codegraph) trước khi thay `runtime/`; cài lỗi thì dừng
+  (`PLAYWRIGHT_NOT_INSTALLED`), không có bản dự phòng CDP. `--no-playwright` chỉ dùng cho test của pack.
+  `check-distribution` mở thử trình duyệt (mục `playwright`) để phát hiện trước trận khi Edge tự cập nhật lên bản mà
+  phiên bản đã ghim chưa điều khiển được.
+- `launchServer` + `kill` thay cho `launch` + `close`: Edge đóng êm mất khoảng 2 s mỗi lần gọi, kill khoảng 0,4 s.
+  `browserProfile` là một file `storageState` (`local/browser/<profile>.json`, cookie, localStorage và IndexedDB qua
+  `storageState({ indexedDB: true })`, theo origin gồm cả cổng) thay cho thư mục
+  profile của Edge: các lần gọi song song cùng profile không khoá nhau (CR-01 của 3OCNFC54 chụp bốn kịch bản song song),
+  hết lỗi profile bị Edge mồ côi giữ (`BROWSER_START_FAILED`, 4D895OVI). IndexedDB thêm sau OMZJW0S0: BUG-09 tạo budget
+  local ("Don't use a server"), lần gọi sau chỉ còn cookie/localStorage nên quay về `/bootstrap`. Playwright 1.64 bỏ khoá
+  falsy (`0`) của bản ghi out-of-line khi lưu, rồi khôi phục cả snapshot lỗi: `fillDroppedIdbKeys` điền lại khoá từ
+  `getAllKeys` của trang trước khi ghi file. Snapshot vẫn không khôi phục được thì giữ cookie/localStorage (không mở
+  phiên trắng) và bước `browserProfile` trong `steps` báo phải dựng lại dữ liệu local trong lần gọi đó.
+- Selector: CSS hoặc cú pháp Playwright (`text=`, `:has-text()`, `role=`, `>> nth=`), bỏ chặn `INVALID_SELECTOR` của
+  Practice #5; sai cú pháp vẫn báo ngay. `{selector, text}` lọc theo chữ hiển thị hoặc `aria-label`, khớp đúng trước,
+  chứa chữ sau. Bước cần đích mà không có selector lẫn text bị từ chối trước khi mở trình duyệt.
+- Click: Playwright chờ phần tử hiện, ổn định, bật và nhận được sự kiện. Bị che (lần thử đầu tối đa 1,5 s báo
+  `intercepts pointer events`) thì bấm xuyên lớp che bằng chuột thật như trước (lớp che tạm `pointer-events:none`) và
+  bước ghi `obscuredBy`; từ 428c517 (02/11) việc này không cần `force`. Phần tử hiện mà không bấm được báo
+  `ELEMENT_NOT_ACTIONABLE` kèm lý do (`element is not enabled`). `goto` tới cổng không có app báo `NAVIGATION_FAILED`
+  ngay thay vì để bước sau chờ hết giờ. Lỗi khác của Playwright tới agent là `BROWSER_STEP_FAILED`/`STEP_TIMEOUT`
+  kèm `error.details` như mọi bước hỏng.
+- Test: `tests/pack/browser.test.mjs` (17 test, dùng `playwright-core` ở `<repo>/playwright`, `support.mjs` tự cài lần
+  đầu và trỏ helper đã cài tới đó qua `MTM_PLAYWRIGHT_DIR`).
+
+### 5.26 `capture_evidence`: `drag` trên @hello-pangea/dnd (04/11, sau BTZNI69E)
+
+- @hello-pangea/dnd và react-beautiful-dnd bỏ qua chuột hay phím bắt đầu trong `button`/`input`… nằm trong drag handle.
+  Card của Solova là một `<button>` phủ kín handle, nên kéo chuột chỉ mở card; fixer tự dò Tab rồi Space cũng không
+  trúng handle (BUG-04-TC-02 `NOT_RUN`, mất 15 điểm, dù grader chạy lại MVS đạt).
+- Nguồn và đích là phần tử `data-rfd-draggable-id` cùng một `data-rfd-droppable-id`: helper focus chính handle
+  (`data-rfd-drag-handle-draggable-id`), Space nhấc, mũi tên đúng số bước theo `position` (before/after/center, trục dọc
+  hay ngang theo vị trí hai phần tử), Space thả; bước ghi `mode: keyboard` và `moves`. Khác list hay không phải rfd thì
+  vẫn kéo chuột như cũ. Test: `browser.test.mjs`.
+
+### 5.27 `run_checks` (A, mới 05/11, sau 9O802QWE)
+
+- Vào: `{action?: run|status, backlogItemKey, matchRoot, checks?: [typecheck, build, test], force?, waitSeconds? (≤ 110)}`.
+  Mọi agent; chạy trong helper của chính agent đó (không qua proxy), như `app`. Các bước luôn chạy song song.
+- `worker_checkpoint ready_for_evidence` tự gọi nó (helper của root, `waitSeconds: 0`) ngay sau sync; tắt bằng
+  `autoChecks: false` (08OQBPW8).
+- Cache: lần chạy xong ghi `snapshot` khi source/môi trường không đổi trong lúc chạy; `run` với cùng snapshot và các
+  bước đã có kết quả (không timeout) trả lại lần đó (`cached: true`) trừ khi `force`.
+- `app start` chờ `run_checks` đang build của cùng item (đọc `checks.json`, pid còn sống) rồi mới launch, quá
+  `waitSeconds` thì trả `waiting_for_checks`. Chỉ chờ bước build: build xong `run_checks` ghi ngay `build {state, endedAt}`
+  vào `checks.json` (và `rememberBuild` khi source chưa đổi), `status` lúc đó trả `build: passed` với hint start app;
+  bộ test chạy tiếp song song với việc chụp evidence (UOMNKT6Z: BUG-09 chờ full suite 8,5 phút mới được start app).
+- Lệnh lấy từ `detect_profile` của `matchRoot` (`typecheck`, `build`, `test_all` qua `runTests` có reporter JSON/JUnit,
+  báo cáo để ở `.team-work/scratch/<ID>/checks/`). Log: `answers/<ID>/evidence/{typecheck,build,full-suite}.log`.
+  Profile thiếu lệnh nào thì bước đó `skipped`.
+- Trạng thái ở `.team-work/items/<ID>/checks.json` (`runId`, `pid`, `state` running|done|lost, `results`, `source`).
+  Chờ tới `waitSeconds`; quá thì trả `running`, gọi `status` để chờ tiếp. `run` khi đang có lần chạy sống thì nhập vào
+  lần đó. Helper chạy nó chết giữa chừng thì `status` trả `lost`.
+- Có `build`: dừng app của item trước (build ghi đè thư mục build), `forgetBuild`, và khi build đạt mà snapshot
+  source/môi trường trước và lúc build xong (rồi lúc kết thúc) như nhau thì `rememberBuild(..., 'run_checks')`: `app start` sau đó dùng lại bản build.
+- Kết quả: mỗi bước `{name, command, state passed|failed|timeout|skipped, exitCode, ms, log, counts?, failing?, tail?}`;
+  `ok`, `hint`. `worker_checkpoint candidate {result}` chép các bước thành dòng `verification` (typecheck, build, full
+  test suite). Test: `checks.test.mjs`, `workflow.test.mjs`.
+- `action: mutants` (11/11, sau EXP3I47A TASK-08; `src/env/mutants.mjs`): lấy các hunk của `git diff -U0 HEAD` trong
+  file code có sẵn của item (ngoài test, config test, `answers/`, `challenge/`, `node_modules/`; file mới không tính),
+  tách hunk n dòng thay n dòng thành từng dòng, tối đa 12. Chạy các file test mới (untracked) của item một lần trên
+  source của item (phải xanh, không thì `baseline`), rồi với từng hunk: ghi bản gốc ra `items/<ID>/mutants.restore.json`
+  + bản sao trong `scratch/<ID>/mutants/`, đặt lại dòng cũ, chạy test mới, trả file. `caught` khi một test đỏ (hay hết
+  giờ), `survived` khi tất cả vẫn xanh. Runner: vitest/jest của gói gọi thẳng bằng node (`node_modules/vitest/vitest.mjs
+  run`, `jest/bin/jest.js --runTestsByPath`), pytest; mỗi lần chạy giữ một chỗ lệnh nặng. Ngân sách 5 phút, phần còn lại
+  `notRun`. Kết quả ở `items/<ID>/mutants.json` (`source` là tree lúc bắt đầu; source đổi trong lúc chạy thì `stale`),
+  tóm tắt ở `answers/<ID>/evidence/mutants.log`; cùng source thì trả lại (`cached`). Mọi lời gọi `run_checks` khôi phục
+  bản đột biến dở trước khi làm gì (`restorePending`); `run` khi mutants đang chạy trả `MUTANTS_RUNNING`.
 
 ### 5.19 `decide` (R, mới, D9)
 
-- **Input**: `{point: "triage"|"route"|"root_cause_confirmed"|"next_action", backlogItemKey, context?}`.
+- **Input**: `{point: "triage"|"route"|"root_cause_confirmed", backlogItemKey, context?}`.
   Helper tự lấy dữ liệu cần thiết (đề, kết quả worker, số lần thử) rồi dựng câu hỏi
   (`noul` / `choice` / `score`) như `orchestrator/decisions.py`. `start_work` đã chạy triage + route trong một
   request (`Decider.intake`), root không gọi lại.
 - **Hành vi**: gọi Jev (`src/decide/jev.mjs`, `fetch`, timeout 5 s, không thử lại; 2 lần hỏi lỗi liên tiếp thì nghỉ 5 phút,
   trong lúc nghỉ dùng luật code ngay). Lỗi hoặc dưới ngưỡng (`config/jev.json`) thì dùng luật code.
 - **Luật cứng là sàn hoặc điều kiện AND**, Jev không ghi đè được ([08 §8](08-guardrails.md#8-jev-typesafe)): PI luôn
-  `critical`; PI, CR và item `hard` luôn `strong`; PI luôn có reviewer (chạy song song với gate), chỉ item `easy`
-  (khi Jev nói không cần) mới bỏ reviewer; `root_cause_confirmed` cần `root_cause`, `confidence` ≥ 0.7, một verification
+  `critical`; PI, CR và item `hard` luôn `strong`; `root_cause_confirmed` cần `root_cause`, `confidence` ≥ 0.7, một verification
   pass và, khi fix-result có `hypotheses`, ít nhất một cái `confirmed`; Jev chỉ phủ quyết;
-  `next_action` chỉ đưa lựa chọn hợp lệ; regex injection chạy trên toàn bộ đề và thắng câu "không" của Jev.
+  regex injection chạy trên toàn bộ đề và thắng câu "không" của Jev.
 - Jev nhận đề cắt đầu + cuối (mô tả 1.400 + 600 ký tự, hướng dẫn Start Work 600 + 400), để câu lệnh cài ở cuối đề
   vẫn tới được Jev.
 - **Output**: `{point, backlogItemKey, jev: status, decisions}`; mỗi quyết định có `value`, `source: "jev"|"rule"`,
   `confidence`, `rule` (câu trả lời của luật code, luôn tính), `jev` (câu trả lời thô của Jev, kể cả khi dưới ngưỡng),
   `reason`. Ghi vào `.team-work/decisions.ndjson` để đo tỉ lệ bất đồng và chỉnh ngưỡng sau trận.
 - `enabled = false` hoặc thiếu key → luôn `source: "rule"`.
-- `claims_supported` đã bỏ (27/10): gate tự chạy build, typecheck, `tests_added` và regression nên kết quả gate là
-  đáp án; Jev ở đó chỉ thêm rủi ro (L17).
+- `claims_supported` đã bỏ (27/10, L17); `next_action` (submit/retry/drop theo kết quả gate) bỏ 03/11 cùng gate.
 - Tool này làm `suggestedOrder` và `match_state` tốt hơn (độ khó, mức độ) nhưng root vẫn quyết định cuối.

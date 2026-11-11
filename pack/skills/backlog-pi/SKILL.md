@@ -1,69 +1,108 @@
 ---
 name: resolve-pi
-description: Resolve a Production Incident in any stack. Investigate with a time-boxed checklist, confirm the root cause with a reproduction test, apply a minimal fix that holds for every user. Score depends on submit time.
+description: Resolve a Production Incident in any stack. Rapidly triage between Form A (Incident Report / Answer-Only) and Form B (Live Hotfix). Use deterministic scripting for log analysis, confirm root cause, and submit fast for maximum race points.
 ---
 
 # PI (Production Incident)
 
-A PI is a customer-reported production incident with little information and no MVS. Teams are ranked by when
-their PASSED submission arrives (100 / 90 / 75 / 60 % of the points), timed from the moment the item appeared; a
-wrong submission scores 0 and cannot be resubmitted. So: be correct, then lose no minute. Speed comes from a fixed
-checklist, cheap evidence first and stopping as soon as a hypothesis is confirmed, never from skipping the
-reproduction. Use `.agents/skills/backlog-references/pi-triage.md` to map symptoms to likely causes.
+A PI is a customer-reported production incident with tight deadlines and decaying race points.
+Teams are ranked by when their PASSED submission arrives:
+- 1st team: 100% of points
+- 2nd team: 90% of points
+- 3rd team: 75% of points
+- Subsequent teams: 60% of points
 
-## Time box (absolute times in `<item_meta>`)
-- By `checkpoint_by` (about 6 minutes in): steps 1–5 done and one hypothesis confirmed. If none is confirmed by
-  then, stop: write your result with `status` = `partial` and the full `hypotheses` list (each with its check and
-  what it showed, the untested ones `open`), and reply. The orchestrator checks the open hypotheses in parallel and
-  starts the next attempt from your list, so a precise list is worth more than five more minutes of guessing.
-- By `return_by`: fix, reproduction test and answer file done. Over time on a step? Move on with the best
-  information you have.
+**A wrong submission scores 0 and cannot be resubmitted.**
+Speed comes from deterministic correlation and zero guesswork. Never spend time exploring unrelated parts of the codebase.
 
-## Checklist
-1. **Incident report**: symptoms (who, what, where, since when, always or sometimes, all users or some), the
-   expected behaviour and where it is stated (item text, `<company_facts>`, docs, code comments), and the answer
-   contract: the template and schema fields in `<materials>` and any answer format the item gives (a field compared
-   as an exact string follows the item's normalization rules).
-2. **Evidence, cheapest first**:
-   - the files in `<materials>` (logs, data, scripts) and `<company_facts>`; for more logs, tickets or
-     standards, query company systems yourself (`company_tools`, then `company_call`, lookups only);
-   - error text / stack trace → error signature; open the top project frame (file:line) before anything
-     broader;
-   - what changed: `<recent_changes>` and `git log -p -n 5 -- <paths on the symptom's path>`; a change that
-     matches the symptom is suspect number one;
-   - configuration on the path (env files, application config, feature flags, time zone, limits);
-   - data assumptions (empty table, null column, new enum value, date boundary).
-3. **Entry point**: map the symptom to an endpoint/page/job and its call chain with codegraph (`codegraph_search`
-   for the handler, then `codegraph_callees`).
-4. **Hypotheses**: 2–4 causes, most likely first, each with a check whose outcome differs depending on whether it
-   is true. Keep them in your `hypotheses` list as you go: a refuted one stays there with its evidence.
-5. **Confirm with a reproduction test**: the smallest test that fails on the current code for the reported
-   reason, at the lowest layer that shows it, next to the existing tests. Isolate test data so shared state or
-   other worktrees are not corrupted. A local HTTP call to the app you started
-   is extra evidence, not a substitute. A test that passes on the current code has not reproduced anything:
-   fix the test (or refute the hypothesis) before you change production code.
-   **Stop investigating at the first hypothesis the test confirms.**
-6. **Fix the root cause** minimally, correct for every user and input, not only the reported case: the same
-   pattern in the same function/class, and the neighbours of the failing input (null/empty, boundary, other time
-   zones, roles or tenants). If the cause is one recent change, undoing that part is a valid fix when nothing
-   else depends on it; say so.
-7. **Verify**: the reproduction test failed before and passes now; the tests of the touched modules pass; the
-   build passes.
+---
 
-## Rules
-- The gate fails a PI whose declared tests include no new test that fails on the unfixed code (`not_reproduced`),
-  except report-only items with no source changes. Missing test commands or an unavailable probe block
-  reproduction verification; return partial with the limitation, never claim a confirmed cause.
-- Not acceptable: catching and ignoring the error, a null check that hides missing data, special-casing the
-  reported input, changing a test's expectation.
-- A configuration or data-handling fix is fine if that is the root cause; say so in `root_cause`.
+## Phase 0: 30-Second Triage (Form A vs Form B)
+Check the item description, `<materials>`, and `template.json`:
 
-## Report
-`root_cause` with the evidence (file:line, request → response, log line, commit id) · `hypotheses` (all of them)
-· `tests_added` (the reproduction test) · `summary` of the fix · `verification` lists the reproduction
-before/after · in the answer (`engineeringRecord` or what the template has): root cause, evidence, fix and how it
-was verified, written for the grader.
+### FORM A: Incident Report / Post-Mortem (Answer-Only, Zero Source Code Edits)
+- **Indicators**:
+  - Item explicitly states: "Out of scope: Changing the application source".
+  - `template.json` contains SRE post-mortem fields (`rootCauseRelease`, `rootCauseComponent`, `containmentFlag`, `affected...`, `incidentRecord`, etc.) and no code `testResults`.
+- **Golden Rule**: **DO NOT build the app, DO NOT start the app server, DO NOT run the full test suite, and DO NOT edit application code.**
+- Target completion time: **3–4 minutes**.
 
-## Done when
-Root cause confirmed by a reproduction test that failed before and passes after · related tests pass · answer
-file filled · no debug leftovers.
+### FORM B: Live Production Hotfix (Source Code Edit Required)
+- **Indicators**:
+  - Source code modification is permitted and required to fix a runtime bug/defect.
+- Target completion time: **5–6 minutes**.
+
+---
+
+## Form A Playbook: Incident Investigation (Deterministic Scripting)
+
+1. **Read Materials & KB**:
+   - Check `<materials>` or `company/` directory for raw search logs, deploy logs, and KB articles.
+   - KB articles (e.g. `KB-OPS-01`) dictate exact naming conventions (e.g. format of release IDs `rel-YYYYMMDD-N`, valid service names, feature flag keys).
+2. **Apply SRE Triangle Correlation (in < 2 minutes)**:
+   - Identify when the incident started (e.g. 10:05 UTC today).
+   - Find the deploy log or git log right before that time: identify the **introducing release** (the first release that turned on the feature or changed the component, not subsequent metric/patch releases).
+   - Identify the affected service component and the exact containment feature flag.
+3. **Deterministic Correlation Scripting (CRITICAL: Zero Mental Math)**:
+   - **NEVER** scroll through hundreds of JSON log lines trying to manually count affected records.
+   - In `answers/<ID>/evidence/`, write a small deterministic script (`derive.mjs`, or `.py`/`.ps1` depending on the environment):
+     - Load JSON logs. Verify `total === returned` to ensure queries were not truncated.
+     - Correlate events by joining related records (e.g. reminders sent after a full settlement).
+     - Parse ISO timestamps (`Date.parse(ts)`) and sort chronologically ascending.
+     - **TRAP**: Never sort opaque request IDs (e.g. `rem-BUN-91d2` vs `rem-BUN-7f3a`); sort strictly by event timestamp `ts`.
+     - Exclude edge cases according to KB rules (e.g. payments that occurred *after* the reminder, or partial payments where balance remained > 0).
+   - Run the script: verify it outputs the exact array of affected IDs and earliest request ID in < 1 second.
+4. **Fill and Validate `submit.json`**:
+   - Copy `challenge/<ID>-submit.json` to `answers/<ID>/submit.json`.
+   - Populate all required fields from your deterministic derivation.
+   - Write a complete `incidentRecord` (impact, timeline, root cause, containment, recovery, prevention).
+   - Include all log snapshots and the derivation script in `evidenceFiles`.
+   - Validate against `challenge/<ID>-submit.schema.json`.
+5. **Checkpoint & Publish**:
+   - Checkpoint candidate and hand off immediately: root publishes it as is.
+
+---
+
+## Form B Playbook: Live Production Hotfix
+
+Order (QDYZMY1K: both PIs spent 5-8 minutes on hand-made log loops and asking root for the search_logs schema; PI-03
+reached its 12-minute cap before its source fix, so it scored 0 for the fix and its red test hurt every later item):
+1. Fix first: read the KB standard and the code, red test, minimal fix, green run of that test and the touched
+   module's tests (test_one, logs to answers/<ID>/evidence/red.log and green.log). Target: minute 4.
+2. At once worker_checkpoint ready_for_evidence: the helper syncs and runs typecheck in the background (a PI runs no
+   build and no full suite).
+3. While it runs: get the incident data in ONE bulk company_lookup as <search_logs> in the brief explains (the ids or
+   the release windows the KB and the deploy entries point to), write answers/<ID>/evidence/derive.mjs over that file,
+   run it, write submit.json. Never page search_logs by hand and never guess parameters (limit, pageSize, take).
+4. run_checks {action: "status"}, then worker_checkpoint candidate. If the fix is not green by your checkpoint_by,
+   hand off the answers anyway and say the fix is missing; a reproduction test without its fix never ships (the
+   helper moves it to evidence).
+5. Never hand off blank report fields while your bulk lookup can still finish: the fix is 25 points, the report
+   fields are 75. A lookup can take minutes when Company Tools is slow: keep derive.mjs ready, and when the job is
+   still running at your return_by call candidate anyway: the helper waits for the job and gives you its file, then
+   run derive.mjs, write the answers and call candidate again. After any resume, check the lookup job first
+   (LXRMBRA2 PI-03: the lookup finished 36 s after a blank handoff and the rework turn never read it).
+
+1. **Locate Failing Frame**:
+   - Map incident error stack trace to exact project `file:line`.
+   - Run `git log -p -n 5 -- <file>`: inspect recent changes on that path.
+2. **Confirm with a Minimal Reproduction Test**:
+   - Write the smallest reproduction test next to existing tests, targeting the reported failure with minimal inputs.
+   - Run `test_one` on the reproduction test: **it MUST fail on the unfixed code**.
+   - A test passing on unfixed code reproduces nothing—fix the test before touching production code.
+3. **Apply Minimal Root-Cause Fix**:
+   - Fix only the root cause (1–5 lines where possible).
+   - Handle edge boundaries (null, empty, type conversions, timezones) cleanly without suppressing errors.
+4. **Verify**:
+   - Run `test_one`: reproduction test now PASSES.
+   - Run related tests of the touched module to confirm zero regressions.
+5. **Checkpoint & Publish**:
+   - Record reproduction before/after in `verification`, checkpoint candidate and hand off: root publishes it at once, nothing re-checks it.
+
+---
+
+## Anti-Patterns to Avoid
+- **Mental Math Trap**: Parsing 50+ lines of raw JSON in agent context leads to skipped records, hallucinated IDs, and failure of exact grader checks. Always use a deterministic script.
+- **Form Confusion**: Attempting to compile and run tests for an Answer-Only incident wastes 5–10 minutes and can cause the Game Master to close the item before submission.
+- **Premature Guessing**: Changing code before writing a failing reproduction test leaves the fix unproven; nothing after your handoff catches it.
+- **Subsequent Release Confusion**: Never attribute root cause to a later monitoring or metric release that merely detected the problem.

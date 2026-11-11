@@ -84,6 +84,14 @@ export function itemFlags(r) {
   return out;
 }
 
+function pickup(u, fixers) {
+  const released = Date.parse(u.releasedAt);
+  const seen = Date.parse(u.seenAt ?? u.discoveredAt ?? '') || (u.startedAt && Number.isFinite(u.dispatchMs) ? Date.parse(u.startedAt) - u.dispatchMs : NaN);
+  const worker = fixers.length ? Math.min(...fixers.map(t => t.start ?? Infinity)) : NaN;
+  const span = (a, b) => (Number.isFinite(a) && Number.isFinite(b) ? b - a : null);
+  return { noticeMs: span(released, seen), pickupMs: span(released, worker), seenPickupMs: span(seen, worker) };
+}
+
 export function matchSummary(bundle) {
   const usage = readJson(join(bundle, '_usage', 'usage.json'));
   if (!usage) return null;
@@ -107,12 +115,19 @@ export function matchSummary(bundle) {
       fixerThreads: fixers.length, fixerModels: [...new Set(fixers.map(t => `${String(t.model ?? '?').replace(/^gpt-/, '')}${t.effort ? `/${t.effort}` : ''}`))],
       fixerCalls: calls, secPerCall: calls ? busy / calls / 1000 : null, reviewerThreads: u.reviewer?.threads ?? 0,
       gates: u.gates ?? 0, gateMs: u.jobs?.run_gate?.ms ?? null, credits: own.reduce((a, t) => a + (t.credits ?? 0), 0), activity: activity[key] ?? null,
+      inputTokens: own.reduce((a, t) => a + (t.tokens?.input_tokens ?? 0), 0),
+      endedAt: u.endedAt ? Date.parse(u.endedAt) : null,
+      // Tốc độ bắt item: đề ra (usage.mjs releaseTimes, giờ máy) → helper thấy → thread fixer đầu tiên bắt đầu. Trận
+      // không còn checkout lúc chạy usage (chưa có releasedAt) chỉ có đoạn helper thấy → thợ bắt đầu.
+      ...pickup(u, fixers),
       judge: s?.judged ? (s.judge ? 'pass' : `fail ${s.highFails.map(h => h.id).join(',')}`) : '—',
       gateVsJudge: s?.gateVsJudge ?? 'n/a', reviewerVsJudge: s?.reviewerVsJudge ?? 'n/a' };
     return { ...row, flags: itemFlags(row) };
   });
-  return { id: usage.matchId, from: usage.window?.from ?? null, credits: usage.credits ?? null, limitAt: usage.quota?.limitAt ?? null,
-    judged: Boolean(judged), items };
+  const roleInput = Object.fromEntries(Object.entries(usage.byRole ?? {}).map(([role, v]) => [role, v.tokens?.input_tokens ?? 0]));
+  return { id: usage.matchId, from: usage.window?.from ?? null, to: usage.window?.to ?? null, credits: usage.credits ?? null,
+    limitAt: usage.quota?.limitAt ?? null, unpriced: usage.unpriced ?? [], rootCalls: usage.byRole?.root?.calls ?? null,
+    rootWaitCalls: usage.rootTriggers ? Object.entries(usage.rootTriggers).filter(([k]) => /wait_agent|send_message/.test(k)).reduce((a, [, v]) => a + v.calls, 0) : null, input: usage.total?.input_tokens ?? null, roleInput, judged: Boolean(judged), items };
 }
 
 export function buildReport(runsDir) {

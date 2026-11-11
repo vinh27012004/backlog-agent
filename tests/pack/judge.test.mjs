@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { buildBench } from '../../tools/judge/bench.mjs';
 import { collectMatch } from '../../tools/judge/collect.mjs';
 import { buildReport } from '../../tools/judge/items.mjs';
 import { scoreMatch } from '../../tools/judge/score.mjs';
-import { usageMatch } from '../../tools/judge/usage.mjs';
+import { releaseTimes, usageMatch } from '../../tools/judge/usage.mjs';
 import { sh, tempDir } from './support.mjs';
 
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
@@ -200,4 +201,60 @@ test('the item table joins usage, judge and titles across matches and flags what
   assert.match(md, /\| BUG-01 · Sidebar covers content \| NEW1: 12m00s ✗ \|/);
   assert.ok(csv.startsWith('match,key,type,points,title,outcome,judge'));
   assert.equal(csv.split('\n').length, 4, 'header and one row per item');
+});
+
+// Benchmark theo bộ đề (bench.mjs): trận cùng bộ item gom một nhóm dù dừng sớm, trận mới so với trận liền trước; mốc
+// thời gian/credit tốt nhất chỉ lấy từ trận nộp ít nhất bằng trận mới, credit trống khi có model ngoài price card.
+test('the bench groups matches by item set and compares the newest with the previous one', () => {
+  const runs = tempDir('mtm-bench-');
+  const big = ['BUG-01', 'BUG-02', 'BUG-03', 'CR-01', 'PI-01'], small = ['BUG-01', 'TASK-01', 'TASK-02'];
+  const match = (id, day, keys, done, credits, unpriced = ['codex-auto-review']) => {
+    const from = Date.UTC(2026, 10, day, 1);
+    const items = Object.fromEntries(keys.map((k, i) => [k, i < done
+      ? { outcome: 'SUBMITTED', ms: (10 + i) * 60_000, endedAt: new Date(from + (20 + i) * 60_000).toISOString(), phases: {}, jobs: {} }
+      : { outcome: 'NOT_STARTED', phases: {}, jobs: {} }]));
+    json(join(runs, id, '_usage', 'usage.json'), { matchId: id, window: { from, to: from + 40 * 60_000 }, credits, unpriced,
+      total: { input_tokens: 1e7 }, byRole: { root: { tokens: { input_tokens: 4e6 } } }, quota: {}, items, threads: [] });
+  };
+  match('S1', 1, small, 3, 50);
+  match('B1', 2, big, 2, 10);                                  // dừng sớm: rẻ nhưng không so được
+  match('B2', 3, big.slice(0, 4), 3, 90, ['gpt-x', 'codex-auto-review']);   // thiếu PI-01 vẫn cùng bộ; credit không tin được
+  match('B3', 4, big, 5, 80);
+  // Chung 4/6 mã với bộ 5 item nhưng có item bộ đó không có: bộ khác (QDO8W480 bị gộp nhầm với bộ 12 item theo Jaccard).
+  match('C1', 5, [...big.slice(0, 4), 'CR-05', 'PI-04'], 6, 70);
+  const { groups, pairs, md } = buildBench(runs);
+  assert.deepEqual(groups.map(g => [g.name, g.matches.map(m => m.id)]),
+    [['Bộ 6 item', ['C1']], ['Bộ 5 item', ['B1', 'B2', 'B3']], ['Bộ 3 item', ['S1']]]);
+  const p = pairs.find(x => x.cur === 'B3');
+  assert.equal(p.prev, 'B2');
+  const row = label => p.metricRows.find(r => r[0] === label);
+  assert.deepEqual(row('Item nộp').slice(1, 4), ['5/5', '3/5', '+2 (+67%) ✓']);
+  assert.deepEqual(row('Credit').slice(1, 5), ['80', '—', '—', '—'], 'B2 has an unpriced model, B1 submitted fewer items');
+  assert.equal(row('Nộp xong item cuối (từ đầu trận)')[1], '24m00s');
+  const pi = p.itemRows.find(r => r[0] === 'PI-01');
+  assert.deepEqual([pi[2], pi[5]], ['· → nộp', 'mới nộp ✓']);
+  assert.match(md, /## Bộ 5 item: B3 so với B2/);
+  assert.match(md, /\*\*Trận mới chưa chấm judge\*\*/);
+  assert.equal(buildBench(runs, { match: 'B2', vs: 'B1' }).pairs[0].prev, 'B1');
+});
+
+// Bench đo từ lúc đề ra: giờ server của bản đầu trừ độ lệch đồng hồ, ước lượng từ các item poller thấy (BTZNI69E: đợt
+// đầu ra 04:08:08 giờ server, helper 04:08:49 mới thấy vì root đang khởi động; server nhanh hơn máy khoảng 2,7 s).
+test('release times come from the server clock, corrected by the skew the poller saw', () => {
+  const teamWork = join(tempDir('mtm-release-'), '.team-work');
+  const page = (key, raw) => { mkdirSync(join(teamWork, 'items', key), { recursive: true }); writeFileSync(join(teamWork, 'items', key, 'page.json'), JSON.stringify(raw)); };
+  page('BUG-01', { revisionNo: 1, revealedElapsedSec: 0, updatedAt: '2026-11-04T04:08:08.298Z' });
+  page('BUG-03', { revisionNo: 1, revealedElapsedSec: 481, updatedAt: '2026-11-04T04:16:09.678Z' });
+  page('CR-01', { revisionNo: 2, revealedElapsedSec: 481, updatedAt: '2026-11-04T04:30:00.000Z' });
+  const journal = { items: {
+    'BUG-01': { discoveredAt: '2026-11-04T04:08:49.984Z' },
+    'BUG-03': { discoveredAt: '2026-11-04T04:16:07.010Z' },
+    'CR-01': { discoveredAt: '2026-11-04T04:16:07.016Z' },
+    'TASK-04': { discoveredAt: '2026-11-04T04:28:07.626Z', releasedAtServer: '2026-11-04T04:28:09.176Z', revealedElapsedSec: 1200 } } };
+  const r = releaseTimes(teamWork, journal);
+  assert.equal(r.skewMs, 2668, 'BUG-03: 04:16:09.678 server, seen 04:16:07.010');
+  assert.equal(r.items['BUG-01'], '2026-11-04T04:08:05.630Z');
+  // Bản sửa đổi đổi updatedAt: lấy giờ bắt đầu trận (04:08:08.298) + revealedElapsedSec 481 s − độ lệch.
+  assert.equal(r.items['CR-01'], '2026-11-04T04:16:06.630Z');
+  assert.equal(r.items['TASK-04'], '2026-11-04T04:28:06.508Z');
 });

@@ -1,0 +1,455 @@
+<mxfile host="app.diagrams.net" pages="3">
+    <diagram id="arch" name="Kiến trúc">
+        <mxGraphModel dx="1448" dy="1336" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1360" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="archv0" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;" value="team-sdlc-pack — kiến trúc Digital Development Team (cập nhật 05/11/2026)" vertex="1">
+                    <mxGeometry x="30" y="20" width="1560" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontStyle=1;" value="TeamWorkspace (D:\mtm\&amp;lt;TEAM_ID&amp;gt;) — máy thi, không sandbox" vertex="1">
+                    <mxGeometry x="20" y="240" width="1660" height="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontStyle=1;strokeColor=#6c8ebf;" value="Phiên Codex app-server (một phiên duy nhất do Player sở hữu)" vertex="1">
+                    <mxGeometry height="520" width="620" x="40" y="280" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontStyle=1;strokeColor=#82b366;" value="MCP servers (stdio, khai báo trong .codex/config.toml)" vertex="1">
+                    <mxGeometry height="520" width="650" x="690" y="280" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontStyle=1;strokeColor=#d6b656;" value="Trạng thái bền trên đĩa" vertex="1">
+                    <mxGeometry x="1370" y="266" width="290" height="930" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=middle;" value="&lt;b&gt;MTM Player (BTC)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;khởi chạy codex app-server làm team_orchestrator&lt;br&gt;gửi frame START_GAME_V4 / RESUME_GAME_V1&lt;br&gt;Stop/Pause = kill cả cây tiến trình&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="110" width="320" x="40" y="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="&lt;b&gt;Game Master + Company Tools MCP&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;/match/&amp;lt;matchId&amp;gt; · Start Work · Submit&lt;br&gt;/api/v1/mcp/&amp;lt;matchId&amp;gt;: kb_search · search_logs · get_test_data&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="110" width="380" x="440" y="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=middle;" value="&lt;b&gt;GitHub remote&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;branch được giao, không force push&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="110" width="240" x="880" y="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=middle;" value="&lt;b&gt;Jev (TypeSafe AI)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;quyết định lựa chọn cố định&lt;br&gt;có fallback luật code + cờ tắt (jev.json)&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="110" width="260" x="1180" y="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="&lt;b&gt;team_orchestrator (root / PM)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;profile team-orchestrator.toml&lt;br&gt;skills: team-orchestrator · game-preparation · team-recovery&lt;br&gt;wait_for_update → nextActions → thao tác agent native&lt;br&gt;spawn_agent · followup_task · stop_worker · publish theo nextActions&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="120" width="560" x="70" y="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=0;opacity=50;" value="" vertex="1">
+                    <mxGeometry height="130" width="560" x="86" y="536" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=0;opacity=70;" value="" vertex="1">
+                    <mxGeometry height="130" width="560" x="78" y="528" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=0;" value="&lt;b&gt;team_fixer × N (một mỗi item, worktree riêng)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;profile team-fixer.toml · model/effort theo tier&lt;br&gt;brief có skill_text + knowledge_hints + company_facts&lt;br&gt;sửa code → ready_for_evidence → run_checks → capture_evidence&lt;br&gt;candidate {result}: helper bổ sung và ghi fix-result bất biến&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="130" width="560" x="70" y="520" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;verticalAlign=middle;" value="&lt;b&gt;team_runtime ở chế độ worker (proxy về root)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;read_item · job_status · worktree status · worker_checkpoint&lt;br&gt;company_lookup chỉ đọc; credential và publish ở helper root&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="80" width="560" x="70" y="700" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;" value="&lt;b&gt;team_runtime — MCP helper Node.js (pack/src/tools.mjs)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;Node built-in · một writer · giữ secret .env&lt;br&gt;boot/poller · autoPrepare · autoPublish (PI / answer-only)&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="330" width="610" x="710" y="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;align=left;spacingLeft=8;" value="&lt;b&gt;core/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;mcp · session · journal · jobs · events&lt;br&gt;git · integration · candidates&lt;br&gt;jsonschema · redact · proxy · http&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="125" width="290" x="725" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv16" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;align=left;spacingLeft=8;" value="&lt;b&gt;match/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;workflow: prepare · brief · checkpoint · publish&lt;br&gt;autoPrepare · autoPublish · autoBaseline&lt;br&gt;game · company (KB/log/test data) · progress · answers&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="125" width="290" x="1020" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv17" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;align=left;spacingLeft=8;" value="&lt;b&gt;env/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;environment · app · applogin · datalock&lt;br&gt;checks (run_checks) · browser · evidence&lt;br&gt;testreport · codegraph + codegraph-state&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="128" width="290" x="725" y="512" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;align=left;spacingLeft=8;" value="&lt;b&gt;decide/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;signals: git grep + topology + KB nội bộ&lt;br&gt;decisions → Jev / fallback luật code&lt;br&gt;models: tier → model, reasoning_effort&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="128" width="290" x="1020" y="512" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv19" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="&lt;b&gt;codegraph MCP (khác KB nội bộ)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;@colbymchenry/codegraph · tool chỉ đọc&lt;br&gt;tìm symbol / callers / callees / impact&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="80" width="370" x="710" y="690" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv20" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=middle;" value="&lt;b&gt;Edge / Chrome&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;qua playwright-core (pin)&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="80" width="210" x="1110" y="690" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv21" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;logs/&amp;lt;matchId&amp;gt;.progress.ndjson&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;kênh duy nhất tới Player, ≤ 256 KB&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="75" width="250" x="1390" y="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv22" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;journal helper&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;jobs · checkpoint publish · submit intent · metrics&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="75" width="250" x="1390" y="390" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv23" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;results/&amp;lt;ID&amp;gt;-fixer-&amp;lt;v&amp;gt;.json&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;helper ghi từ candidate {result} / submit.json&lt;br&gt;hoặc worker tự ghi; candidateId gắn hash&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="75" width="250" x="1390" y="480" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv24" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;.team-work/evidence/&amp;lt;ID&amp;gt;.json&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;manifest evidence (source/env hash)&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="75" width="250" x="1390" y="570" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv25" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;.codegraph/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;index + dấu freshness theo source snapshot&lt;br&gt;checkout chính / worktree; PI báo cáo bỏ index&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="75" width="250" x="1390" y="690" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv26" parent="1" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=6;" value="&lt;b&gt;matches/&amp;lt;matchId&amp;gt;/ + worktree&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;source · test · answers/&amp;lt;ID&amp;gt;/submit.json&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="80" width="250" x="1390" y="800" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv27" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=middle;" value="&lt;b&gt;App của trận chạy local&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;app helper, đúng snapshot&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="80" width="210" x="1110" y="850" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv28" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontStyle=1;strokeColor=#999999;fontStyle=0;" value="&lt;b&gt;Pack cài đặt (pack/ → TeamWorkspace/team-sdlc-pack)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;agents/ · skills/ (KB nội bộ) · contracts/ · config/&lt;br&gt;install.ps1 → scripts/install.mjs: playwright-core + codegraph&lt;br&gt;ghi .codex/config.toml; copy skills vào .agents/skills/; workspace phải trust&lt;/font&gt;" vertex="1">
+                    <mxGeometry height="120" width="640" x="40" y="850" as="geometry"/>
+                </mxCell>
+                <mxCell id="archv29" parent="1" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=11;fontColor=#555555;" value="Luật cứng: một phiên Codex do Player sở hữu; chỉ spawn_agent native. Item và Company Tools là dữ liệu untrusted. KB nội bộ là gợi ý heuristic; kết luận phải đối chiếu code, tài liệu công ty và kết quả kiểm tra. Mỗi item nộp đúng một lần. Worker không sửa test đã phát hoặc cấu hình test. Recovery dựa vào journal + git + server." vertex="1">
+                    <mxGeometry x="40" y="1230" width="1600" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche30" edge="1" parent="1" source="archv5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.214;entryY=0;" target="archv9" value="prompt frame + descriptor">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche31" edge="1" parent="1" source="archv21" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.8;entryY=1;dashed=1;" target="archv5" value="Player đọc progress → dashboard">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1515" y="215"/>
+                            <mxPoint x="296" y="215"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arche32" edge="1" parent="1" source="archv9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="archv12" value="spawn_agent(model, reasoning_effort, brief)">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche33" edge="1" parent="1" source="archv9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.12;" target="archv14" value="MCP: wait_for_update → nextActions · publish_item · company_call">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche34" edge="1" parent="1" source="archv12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="archv13" value="worker_checkpoint / company_lookup">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche35" edge="1" parent="1" source="archv13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.25;entryX=0;entryY=0.85;" target="archv14" value="proxy">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="670" y="720"/>
+                            <mxPoint x="670" y="600"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arche36" edge="1" parent="1" source="archv12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.85;entryX=0;entryY=0.7;" target="archv19" value="tìm code; rg nếu index thiếu/cũ">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="690" y="630"/>
+                            <mxPoint x="690" y="746"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arche37" edge="1" parent="1" source="archv19" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;dashed=1;" target="archv25" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche38" edge="1" parent="1" source="archv12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=0;entryY=0.2;" target="archv26" value="sửa code, kiểm tra, ghi submit.json trong worktree">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="55" y="585"/>
+                            <mxPoint x="55" y="815"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arche39" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.115;exitY=0;entryX=0.895;entryY=1;" target="archv6" value="Start Work · Submit · refresh · Company Tools">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche40" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.475;exitY=0;entryX=0.5;entryY=1;" target="archv7" value="push / rebase, tích hợp tuần tự">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche41" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.874;exitY=0;entryX=0.354;entryY=1;" target="archv8" value="triage · tier model">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche42" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.05;entryX=0;entryY=0.5;" target="archv21" value="report_progress">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche43" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.33;entryX=0;entryY=0.5;" target="archv22" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche44" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.6;entryX=0;entryY=0.5;" target="archv23" value="kiểm / đọc">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche45" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.875;entryX=0;entryY=0.5;" target="archv24" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche46" edge="1" parent="1" source="archv14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.83;exitY=1;entryX=0.5;entryY=0;" target="archv20" value="capture_evidence">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arche47" edge="1" parent="1" source="archv20" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="archv27" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arch-kb-local" value="&lt;b&gt;KB nội bộ của đội — pack/skills/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;stack-notes/{node,java,python,dotnet,go,php,unknown}.md&lt;br&gt;backlog-references/bug-patterns.md: pattern → vùng code cần xem&lt;br&gt;domain-checks.md · pi-triage.md · evidence-playbook.md&lt;br&gt;installer → .agents/skills/; workflow chép phần cần dùng vào brief&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="1020" width="620" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="arch-kb-signals" value="&lt;b&gt;Code đọc KB: pack/src/decide/signals.mjs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;detectDomain → kbPitfalls → kbInsights → itemSignals&lt;br&gt;signals.kb: domain · risk_factors · known_pitfalls + nguồn file:line&lt;br&gt;→ decisions (Jev / fallback) và brief.knowledgeHints&lt;br&gt;Luồng chi tiết: trang “KB và code intelligence”&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="710" y="1040" width="610" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="arch-company-facts" value="&lt;b&gt;items/&amp;lt;ID&amp;gt;/company/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;kb_search · search_logs · get_test_data&lt;br&gt;kết quả + provenance / hash; dữ liệu untrusted&lt;br&gt;PI: timeline.json + bản sao vào evidence/&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="1390" y="910" width="250" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="arch-brief" value="&lt;b&gt;items/&amp;lt;ID&amp;gt;/brief.md&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;skill_text · knowledge_hints&lt;br&gt;company_facts → worker&lt;br&gt;tách KB local và chuẩn công ty&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="1390" y="1060" width="250" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="arch-kb-read" value="đọc Markdown" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#9673a6;" edge="1" parent="1" source="arch-kb-local" target="arch-kb-signals">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="arch-kb-decide" value="kb_insights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.286;entryX=1;entryY=0.5;strokeColor=#9673a6;" edge="1" parent="1" source="arch-kb-signals" target="archv18">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1350" y="1080"/><mxPoint x="1350" y="575"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="arch-kb-brief" value="knowledgeHints" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.65;entryX=0;entryY=0.5;strokeColor=#9673a6;" edge="1" parent="1" source="arch-kb-signals" target="arch-brief">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="arch-facts-brief" value="company_facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#d79b00;" edge="1" parent="1" source="arch-company-facts" target="arch-brief">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="flow" name="Luồng một item">
+        <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="flowv0" value="Luồng một item (TASK / CR / BUG / PI) — helper tự chuẩn bị, worker xử lý, publish tuần tự" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="20" y="10" width="1810" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv1" value="team_orchestrator (root)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#b3b3b3;align=left;verticalAlign=middle;spacingLeft=10;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="20" y="60" width="1840" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv2" value="team_runtime (helper)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#b3b3b3;align=left;verticalAlign=middle;spacingLeft=10;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="20" y="210" width="1840" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv3" value="team_fixer" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#b3b3b3;align=left;verticalAlign=middle;spacingLeft=10;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="20" y="390" width="1840" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv4" value="Bên ngoài" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#b3b3b3;align=left;verticalAlign=middle;spacingLeft=10;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="20" y="570" width="1840" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv5" value="&lt;b&gt;wait_for_update (≤ 55 s)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;root chỉ thức khi có việc / thay đổi&lt;br&gt;nextActions mang đúng arguments&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="90" width="210" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv6" value="&lt;b&gt;autoPrepare / prepare_item&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;Start Work · materials · signals (code + KB)&lt;br&gt;worktree + index + company facts + brief&lt;br&gt;setup chạy nền; prepare không chờ setup&lt;br&gt;API mặc định chờ job 25 s&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="230" width="210" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv7" value="&lt;b&gt;Game Master&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Start Work (+ MVS cho CR/BUG)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="595" width="210" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv8" value="&lt;b&gt;spawn_agent team_fixer&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;dùng nguyên spawn từ nextActions&lt;br&gt;đọc brief có skill_text / knowledge_hints&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="420" y="90" width="210" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv9" value="&lt;b&gt;Đọc code / KB → sửa code&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;chờ setup trước build/test/app&lt;br&gt;company_lookup bổ sung chuẩn/log/data&lt;br&gt;chụp before_fix khi cần; rồi checkpoint&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="420" y="410" width="210" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv10" value="&lt;b&gt;worker_checkpoint&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;ready_for_evidence&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="660" y="430" width="210" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv11" value="&lt;b&gt;Sync → autoChecks → resume&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;helper sync worktree với main&lt;br&gt;run_checks trên source sau sync&lt;br&gt;xung đột / setup mới → root xử lý&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="660" y="240" width="210" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv12" value="&lt;b&gt;run_checks → final evidence&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;typecheck → build; full suite song song&lt;br&gt;cache nếu source + env không đổi&lt;br&gt;app start chờ / dùng lại build&lt;br&gt;sửa submit.json, ghi nhận đúng kết quả&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="900" y="410" width="210" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv13" value="&lt;b&gt;Edge/Chrome → app local&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;playwright-core&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                    <mxGeometry x="900" y="595" width="210" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv14" value="&lt;b&gt;worker_checkpoint candidate&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;{result}: phần kết quả của worker&lt;br&gt;helper thêm files / tests / checks&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="1140" y="430" width="210" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv15" value="&lt;b&gt;Hợp lệ?&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;schema · submit.json&lt;br&gt;test đã phát / cấu hình test&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="1155" y="220" width="180" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv16" value="&lt;b&gt;publish_item {fixResultFile}&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;root: CR/BUG/TASK sửa code&lt;br&gt;PI / answer-only: helper autoPublish&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="1380" y="90" width="210" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv17" value="&lt;b&gt;Publish (single owner)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;candidate hash · verification từ kết quả&lt;br&gt;integrate → push → Submit&lt;br&gt;intent bền trước POST; không nộp lại&lt;br&gt;answer/evidence: chỉ cảnh báo&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="1380" y="220" width="210" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv18" value="&lt;b&gt;GitHub push + GM Submit&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;receipt = submission.id&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                    <mxGeometry x="1380" y="595" width="210" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv19" value="&lt;b&gt;stop_worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;quay lại wait_for_update&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="1620" y="90" width="210" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowv20" value="&lt;b&gt;report_progress&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;progress log NDJSON → Player&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="1620" y="250" width="210" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe21" value="helper autoPrepare; root gọi khi cần" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv5" target="flowv6">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv6" target="flowv7">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe23" value="spawn_worker {spawn}" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.2;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv6" target="flowv8">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="405" y="258"/>
+                            <mxPoint x="405" y="135"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowe24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv8" target="flowv9">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv9" target="flowv10">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe26" value="nhường quyền ghi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="flowv10" target="flowv11">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe27" value="resume + checks đang chạy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv11" target="flowv12">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1005" y="300"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowe28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv12" target="flowv13">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv12" target="flowv14">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe30" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="flowv14" target="flowv15">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe31" value="không: handedOff:false, sửa tiếp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=0.75;entryY=0;dashed=1;strokeColor=#b85450;fontColor=#b85450;" edge="1" parent="1" source="flowv15" target="flowv12">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1057" y="300"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowe32" value="có: bàn giao fix-result bất biến" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv15" target="flowv16">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1365" y="300"/>
+                            <mxPoint x="1365" y="135"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowe33" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv16" target="flowv17">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="flowv17" target="flowv18">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe35" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv17" target="flowv20">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="flowe36" value="receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.15;entryX=0;entryY=0.5;" edge="1" parent="1" source="flowv17" target="flowv19">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1605" y="244"/>
+                            <mxPoint x="1605" y="135"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowe37" value="vòng tiếp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.5;entryY=0;dashed=1;" edge="1" parent="1" source="flowv19" target="flowv5">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1725" y="70"/>
+                            <mxPoint x="285" y="70"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="flowv38" value="Nhánh answer-only: TASK bỏ setup dependency; PI chỉ báo cáo bỏ cả setup và codegraph. Worker đọc source/materials/KB/log, viết submit.json → candidate; helper có thể tự tạo fix-result và autoPublish. PI báo cáo dùng report_only_pi thay skill_text, mục tiêu 1–2 phút; PI sửa code có time-box 12 phút và checkpoint phút 6." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=11;fontColor=#555555;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="750" width="1650" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flow-company" value="&lt;b&gt;Company Tools MCP → facts đã lưu&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;kb_search · search_logs · get_test_data&lt;br&gt;worker bổ sung qua company_lookup&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                    <mxGeometry x="420" y="595" width="450" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flow-prefetch" value="prefetch song song worktree" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=0;strokeColor=#d79b00;" edge="1" parent="1" source="flowv6" target="flow-company">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="405" y="300"/><mxPoint x="405" y="580"/><mxPoint x="645" y="580"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="flow-lookup" value="tra cứu chỉ đọc" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.233;entryY=0;dashed=1;strokeColor=#d79b00;" edge="1" parent="1" source="flowv9" target="flow-company">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="flow-baseline" value="&lt;b&gt;Baseline đã fail ở bản phát&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;owner sửa product code → baseline_fixed → helper commit main; item cần full suite chờ commit này, sync rồi refresh_candidate.&lt;br&gt;Worker không sửa issued tests hoặc cấu hình test; helper không có reviewer/gate chạy lại độc lập.&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="850" width="800" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="flow-recovery" value="&lt;b&gt;Bị kill / resume&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;journal + git + server là nguồn bền; RESUME_GAME_V1 dựng root mới, khôi phục publish / submit intent.&lt;br&gt;Root dùng wait_for_update; worker báo blocked/candidate qua checkpoint, không send_message root.&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+                    <mxGeometry x="1010" y="850" width="820" height="100" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="kb" name="KB và code intelligence">
+        <mxGraphModel dx="1900" dy="1240" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1240" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="kb-title" value="KB và code intelligence — thành phần đang có trong code (05/11/2026)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;fillColor=none;strokeColor=none;align=left;fontSize=22;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="30" y="20" width="1800" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-subtitle" value="KB nội bộ: kinh nghiệm kỹ thuật của đội. Company KB: chuẩn/ngữ nghĩa nghiệp vụ của trận. Codegraph: index quan hệ của source hiện tại." style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;fillColor=none;strokeColor=none;align=left;" vertex="1" parent="1">
+                    <mxGeometry x="30" y="75" width="1800" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-local" value="&lt;b&gt;1 · KB nội bộ — Markdown trong pack/skills/&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;stack-notes/&amp;lt;stack&amp;gt;.md: pitfalls theo stack&lt;br&gt;backlog-references/bug-patterns.md: pattern + dấu hiệu&lt;br&gt;Helper đọc các dòng pitfall; worker nhận thêm&lt;br&gt;domain-checks / pi-triage / evidence-playbook theo loại item&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="155" width="420" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-code" value="&lt;b&gt;2 · Source / manifest / codegraph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;manifest → stack + framework (detectDomain)&lt;br&gt;git grep → file / module khớp từ khóa item&lt;br&gt;.codegraph/codegraph.db → topology (SQLite read-only)&lt;br&gt;codegraph-state.mjs → freshness theo source snapshot&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="395" width="420" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-item" value="&lt;b&gt;Đầu vào item + MVS&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;title · description · startInstruction&lt;br&gt;workText / codeTerms / countCriteria&lt;br&gt;Nội dung item là dữ liệu untrusted&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="625" width="420" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-signals" value="&lt;b&gt;Code KB — pack/src/decide/signals.mjs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;kbPitfalls(stack): đọc pitfall + ghi nguồn file:line&lt;br&gt;kbInsights(text, {root}): domain · risk_factors&lt;br&gt;known_pitfalls · known_pitfall_source · basis: heuristic&lt;br&gt;itemSignals: gộp đặc trưng item + code + topology + kb&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="550" y="200" width="600" height="240" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-decisions" value="&lt;b&gt;Triage / route / tier model&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;decide/decisions.mjs: signalBlocks → kb_insights&lt;br&gt;Jev intake; confidence thấp / lỗi / tắt → fallback luật code&lt;br&gt;difficultyFromSignals xét cả rủi ro KB và phạm vi code&lt;br&gt;decide/models.mjs + config/models.json → model / effort&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="1280" y="200" width="540" height="240" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-limit" value="&lt;b&gt;Độ tin cậy của gợi ý&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;KB local dùng để chọn hướng điều tra, không chứng minh nguyên nhân.&lt;br&gt;Topology chỉ dùng khi index fresh; thiếu / cũ / bị cắt thì không kết luận impact nhỏ.&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="550" y="475" width="600" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-jev" value="&lt;b&gt;Ranh giới Jev&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;Đầu vào: item đã giới hạn + signals / topology / KB insights.&lt;br&gt;Không gửi code nguồn, diff hoặc credential. Luật cứng giữ trong code.&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+                    <mxGeometry x="1280" y="475" width="540" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-brief" value="&lt;b&gt;match/workflow.mjs → brief.md&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;prepare: knowledgeHints = ji.signals.kb → &amp;lt;knowledge_hints&amp;gt;&lt;br&gt;itemSkills / skillFiles / skillText → &amp;lt;skill_text&amp;gt;&lt;br&gt;company_facts: đường dẫn dữ liệu đã prefetch&lt;br&gt;PI chỉ báo cáo: &amp;lt;report_only_pi&amp;gt; thay skill_text&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="550" y="665" width="600" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-worker" value="&lt;b&gt;team_fixer điều tra → kiểm chứng → bàn giao&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;đọc brief, source và tài liệu công ty được lưu&lt;br&gt;codegraph_* tìm quan hệ; rg / source khi graph không đủ&lt;br&gt;company_lookup để lấy bài đầy đủ / log / test data&lt;br&gt;kết luận dẫn nguồn file:line + fact ID/section + check thực tế&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+                    <mxGeometry x="1280" y="665" width="540" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-company" value="&lt;b&gt;3 · Company KB / Company Tools MCP&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;Game Master: /api/v1/mcp/&amp;lt;matchId&amp;gt;&lt;br&gt;kb_search: chuẩn / định nghĩa nghiệp vụ&lt;br&gt;search_logs: log production · get_test_data: QA fixtures&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="945" width="420" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-prefetch" value="&lt;b&gt;tools.mjs + match/company.mjs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;prefetchCompany: PI hoặc item nhắc chuẩn công ty → kb_search&lt;br&gt;test data khi đề nhắc; PI kéo log các service → timeline&lt;br&gt;companyLookup: worker → proxy → helper root → Company MCP&lt;br&gt;API key ở helper root; company_call không-lookup chỉ root&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                    <mxGeometry x="550" y="945" width="600" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-facts" value="&lt;b&gt;Dữ liệu bền / provenance&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;.team-work/items/&amp;lt;ID&amp;gt;/company/*.json + timeline.json&lt;br&gt;saveFact: tool · arguments · kết quả · thời điểm · SHA-256&lt;br&gt;PI báo cáo: copy facts vào answers/&amp;lt;ID&amp;gt;/evidence/&lt;br&gt;Dữ liệu untrusted; mở nguồn đầy đủ trước khi dùng làm chuẩn&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+                    <mxGeometry x="1280" y="945" width="540" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="kb-e1" value="kbPitfalls / pickPitfall" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.2;strokeColor=#9673a6;" edge="1" parent="1" source="kb-local" target="kb-signals">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e2" value="domain + code + topology" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.35;entryX=0;entryY=0.8;strokeColor=#6c8ebf;" edge="1" parent="1" source="kb-code" target="kb-signals">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e3" value="text + MVS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.875;" edge="1" parent="1" source="kb-item" target="kb-signals">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="505" y="690"/><mxPoint x="505" y="410"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e4" value="signals.kb / kb_insights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#9673a6;" edge="1" parent="1" source="kb-signals" target="kb-decisions">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e5" value="knowledgeHints" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.917;entryX=0.5;entryY=0;strokeColor=#9673a6;" edge="1" parent="1" source="kb-signals" target="kb-brief">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1180" y="420"/><mxPoint x="1180" y="620"/><mxPoint x="850" y="620"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e6" value="skillFiles → skillText" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.86;entryX=0;entryY=0.417;strokeColor=#9673a6;dashed=1;" edge="1" parent="1" source="kb-local" target="kb-brief">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="310"/><mxPoint x="480" y="740"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e7" value="brief + spawn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="kb-brief" target="kb-worker">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e8" value="triage.models → spawn_agent" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=1;entryY=0.5;strokeColor=#6c8ebf;" edge="1" parent="1" source="kb-decisions" target="kb-worker">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1850" y="320"/><mxPoint x="1850" y="755"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e9" value="MCP qua helper" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#d79b00;" edge="1" parent="1" source="kb-company" target="kb-prefetch">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e10" value="saveFact / harvestLogs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#d79b00;" edge="1" parent="1" source="kb-prefetch" target="kb-facts">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e11" value="company_facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=0.5;entryY=1;strokeColor=#d79b00;" edge="1" parent="1" source="kb-facts" target="kb-worker">
+                    <mxGeometry relative="1" as="geometry"></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-e12" value="company_lookup bổ sung" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.806;entryX=0.75;entryY=0;strokeColor=#d79b00;dashed=1;" edge="1" parent="1" source="kb-worker" target="kb-prefetch">
+                    <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1215" y="810"/><mxPoint x="1215" y="885"/><mxPoint x="1000" y="885"/></Array></mxGeometry>
+                </mxCell>
+                <mxCell id="kb-footer" value="Code KB đã có: signals.mjs đọc KB local; workflow.mjs đưa gợi ý / skill vào brief; tools.mjs và company.mjs lấy KB công ty. Codegraph là MCP riêng, không thay thế hai nguồn KB này." style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;spacing=10;fillColor=#f5f5f5;strokeColor=#666666;fillColor=none;strokeColor=none;align=left;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="1130" width="1780" height="65" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

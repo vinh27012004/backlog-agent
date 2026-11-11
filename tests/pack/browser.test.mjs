@@ -1,12 +1,12 @@
-// capture_evidence: Edge headless qua CDP trên một app giả ở localhost (đăng nhập → form → chụp).
+// capture_evidence: Edge headless qua Playwright trên một app giả ở localhost (đăng nhập → form → chụp).
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
-import { captureEvidence, evidencePath, findBrowser } from '../../pack/src/env/browser.mjs';
-import { install, McpClient, sh, tempDir } from './support.mjs';
+import { captureEvidence, evidencePath, findBrowser, profileHint } from '../../pack/src/env/browser.mjs';
+import { ensurePlaywright, install, McpClient, sh, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
 
@@ -21,7 +21,7 @@ f.addEventListener('submit', async e => { e.preventDefault();
   if (r.ok) location.href = '/dashboard'; else document.body.insertAdjacentHTML('beforeend', '<p>Invalid</p>'); });
 </script>`);
 const DASHBOARD = page('<h1>Dashboard</h1><a href="/invoices/new">New invoice</a>');
-// Lớp phủ che nút (giống sidebar đè nội dung): click thường phải báo ELEMENT_OBSCURED.
+// Lớp phủ che nút (giống sidebar đè nội dung): click bấm xuyên lớp che và bước ghi obscuredBy.
 const COVERED = page(`<button id="hidden" style="position:absolute;left:20px;top:20px">Save</button>
 <nav style="position:fixed;left:0;top:0;width:300px;height:100%;background:#222;color:#fff">Sidebar</nav><div id="out"></div>
 <script>hidden.addEventListener('mousedown', () => out.textContent = 'saved');</script>`);
@@ -60,6 +60,7 @@ function app() {
 }
 
 const browser = findBrowser();
+if (browser) ensurePlaywright();
 
 test('download preserves authenticated HTTP/Blob bytes and reports a download timeout', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-download-'), 'BUN'), bytes = Buffer.from('\ufeffname,value\r\n"Saigon,\nLtd",2\r\n');
@@ -116,15 +117,16 @@ test('capture_evidence logs in, fills a form and saves a screenshot', { skip: !b
   }
 });
 
-test('capture_evidence reports covered elements and can force the click', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+// 428c517 (02/11): bị che thì luôn bấm xuyên, không đợi force (sidebar của BUG-01 đè tab của mọi item khác).
+test('capture_evidence clicks through a covering element and reports the cover', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
   const { server, url } = await app();
   try {
-    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [
-      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save', timeoutMs: 800 }] }), /ELEMENT_OBSCURED.*Sidebar/);
+    const t0 = Date.now();
     const res = await captureEvidence({ teamWorkspace: tw, steps: [
-      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save', timeoutMs: 800, force: true }, { action: 'assertText', text: 'saved' }] });
+      { action: 'goto', url: `${url}/covered` }, { action: 'click', text: 'Save' }, { action: 'assertText', text: 'saved' }] });
     assert.match(res.steps.find(s => s.forced).obscuredBy, /Sidebar/);
+    assert.ok(Date.now() - t0 < 8000, 'a covered click does not wait the full timeout');
   } finally {
     server.close();
   }
@@ -154,15 +156,19 @@ test('capture_evidence force clicks through a cover with real input; selector an
   }
 });
 
-test('capture_evidence rejects Playwright selectors and reports the page on a failed step', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+// Practice #5 (BC3JL6ZC): fixer viết selector Playwright; từ 03/11 engine là Playwright nên cú pháp đó chạy được.
+test('capture_evidence accepts Playwright selectors and reports the page on a failed step', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
   const tw = join(tempDir('mtm-browser-'), 'BUN');
-  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "[role=tab]:has-text('Invoices')" }] }),
-    e => e.code === 'INVALID_SELECTOR' && /selector, text/.test(e.message));
-  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'click', selector: "button >> nth=0" }] }), /INVALID_SELECTOR/);
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: 'http://127.0.0.1:1/' }, { action: 'click' }] }),
+    e => e.code === 'INVALID_ARGUMENT' && /needs a selector or a text/.test(e.message));
   const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
+    const ok = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'click', selector: "[role=tab]:has-text('Invoices')" }, { action: 'waitFor', selector: 'text=New invoice', timeoutMs: 2000 },
+      { action: 'click', selector: 'button >> nth=0' }] });
+    assert.match(ok.visibleText, /New invoice/);
     const t0 = Date.now();
     await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'click', selector: 'button[' }] }),
       e => e.code === 'INVALID_SELECTOR' && e.details.failedStep === 2);
@@ -175,6 +181,31 @@ test('capture_evidence rejects Playwright selectors and reports the page on a fa
       assert.deepEqual(e.details.stepsDone, [{ step: 1, action: 'goto' }]);
       return true;
     });
+  } finally {
+    server.close();
+  }
+});
+
+// OMZJW0S0/UOMNKT6Z BUG-09: ảnh dự phòng khi bước hỏng mang đúng tên ảnh kịch bản (tc-02-*.png), dễ bị nộp như evidence đạt.
+test('a failed step writes a separately named diagnostic image, never the scenario image, and keeps earlier ones', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const evidence = join(tw, 'matches', 'M1', 'M1', 'answers', 'BUG-09', 'evidence');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(TABS); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url },
+      { action: 'screenshot', path: join(evidence, 'tc-01-schedules.png') },
+      { action: 'click', text: 'Receipts', timeoutMs: 500 },
+      { action: 'screenshot', path: join(evidence, 'tc-02-window-14.png') }] }), e => {
+      assert.equal(e.details.failedStep, 3);
+      assert.equal(e.details.diagnostic, join(evidence, 'tc-02-window-14.FAILED-step3.png'));
+      assert.deepEqual(e.details.screenshotsDone, [join(evidence, 'tc-01-schedules.png')]);
+      return true;
+    });
+    assert.ok(existsSync(join(evidence, 'tc-01-schedules.png')), 'the scenario captured before the failure stays');
+    assert.ok(!existsSync(join(evidence, 'tc-02-window-14.png')), 'no file carries the name of the scenario that failed');
+    assert.ok(existsSync(join(evidence, 'tc-02-window-14.FAILED-step3.png')));
   } finally {
     server.close();
   }
@@ -225,11 +256,99 @@ test('capture_evidence browserProfile keeps the login cookie across calls', { sk
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
     await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/login` }] });
-    const res = await captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] });
-    assert.match(res.visibleText, /Accounting/);
+    assert.ok(existsSync(join(tw, 'team-sdlc-pack', 'local', 'browser', 'solova-admin.json')));
+    // CR-01 ở 3OCNFC54 chụp bốn kịch bản song song: cùng profile không khoá nhau.
+    const all = await Promise.all([1, 2, 3].map(() =>
+      captureEvidence({ teamWorkspace: tw, browserProfile: 'solova-admin', steps: [{ action: 'goto', url: `${url}/accounting` }] })));
+    for (const res of all) assert.match(res.visibleText, /Accounting/);
+    const fresh = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `${url}/accounting` }] });
+    assert.match(fresh.visibleText, /Please sign in/);
   } finally {
     server.close();
   }
+});
+
+// OMZJW0S0 BUG-09: app lưu budget local trong IndexedDB; profile chỉ giữ cookie/localStorage nên lần gọi sau về /bootstrap.
+const IDB_PAGE = page(`<div id="out">loading</div><script>
+const open = indexedDB.open('budget', 1);
+open.onupgradeneeded = () => open.result.createObjectStore('rows');
+open.onsuccess = () => {
+  const db = open.result;
+  // Khoá 0 và giá trị nhị phân như block SQLite của budget local (Playwright bỏ khoá 0 khi lưu).
+  if (location.hash === '#add') {
+    const tx = db.transaction('rows', 'readwrite');
+    tx.objectStore('rows').put(new TextEncoder().encode('Edge 14 days').buffer, 0);
+    tx.objectStore('rows').put(new TextEncoder().encode('Beyond 15 days').buffer, 1);
+    tx.oncomplete = () => { out.textContent = 'saved'; };
+  } else {
+    const req = db.transaction('rows').objectStore('rows').getAll();
+    req.onsuccess = () => { out.textContent = 'rows: ' + (req.result.map(b => new TextDecoder().decode(b)).join(', ') || 'none'); };
+  }
+};
+</script>`);
+
+test('capture_evidence browserProfile keeps IndexedDB data across calls', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(IDB_PAGE); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await captureEvidence({ teamWorkspace: tw, browserProfile: 'bug09', steps: [
+      { action: 'goto', url: `${url}/#add` }, { action: 'assertText', text: 'saved' }] });
+    const again = await captureEvidence({ teamWorkspace: tw, browserProfile: 'bug09', steps: [
+      { action: 'goto', url: `${url}/` }, { action: 'assertText', text: 'rows:' }] });
+    assert.match(again.visibleText, /rows: Edge 14 days, Beyond 15 days/);
+    const fresh = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `${url}/` }, { action: 'assertText', text: 'rows:' }] });
+    assert.match(fresh.visibleText, /rows: none/);
+  } finally {
+    server.close();
+  }
+});
+
+// Snapshot có bản ghi out-of-line thiếu khoá (như file cũ lưu trước khi sửa): Playwright không khôi phục được IndexedDB;
+// khi đó vẫn phải giữ cookie đăng nhập thay vì mở phiên trắng.
+test('a saved IndexedDB that cannot be restored still restores the login cookie', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(/sid=ok/.test(req.headers.cookie ?? '') ? '<h1>Accounting</h1>' : '<h1>Please sign in</h1>');
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const dir = join(tw, 'team-sdlc-pack', 'local', 'browser');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'broken-idb.json'), JSON.stringify({
+    cookies: [{ name: 'sid', value: 'ok', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+    origins: [{ origin, localStorage: [], indexedDB: [{ name: 'actual', version: 1, stores: [
+      { name: 'data', autoIncrement: false, records: [{ value: 'block without its key' }], indexes: [] }] }] }] }));
+  try {
+    const res = await captureEvidence({ teamWorkspace: tw, browserProfile: 'broken-idb', steps: [{ action: 'goto', url: `${origin}/accounting` }] });
+    assert.match(res.visibleText, /Accounting/);
+    assert.ok(res.steps.some(s => s.action === 'browserProfile' && /IndexedDB could not be restored/.test(s.note)), JSON.stringify(res.steps));
+  } finally {
+    server.close();
+  }
+});
+
+test('a visible element that never becomes clickable reports why; a closed port fails at goto', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page('<button disabled>Record payment</button>')); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `http://127.0.0.1:${server.address().port}/` },
+      { action: 'click', text: 'Record payment', timeoutMs: 800 }] }), e => {
+      assert.equal(e.code, 'ELEMENT_NOT_ACTIONABLE');
+      assert.match(e.message, /not enabled/);
+      assert.equal(e.details.failedStep, 2);
+      return true;
+    });
+  } finally { server.close(); }
+  const closed = createServer();
+  await new Promise(r => closed.listen(0, '127.0.0.1', r));
+  const port = closed.address().port;
+  await new Promise(r => closed.close(r));
+  await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url: `http://127.0.0.1:${port}/` }] }),
+    e => e.code === 'NAVIGATION_FAILED' && /ERR_CONNECTION_REFUSED/.test(e.message) && e.details.failedStep === 1);
 });
 
 // Thư mục trận giả có app node với seed đọc ADMIN_* (mặc định admin/secret, như prisma/seed.ts của Solova).
@@ -395,6 +514,47 @@ test('capture_evidence drags with real mouse events and presses Space', { skip: 
   }
 });
 
+// BTZNI69E BUG-04: card của @hello-pangea/dnd là <button> trong drag handle; thư viện bỏ qua chuột/phím bắt đầu trong
+// button nên kéo chuột chỉ mở card. Trang giả chặn như vậy và chỉ nhận Space/mũi tên trên chính handle.
+const RFD = page(`<div data-rfd-droppable-id="L1" style="margin:40px;width:200px">
+${['A', 'B', 'C'].map(t => `<div data-rfd-draggable-id="${t}" data-rfd-drag-handle-draggable-id="${t}" tabindex="0"><button style="width:100%;height:40px">${t}</button></div>`).join('')}
+</div><div id="order"></div>
+<script>
+const drop = document.querySelector('[data-rfd-droppable-id]');
+const show = () => order.textContent = 'order ' + [...drop.children].map(n => n.dataset.rfdDraggableId).join(',');
+show(); let lifted = null;
+window.addEventListener('mousedown', e => { if (e.target.closest('button')) return; });
+window.addEventListener('keydown', e => {
+  const h = e.target.closest?.('[data-rfd-drag-handle-draggable-id]');
+  if (!h || e.target !== h) return;
+  if (e.key === ' ') { e.preventDefault(); if (!lifted) lifted = h; else { lifted = null; show(); } return; }
+  if (!lifted) return;
+  if (e.key === 'ArrowUp' && lifted.previousElementSibling) drop.insertBefore(lifted, lifted.previousElementSibling);
+  if (e.key === 'ArrowDown' && lifted.nextElementSibling) drop.insertBefore(lifted.nextElementSibling, lifted);
+  lifted.focus();
+});
+</script>`);
+
+test('capture_evidence drags a @hello-pangea/dnd card whose content is a button with the keyboard on its handle', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const server = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(RFD); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const card = t => ({ selector: `[data-rfd-draggable-id="${t}"]` });
+    const res = await captureEvidence({ teamWorkspace: tw, steps: [
+      { action: 'goto', url: `http://127.0.0.1:${server.address().port}/` },
+      { action: 'drag', ...card('C'), to: card('A'), position: 'before' },
+      { action: 'assertText', text: 'order C,A,B' },
+      { action: 'drag', ...card('B'), to: card('C'), position: 'before' },
+      { action: 'assertText', text: 'order B,C,A' },
+      { action: 'drag', ...card('B'), to: card('A'), position: 'after' },
+      { action: 'assertText', text: 'order C,A,B' }] });
+    assert.deepEqual(res.steps.filter(s => s.action === 'drag').map(s => [s.mode, s.moves]), [['keyboard', -2], ['keyboard', -2], ['keyboard', 2]]);
+  } finally {
+    server.close();
+  }
+});
+
 // PXWV53VC: đường dẫn tương đối bị từ chối (cả ba worker), ảnh dashboard chụp khi còn "—", assertText ngay sau click
 // điều hướng báo ASSERT_FAILED.
 test('evidence paths may be relative to context.matchRoot', () => {
@@ -434,4 +594,47 @@ test('screenshot waits for pending requests and loading indicators; assertText w
     assert.equal(res.steps.find(s => s.step === 5).found, true);
     assert.ok(res.steps.filter(s => s.action === 'screenshot').every(s => !s.unsettled), JSON.stringify(res.steps));
   } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});
+
+// QDO8W480 CR-05: challenge/CR-05-seed.js phải chạy trong trang của app (page.evaluate(seed, data)); không có bước nào
+// làm được nên thợ tự viết script Playwright, hết giờ, TC-02..04 NOT_RUN.
+test('runScript evaluates an issued script in the open page with data from the item files', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-script-'), 'BUN'), checkout = join(tw, 'matches', 'M1'), matchRoot = join(checkout, 'M1');
+  const itemDir = join(checkout, '.team-work', 'items', 'CR-05');
+  mkdirSync(join(matchRoot, 'src'), { recursive: true }); mkdirSync(join(itemDir, 'files', 'challenge'), { recursive: true }); mkdirSync(join(itemDir, 'company'), { recursive: true });
+  writeFileSync(join(matchRoot, 'src', 'app.js'), 'x\n');
+  sh('git', ['init', '-q'], checkout); sh('git', ['add', '-A'], checkout);
+  sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'issued'], checkout);
+  writeFileSync(join(itemDir, 'files', 'challenge', 'CR-05-seed.js'),
+    '// Evaluate this function in the app\'s page with the fixture\'s `data` as its argument.\nasync data => {\n  for (const c of data.categories) await window.$send(\'category-create\', c);\n  return { created: data.categories.length };\n};\n');
+  writeFileSync(join(itemDir, 'files', 'challenge', 'broken.js'), 'async () => { throw new Error("no budget is open"); }');
+  writeFileSync(join(itemDir, 'company', '01-get_test_data.json'), JSON.stringify({ tool: 'get_test_data', content: [{ type: 'text', text: JSON.stringify({ data: { categories: [{ name: 'Rent' }, { name: 'Food' }] } }) }] }));
+  writeFileSync(join(matchRoot, 'src', 'mine.js'), '() => 1');
+  const server = createServer((req, res) => res.end('<!doctype html><ul id="list"></ul><script>window.$send = async (name, c) => { const li = document.createElement("li"); li.textContent = name + " " + c.name; list.append(li); };</script>'));
+  await new Promise(ok => server.listen(0, '127.0.0.1', ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  const context = { backlogItemKey: 'CR-05', matchRoot, scenario: 'CR-05-TC-03', phase: 'final', appMode: 'production' };
+  try {
+    const r = await captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url },
+      { action: 'runScript', file: 'challenge/CR-05-seed.js', argFile: 'company/01-get_test_data.json', argPath: 'data' },
+      { action: 'assertText', text: 'category-create Food' }] });
+    const step = r.steps.find(s => s.action === 'runScript');
+    assert.deepEqual(step.result, { created: 2 });
+    assert.match(r.visibleText, /category-create Rent/);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/broken.js' }] }),
+      e => e.code === 'SCRIPT_FAILED' && /no budget is open/.test(e.message) && e.details.failedStep === 2);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: join(matchRoot, 'src', 'mine.js') }] }),
+      e => e.code === 'PATH_NOT_ALLOWED' && /files issued for CR-05/.test(e.message));
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js' }] }), /needs context/);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js', argFile: 'company/01-get_test_data.json', argPath: 'data.rows' }] }), /argPath data.rows: no rows/);
+  } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});
+
+// EXP3I47A BUG-09: profile hỏng sau "Try Demo", mỗi goto /schedules rơi về /bootstrap; ba lần thử trên cùng profile (−65).
+test('a step that fails after the app redirected a restored profile suggests a new browserProfile', () => {
+  const hint = profileHint({ profile: 'bug09-desktop', restored: true, gotoUrl: 'http://localhost:3100/schedules', url: 'http://localhost:3100/bootstrap' });
+  assert.match(hint, /restored browserProfile "bug09-desktop" and the app sent \/schedules to \/bootstrap.*new browserProfile name.*not one of your repair retries/);
+  assert.equal(profileHint({ profile: 'p', restored: false, gotoUrl: 'http://localhost:3100/schedules', url: 'http://localhost:3100/bootstrap' }), null, 'a fresh profile: nothing saved to blame');
+  assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100/schedules/', url: 'http://localhost:3100/schedules' }), null, 'no redirect');
+  assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100', url: 'http://localhost:3100/budget' }), null, 'the root page moving on is normal');
+  assert.equal(profileHint({ profile: null, restored: true, gotoUrl: 'http://localhost:3100/a', url: 'http://localhost:3100/b' }), null);
 });

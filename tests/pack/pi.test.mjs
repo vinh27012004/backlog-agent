@@ -9,6 +9,9 @@ const near = (iso, ms, slack = 5_000) => assert.ok(Math.abs(Date.parse(iso) - ms
 test('release minutes come from the match README', () => {
   assert.deepEqual(parseReleaseMinutes('Duration: 40 minutes. Keep exam-info.json unchanged. Answers begin empty; Game Master releases '
     + 'briefs at minutes 0, 14 and 29 and supplies submission templates when each backlog starts.'), [0, 14, 29]);
+  // Bộ 10 item (CA3WKX60) không có "at": trước đây trả null, poller không biết mốc ra đề.
+  assert.deepEqual(parseReleaseMinutes('Duration: 40 minutes, ten backlog items released in four waves (minutes 0, 8, 12 and 20). '
+    + 'Some items have their own short deadline from their release; Game Master closes them when it passes.'), [0, 8, 12, 20]);
   assert.deepEqual(parseReleaseMinutes('trận 40 phút; đề mở ở phút 0, 14, 29'), [0, 14, 29]);
   assert.equal(parseReleaseMinutes('Duration: 40 minutes. Submit source changes and answers.'), null);
   assert.equal(parseReleaseMinutes(undefined), null);
@@ -28,15 +31,20 @@ test('a PI attempt is capped and gets a checkpoint; other items keep the match o
   assert.equal(task.checkpointBy, undefined);
   left = 8;
   const late = rt.timeBox({ key: 'PI-02', deadlineMinutes: null });
-  assert.equal(late.workMinutes, 3);
-  near(late.checkpointBy, now + 3 * 60_000);
+  // Helper tự publish PI: chừa 2 phút (QDO8W480: PI hạn 10 phút bị chừa 5, PI-04 còn 3,5 phút và chưa sửa source).
+  assert.equal(late.workMinutes, 6);
+  assert.equal(late.reserveMinutes, 2);
+  near(late.checkpointBy, now + 6 * 60_000);
+  assert.equal(rt.timeBox({ key: 'BUG-01', deadlineMinutes: 15 }).workMinutes, 3, 'root publishes BUG/CR: 5 minutes kept');
+  rt.runtimeConfig = () => ({ autoPublish: false });
+  assert.equal(rt.timeBox({ key: 'PI-02', deadlineMinutes: 10 }).workMinutes, 3, 'autoPublish off: root publishes the PI too');
 });
 
 test('a job wait returns early when a PI is released, and at once while one waits to be started', async () => {
   const rt = new Runtime({ teamWorkspace: tempDir('mtm-pi-') });
   let pending = [];
   rt.pendingPI = () => pending;
-  const job = rt.jobs.start('run_gate', () => new Promise(resolve => setTimeout(() => resolve({ passed: true }), 2_500)));
+  const job = rt.jobs.start('publish_item', () => new Promise(resolve => setTimeout(() => resolve({ passed: true }), 2_500)));
   setTimeout(() => rt.events.push('ITEM_NEW', { key: 'BUG-03', itemType: 'BUG' }), 100);   // item khác không cắt lượt chờ
   setTimeout(() => { pending = ['PI-01']; rt.events.push('ITEM_NEW', { key: 'PI-01', itemType: 'PI', type: 'PI' }); }, 300);
   const t0 = Date.now();

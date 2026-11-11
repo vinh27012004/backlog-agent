@@ -6,6 +6,29 @@ rồi đối chiếu từng mục dưới đây với transcript (`~/.codex/sess
 có `agent_path`) và `<checkout>/.team-work/journal.json`. Ghi kết quả vào `practice-log.md` mục #8; mục nào đạt thì xoá
 khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục #7, "Đối chiếu checklist".
 
+> **03/11:** bỏ gate, `team_reviewer`, `team_pi_hypothesis`, `team_verifier` và verified mode. Mục nào về gate, main gate,
+> pre-gate, reviewer, solver hay checker giả thuyết không còn áp dụng; thay vào đó kiểm: mỗi item đúng một fixer (thêm
+> một worker evidence khi tier strong), fixer chạy cả bộ test trước evidence, `publish_item` nộp ngay sau bàn giao, và
+> `/judge-practice` có bao nhiêu item nộp sai mà trước đây reviewer/gate có thể bắt.
+>
+> **Sau J56ZZWSS (03/11):** bỏ worker evidence riêng của tier strong; `worker_checkpoint candidate` kiểm fix-result,
+> submit.json và cấu hình test; root chỉ vòng `wait_agent` → `wait_for_update`; `prepare_item`/`publish_item` chờ job
+> 25 s; `capture_evidence` chờ trang yên tới 12 s và bỏ qua favicon/ảnh. Kiểm ở trận sau:
+> - [ ] Mỗi item đúng một `team_fixer`; không còn `spawn_evidence_worker`, `evidence_pending`.
+> - [ ] Có lần `handedOff:false` nào không, worker sửa trong một lượt; không còn `RESULT_INVALID` ở `publish_item`;
+>       worker không tự viết script kiểm schema (tìm `jsonschema`, `Test-Json`, `ajv` trong transcript fixer).
+> - [ ] Không item nào đổi `vitest.config.*` hay file setup test (`git diff <seed> -- '*config*'` trên commit nộp).
+> - [ ] Root: số lần `next_actions` và `job_status` (J56ZZWSS: 32 và 12 trên 105 lượt).
+> - [ ] Số ảnh có `unsettled` và số lần chụp lại cùng kịch bản (J56ZZWSS: 9/27 ảnh unsettled).
+> - [ ] UI fix cần bản dev dùng class logical có breakpoint (`md:ms-*`, `md:ps-*`, `md:start-*`): fixer dùng rule CSS
+>       thường hoặc class vật lý ngay, không gỡ lỗi Tailwind. J56ZZWSS: build production có `.md:ms-sidebar`, bản dev
+>       thì không (kể cả `@source inline`), worker mất ~10 phút rồi chuyển sang rule CSS thường.
+>       Nguyên nhân (kiểm chứng 03/11, tái hiện ở cả checkout chính, không do worktree): Tailwind v4 sinh
+>       `.md\:ms-x { @media (...) { margin-inline-start } }`; `next dev --turbo` đưa CSS qua Lightning CSS 1.32 với
+>       browserslist mặc định của Next (Chrome 64, Safari 12), nó hạ thuộc tính logical thành `margin-left` + `:lang()`
+>       và với `@media` lồng trong rule thì bỏ mất khai báo, còn lại `@media { }` rỗng. `md:ml-*` và rule thường
+>       `@media (...) { .x { margin-inline-start } }` không bị. `next build` (webpack) không qua bước này.
+
 ## Trước trận
 
 - [ ] Mở Player **0.9.39** ở `D:\mtm\MTM-PLAYER\0.9.39\mtm-player.exe`; không mở bản 0.9.35.

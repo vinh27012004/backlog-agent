@@ -10,13 +10,18 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { digest, sourceSnapshot } from '../core/candidates.mjs';
 import { parseEnv } from './applogin.mjs';
 import { detectProfile } from './environment.mjs';
-import { childEnv, killTree } from '../core/jobs.mjs';
+import { childEnv, killTree, pwshScript } from '../core/jobs.mjs';
 import { redact } from '../core/redact.mjs';
 import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const FIRST_PORT = 3100;
 const LAST_PORT = 3199;
-const MAX_WAIT_SECONDS = 50;
+// Một lần gọi chờ tối đa 110 s (< tool_timeout_sec 120) và trả về ngay khi app sẵn sàng; chờ dương nào cũng là chờ tối
+// đa. QXUD1QAI CR-07: app start trả "starting" sau 50 s lúc 16:45:56, app lên lúc 16:46:22, worker không hỏi lại và
+// bàn giao không có ảnh ở 16:47:39 (mất 19 điểm). Hạn chung cho chờ build của run_checks và chờ app trả lời.
+const MAX_WAIT_SECONDS = 110;
+const deadlineOf = waitSeconds => Date.now() + (Number(waitSeconds) > 0 ? MAX_WAIT_SECONDS : 0) * 1000;
+const WAIT_HINT = 'waitSeconds 110 (start that exec with // @exec: {"yield_time_ms": 120000}); it returns as soon as the app answers';
 const PORT_RETRIES = 3;
 const WRAPPER = "const [cmd, ...args] = JSON.parse(process.argv[1]); "
   + "const r = require('child_process').spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true }); process.exit(r.status ?? 1);";
@@ -31,7 +36,7 @@ export function readState(teamWorkspace, key) {
 
 // Bản build production gần nhất của một thư mục app: snapshot source/môi trường lúc build và dấu của thư mục build
 // (.next/BUILD_ID của Next.js). Start lại cùng snapshot thì chỉ start (NBDB5U0O: BUG-02 build hai lần đúng một source,
-// ~35 s mỗi lần); gate cùng snapshot coi bước build đã pass (tools.mjs, runGate). Ai build thư mục đó (app, gate) thì ghi.
+// ~35 s mỗi lần). App build thư mục đó thì ghi.
 const buildsDir = teamWorkspace => join(teamWorkspace, 'team-sdlc-pack', 'local', 'builds');
 const buildFile = (teamWorkspace, root) => join(buildsDir(teamWorkspace),
   `${digest(process.platform === 'win32' ? resolve(root).toLowerCase() : resolve(root)).slice(0, 24)}.json`);
@@ -109,7 +114,7 @@ export function appCommand(matchRoot, port, mode = 'production') {
   let pkg = {};
   try { pkg = JSON.parse(readFileSync(join(profile.root, 'package.json'), 'utf8')); } catch { /* detectProfile đã đọc được */ }
   const scripts = pkg.scripts ?? {};
-  const pm = profile.packageManager;
+  const pm = profile.packageManagerCommand ?? profile.packageManager;
   const viaNext = script => (/^next (start|dev)\b/.test(script ?? '') ? `${pm} exec ${script} -p ${port}` : null);
   const dev = scripts.dev ? viaNext(scripts.dev) ?? `${pm} run dev` : null;
   if (mode === 'dev') return dev ? { profile, build: null, start: dev, mode: 'dev' } : { profile, error: 'package.json has no dev script' };
@@ -163,8 +168,7 @@ async function responds(port) {
 // Chờ app trả lời HTTP (bất kỳ mã nào), tiến trình chết, hoặc hết waitSeconds. Chỉ `ready` khi tiến trình của mình còn
 // sống: L7TZXHII trả `ready` vì app lạ trên port trả lời trong lúc app của item đã chết vì EADDRINUSE. App chết vì
 // port bị chiếm (lệnh start chỉ chạy sau khi build xong) thì start lại không build trên port khác, tối đa PORT_RETRIES lần.
-async function settle(teamWorkspace, key, waitSeconds) {
-  const deadline = Date.now() + Math.min(MAX_WAIT_SECONDS, Math.max(0, Number(waitSeconds) || 0)) * 1000;
+async function settle(teamWorkspace, key, deadline) {
   for (;;) {
     const s = readState(teamWorkspace, key);
     if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
@@ -179,7 +183,7 @@ async function settle(teamWorkspace, key, waitSeconds) {
       const retries = s.retries ?? 0;
       if (retries < PORT_RETRIES && /EADDRINUSE/.test(sinceLaunch(s))) {
         await launch(teamWorkspace, key, locate(teamWorkspace, s.matchRoot), s.requestedMode ?? s.mode, false, retries + 1,
-          { built: s.built, snapshot: s.snapshot ?? null, reusedBuild: s.reusedBuild });
+          { built: s.built, snapshot: s.snapshot ?? null, reusedBuild: s.reusedBuild }, s.custom ?? null);
         continue;
       }
       rmSync(stateFile(teamWorkspace, key), { force: true });
@@ -192,7 +196,7 @@ async function settle(teamWorkspace, key, waitSeconds) {
     if (Date.now() >= deadline) {
       return { state: 'starting', port: s.port, pid: s.pid, log: s.log, seconds: Math.round((Date.now() - Date.parse(s.startedAt)) / 1000),
         ...(s.reusedBuild ? { reusedBuild: s.reusedBuild } : {}),
-        hint: 'Still building or starting: call app status with waitSeconds (up to 50).' };
+        hint: `Still building or starting: call app status with ${WAIT_HINT}. Prepare your capture steps meanwhile.` };
     }
     await sleep(1000);
   }
@@ -208,6 +212,58 @@ async function noteBuild(teamWorkspace, key, s) {
   if (current?.pid === s.pid) writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ ...current, recorded: true }));
 }
 
+// run_checks của chính item đang build thư mục này (helper tự chạy nó sau sync ở ready_for_evidence): chờ nó xong để
+// dùng lại bản build, thay vì build chồng lên cùng thư mục .next (08OQBPW8: app tự build 56 s rồi run_checks build
+// lại). Trạng thái đọc từ file vì run_checks có thể chạy trong helper của root.
+async function checksBuilding(where, key, deadline) {
+  const file = join(dirname(where.logDir), 'items', key, 'checks.json');
+  for (;;) {
+    let rec = null;
+    try { rec = JSON.parse(readFileSync(file, 'utf8')); } catch { /* chưa có run_checks */ }
+    // rec.build: bước build của lần chạy đã xong (checks.mjs ghi ngay), bộ test có thể vẫn chạy tiếp.
+    if (rec?.state !== 'running' || !(rec.checks ?? []).includes('build') || rec.build || !alive(rec.pid)) return null;
+    if (Date.now() >= deadline) {
+      return { state: 'waiting_for_checks', runId: rec.runId,
+        hint: `run_checks is still building this worktree: call app start again with ${WAIT_HINT}; it starts as soon as that build is done and reuses it, while the test suite may still run.` };
+    }
+    await sleep(1000);
+  }
+}
+
+// Lệnh riêng của project (OMZJW0S0/UOMNKT6Z BUG-09: README "Commands during the match" build web rồi chạy sync-server
+// với ACTUAL_* trỏ tới thư mục dữ liệu; lệnh start chung của node chạy sai app, fixer mất 2,5–3 phút tự khởi động server
+// và hỏng 2 lần vì thiếu build/thư mục). Fixer đưa lệnh từ README, helper vẫn lo port, thư mục dữ liệu, log, chờ và dừng.
+// {port}: port helper chọn; {data}: .team-work/app-data/<ID> (ngoài worktree, tạo sẵn, cả thư mục con một biến env trỏ
+// tới); {matchRoot}: thư mục trận của worktree. Nhớ theo item để start lại sau khi sửa code không phải gửi lại.
+const customFile = (teamWorkspace, key) => join(teamWorkspace, 'team-sdlc-pack', 'local', 'app-commands', `${key}.json`);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+export function normalizeCustom(custom, matchRoot) {
+  if (custom === undefined || custom === null) return null;
+  if (typeof custom !== 'object' || Array.isArray(custom)) fail('INVALID_ARGUMENT', 'custom must be {build?, start, env?}');
+  const step = (s, what) => {
+    const v = typeof s === 'string' ? { command: s } : s;
+    if (!v || typeof v.command !== 'string' || !v.command.trim() || v.command.length > 2000) fail('INVALID_ARGUMENT', `custom.${what}.command must be a non-empty command`);
+    const cwd = resolve(matchRoot, typeof v.cwd === 'string' && v.cwd ? v.cwd : '.');
+    const rel = relative(matchRoot, cwd);
+    if (rel.startsWith('..') || isAbsolute(rel)) fail('PATH_NOT_ALLOWED', `custom.${what}.cwd must stay inside matchRoot`);
+    if (!existsSync(cwd)) fail('NOT_FOUND', `custom.${what}.cwd ${cwd} does not exist`);
+    return { command: v.command, cwd };
+  };
+  const builds = custom.build === undefined || custom.build === null ? [] : Array.isArray(custom.build) ? custom.build : [custom.build];
+  if (builds.length > 5) fail('INVALID_ARGUMENT', 'custom.build takes at most 5 steps');
+  const env = custom.env ?? {};
+  if (typeof env !== 'object' || Array.isArray(env)) fail('INVALID_ARGUMENT', 'custom.env must be an object of strings');
+  for (const [k, v] of Object.entries(env)) {
+    if (!ENV_NAME.test(k) || typeof v !== 'string') fail('INVALID_ARGUMENT', `custom.env.${k} must be a string under a plain variable name`);
+  }
+  return { build: builds.map((b, i) => step(b, `build[${i}]`)), start: step(custom.start, 'start'), env: { ...env } };
+}
+
+function expand(text, vars) {
+  return text.replace(/\{(port|data|matchRoot)\}/g, (_, name) => vars[name]);
+}
+
 export function stopApp(teamWorkspace, key) {
   const s = readState(teamWorkspace, key);
   if (!s) return { stopped: false, reason: 'no app recorded for this item' };
@@ -217,58 +273,93 @@ export function stopApp(teamWorkspace, key) {
 }
 
 export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoot, mode = 'production', build = true,
-  waitSeconds = MAX_WAIT_SECONDS }) {
+  custom = undefined, waitSeconds = MAX_WAIT_SECONDS }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   if (action === 'stop') return stopApp(teamWorkspace, key);
-  if (action === 'status') return settle(teamWorkspace, key, waitSeconds);
+  const deadline = deadlineOf(waitSeconds);
+  if (action === 'status') return settle(teamWorkspace, key, deadline);
   if (action !== 'start') fail('INVALID_ARGUMENT', 'action');
   if (!['production', 'dev'].includes(mode)) fail('INVALID_ARGUMENT', 'mode');
 
   const where = locate(teamWorkspace, matchRoot);
+  // custom: {} (hay null) bỏ lệnh đã nhớ; không truyền thì dùng lại lệnh đã nhớ cho đúng worktree này.
+  let commands = null;
+  const forget = custom === null || (typeof custom === 'object' && !Array.isArray(custom) && !Object.keys(custom).length);
+  if (forget) rmSync(customFile(teamWorkspace, key), { force: true });
+  else if (custom !== undefined) {
+    commands = normalizeCustom(custom, where.matchRoot);
+    writeFileAtomic(customFile(teamWorkspace, key), JSON.stringify({ matchRoot: where.matchRoot, ...commands }));
+  } else {
+    try {
+      const saved = JSON.parse(readFileSync(customFile(teamWorkspace, key), 'utf8'));
+      if (saved.matchRoot === where.matchRoot) commands = saved;
+    } catch { /* chưa có lệnh riêng */ }
+  }
+  const waiting = await checksBuilding(where, key, deadline);
+  if (waiting) return waiting;
   // Start lại (sau khi sửa code, hay để chụp ảnh trước khi sửa) luôn là tiến trình mới; build lại khi source hay môi
   // trường khác bản build còn trong thư mục.
   stopApp(teamWorkspace, key);
-  await launch(teamWorkspace, key, where, mode, build, 0);
-  return settle(teamWorkspace, key, waitSeconds);
+  await launch(teamWorkspace, key, where, mode, build, 0, null, commands);
+  return settle(teamWorkspace, key, deadline);
 }
 
 // Lần thử lại vì port (retries > 0) ghi tiếp vào log để vẫn thấy dòng EADDRINUSE trước đó, không build, và mang theo
 // `carry` của lần đầu: bản build nó đã làm (built, snapshot) hay đã dùng lại (reusedBuild).
-async function launch(teamWorkspace, key, where, mode, build, retries, carry = null) {
+async function launch(teamWorkspace, key, where, mode, build, retries, carry = null, custom = null) {
   const port = await freePort(teamWorkspace);
-  const cmd = appCommand(where.matchRoot, port, mode);
-  if (cmd.error) fail('UNSUPPORTED_APP', cmd.error);
-  const root = cmd.profile.root;
-  const snapshot = carry ? carry.snapshot
-    : existsSync(join(dirname(where.matchRoot), '.git')) ? await sourceSnapshot(dirname(where.matchRoot), basename(where.matchRoot), cmd.profile) : null;
-  const reused = !carry && build && cmd.build ? reusableBuild(teamWorkspace, root, snapshot) : null;
-  const building = Boolean(!carry && build && cmd.build && !reused);
-  // Build mới hay dev server ghi đè thư mục build: bản ghi cũ không còn đúng.
-  if (building || cmd.mode === 'dev') forgetBuild(teamWorkspace, root);
-  const steps = [building && cmd.build, cmd.start].filter(Boolean);
+  let root, snapshot = null, reused = null, building, steps, env, appMode, authEnv = {};
+  if (custom) {
+    // Lệnh riêng: bước build do fixer đưa chạy khi build !== false (lần thử lại vì port thì không); không ghi nhớ bản
+    // build vì helper không biết thư mục output của nó.
+    const data = join(dirname(where.logDir), 'app-data', key);
+    const vars = { port: String(port), data, matchRoot: where.matchRoot };
+    env = Object.fromEntries(Object.entries(custom.env ?? {}).map(([k, v]) => [k, expand(v, vars)]));
+    mkdirSync(data, { recursive: true });
+    for (const [k, v] of Object.entries(custom.env ?? {})) if (/^\{data\}/.test(v)) mkdirSync(env[k], { recursive: true });
+    root = where.matchRoot;
+    building = Boolean(!carry && build && custom.build.length);
+    const at = (s, cwd) => process.platform === 'win32' ? `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${s}` : `cd '${cwd.replace(/'/g, "'\\''")}' && ${s}`;
+    steps = [...(building ? custom.build : []), custom.start].map(s => at(expand(s.command, vars), s.cwd));
+    appMode = 'custom';
+  } else {
+    const cmd = appCommand(where.matchRoot, port, mode);
+    if (cmd.error) fail('UNSUPPORTED_APP', `${cmd.error}; or pass custom {build, start, env} with the project's own commands (README)`);
+    root = cmd.profile.root;
+    snapshot = carry ? carry.snapshot
+      : existsSync(join(dirname(where.matchRoot), '.git')) ? await sourceSnapshot(dirname(where.matchRoot), basename(where.matchRoot), cmd.profile) : null;
+    reused = !carry && build && cmd.build ? reusableBuild(teamWorkspace, root, snapshot) : null;
+    building = Boolean(!carry && build && cmd.build && !reused);
+    // Build mới hay dev server ghi đè thư mục build: bản ghi cũ không còn đúng.
+    if (building || cmd.mode === 'dev') forgetBuild(teamWorkspace, root);
+    steps = [building && cmd.build, cmd.start].filter(Boolean);
+    authEnv = authUrlEnv(cmd.profile.root, port);
+    env = authEnv;
+    appMode = cmd.mode;
+  }
   // Build rồi start trong một tiến trình tách rời, sống tiếp khi helper của subagent kết thúc. Vỏ là node: trên Windows
   // pwsh chạy detached (không console) không ghi gì ra file log, còn pwsh con của một node detached thì ghi được.
   const shell = process.platform === 'win32'
     ? ['pwsh', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-      `$ErrorActionPreference='Continue'; ${steps.map(s => `${s}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`).join('; ')}`]
+      pwshScript(steps.map(s => `${s}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`).join('; '))]
     : ['sh', '-c', steps.join(' && ')];
   mkdirSync(where.logDir, { recursive: true });
   const log = join(where.logDir, `${key}-app.log`);
   const fd = openSync(log, retries ? 'a' : 'w');
   const logFrom = fstatSync(fd).size;
-  const authEnv = authUrlEnv(cmd.profile.root, port);
   let child;
   try {
-    child = spawn(process.execPath, ['-e', WRAPPER, JSON.stringify(shell)], { cwd: cmd.profile.root,
-      env: childEnv({ PORT: String(port), ...authEnv }), detached: true, windowsHide: true, stdio: ['ignore', fd, fd] });
+    child = spawn(process.execPath, ['-e', WRAPPER, JSON.stringify(shell)], { cwd: root,
+      env: childEnv({ PORT: String(port), ...env }), detached: true, windowsHide: true, stdio: ['ignore', fd, fd] });
   } finally {
     closeSync(fd);
   }
   child.unref();
   const reusedBuild = reused ?? carry?.reusedBuild;
-  writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: cmd.mode, requestedMode: mode,
-    built: building || Boolean(carry?.built), retries, matchRoot: where.matchRoot, appRoot: root, log, logFrom,
+  // Lệnh riêng không ghi nhớ bản build (noteBuild chỉ xét built của lệnh chung).
+  writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ key, pid: child.pid, port, mode: appMode, requestedMode: mode,
+    built: custom ? false : building || Boolean(carry?.built), retries, matchRoot: where.matchRoot, appRoot: root, log, logFrom,
     startedAt: new Date().toISOString(), ...(snapshot ? { snapshot } : {}), ...(reusedBuild ? { reusedBuild } : {}),
-    ...(Object.keys(authEnv).length ? { authEnv } : {}) }));
+    ...(custom ? { custom } : {}), ...(Object.keys(authEnv).length ? { authEnv } : {}) }));
 }

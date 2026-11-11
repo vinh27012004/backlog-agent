@@ -1,8 +1,7 @@
 // Các điểm quyết định nhanh (port orchestrator/decisions.py): hỏi Jev trước, lỗi hoặc dưới ngưỡng thì luật code.
 // Luật cứng ở code là sàn hoặc điều kiện AND, Jev không ghi đè được: PI luôn critical; PI, CR và item hard luôn model
-// strong; PI luôn có reviewer (chạy song song với gate), chỉ item easy mới bỏ reviewer; root_cause_confirmed cần đủ điều
-// kiện code (Jev chỉ phủ quyết);
-// next_action chỉ đưa lựa chọn hợp lệ; regex bẫy injection (chạy trên toàn bộ đề) thắng câu "không" của Jev.
+// strong; root_cause_confirmed cần đủ điều kiện code (Jev chỉ phủ quyết); regex bẫy injection (chạy trên toàn bộ đề)
+// thắng câu "không" của Jev.
 // Mỗi quyết định ghi vào .team-work/decisions.ndjson kèm câu trả lời của luật code (rule) và câu trả lời thô của Jev
 // (jev) để sau trận đo tỉ lệ bất đồng và chỉnh ngưỡng.
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -93,8 +92,7 @@ const ROUTE_QUESTIONS = {
   model: choice('Which model tier should implement this change?', {
     cheap: 'small, fully specified change in one place or a direct answer, no investigation needed, that a fast low-cost model finishes in one attempt',
     small: 'routine local change with clear instructions and a low impact radius (code_topology)',
-    strong: 'needs investigation or design, high impact radius or cross-module changes, or a high-risk domain (kb_insights.risk_factors)' }),
-  reviewer: noul('Is an independent code review needed for this change (risk of subtle regressions, unclear root cause, security impact)?')
+    strong: 'needs investigation or design, high impact radius or cross-module changes, or a high-risk domain (kb_insights.risk_factors)' })
 };
 
 export class Decider {
@@ -172,33 +170,23 @@ export class Decider {
 
   routeFrom(type, difficulty, a, err, signals = null) {
     // Câu trả lời thuần có bẫy: cả bài là một lần lập luận, chấm khớp chuỗi, nộp một lần (TOKXKPBV: TASK-01 chạy model
-    // small, reviewer cãi đáp án, phải chạy lại cả vòng fixer + verifier + reviewer, mất 7,5 phút).
+    // small, đáp án sai phải làm lại cả vòng, mất 7,5 phút).
     const flags = new Set(signals?.flags ?? []);
     const trickyAnswer = flags.has('answerOnly') && flags.has('tricky');
-    const needsStrong = type === 'PI' || type === 'CR' || difficulty === 'hard' || trickyAnswer;
-    // Thang model rẻ → đắt (config/models.json): luật chọn cheap cho item easy; Jev được hạ xuống cheap chỉ khi item easy.
-    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : difficulty === 'easy' ? 'cheap' : 'small'),
+    const isCode = ['BUG', 'CR', 'PI'].includes(type) && !flags.has('answerOnly');
+    const needsStrong = type === 'PI' || type === 'CR' || type === 'BUG' || difficulty === 'hard' || trickyAnswer;
+    // Thang model rẻ → đắt (config/models.json): code task tối thiểu tier small, không dùng cheap (tránh sửa sai/hỏng AST).
+    let model = this.pickChoice('model', a.model, err, () => (needsStrong ? 'strong' : (difficulty === 'easy' && !isCode) ? 'cheap' : 'small'),
       new Set(['cheap', 'small', 'strong']));
     if (needsStrong && model.value !== 'strong') {
-      const who = type === 'PI' || type === 'CR' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
+      const who = type === 'PI' || type === 'CR' || type === 'BUG' ? type : difficulty === 'hard' ? 'a hard item' : 'a tricky answer-only item';
       model = { ...model, value: 'strong', source: 'rule', reason: `${who} always gets the strong tier` };
-    } else if (model.value === 'cheap' && difficulty !== 'easy') {
-      model = { ...model, value: 'small', source: 'rule', reason: `the cheap tier is only for easy items (difficulty ${difficulty})` };
+    } else if (model.value === 'cheap' && (difficulty !== 'easy' || isCode)) {
+      model = { ...model, value: 'small', source: 'rule', reason: isCode
+        ? 'code-changing tasks require at least the small tier to prevent hallucinated fixes'
+        : `the cheap tier is only for easy items (difficulty ${difficulty})` };
     }
-    let reviewer;
-    // PI sai = 0 điểm và không nộp lại được; reviewer chạy cùng lúc với gate (~1 phút) nên gần như không tốn thêm giờ.
-    if (type === 'PI') {
-      reviewer = { name: 'reviewer', value: true, source: 'rule', confidence: null, rule: true, jev: a.reviewer?.pYes ?? null, reason: 'PI: reviewer runs in parallel with the gate' };
-    } else {
-      reviewer = this.pickNoul('reviewer', a.reviewer, err, () => true);
-      const incompleteGraph = uncertainTopology(signals) && !flags.has('answerOnly');
-      if (!reviewer.value && (difficulty !== 'easy' || incompleteGraph)) {
-        reviewer = { ...reviewer, value: true, source: 'rule', reason: incompleteGraph
-          ? 'graph is stale, unverified or truncated; independent review is required'
-          : `Jev may skip review only for easy items (difficulty ${difficulty})` };
-      }
-    }
-    return { model, reviewer };
+    return { model };
   }
 
   fit(parts, item) { return fitState(parts, item, this.jev.config.maxStateChars ?? 4000); }
@@ -213,7 +201,7 @@ export class Decider {
     return out;
   }
 
-  // 2. Cách chạy fixer: tier model, có cần reviewer.
+  // 2. Cách chạy fixer: tier model.
   async route(key, item, triage, { pendingItems = null, minutesLeft = null, signals = null } = {}) {
     const type = typeOf(key);
     // Đặc trưng của đề đã nằm trong triage; route chỉ cần thêm topology và KB.
@@ -258,26 +246,5 @@ export class Decider {
     }
     return this.record(key, { name: 'root_cause_confirmed', value: true, source: 'rule', confidence: pYes, rule: true, jev: pYes,
       ...(err ? { reason: err } : {}) }, ms);
-  }
-
-  // 4. submit / retry / drop. Code xác định lựa chọn hợp lệ, Jev chỉ chọn trong đó.
-  // Cùng chữ ký lỗi lần thứ 3 (sameFailureCount, do gate đếm) thì không còn retry, như vòng run Python cũ.
-  async nextAction(key, item, { gatePassed, mvsPassed = null, attempts, maxAttempts, minutesLeft, pendingItems = null, lastFailure = null,
-    sameFailureCount = 0 }) {
-    const allowed = {};
-    if (gatePassed || (mvsPassed && minutesLeft < 5)) allowed.submit = 'submit the current version now (only one submission is allowed)';
-    if (attempts < maxAttempts && minutesLeft >= 5 && sameFailureCount < 3) allowed.retry = 'try again with a new plan, using the failure details';
-    allowed.drop = 'give up on this item and spend the time on other items';
-    const rule = () => ('submit' in allowed && gatePassed ? 'submit' : 'retry' in allowed ? 'retry' : 'submit' in allowed ? 'submit' : 'drop');
-    if (Object.keys(allowed).length === 1) {
-      const only = Object.keys(allowed)[0];
-      return this.record(key, { name: 'next_action', value: only, source: 'rule', confidence: null, rule: only, jev: null, reason: 'only one valid action' }, 0);
-    }
-    const situation = { item_type: typeOf(key), gate_passed: gatePassed, mvs_passed: mvsPassed, attempts, max_attempts: maxAttempts,
-      minutes_left: minutesLeft === null ? null : Math.round(minutesLeft * 10) / 10, pending_items: pendingItems, last_failure: lastFailure,
-      same_failure_count: sameFailureCount };
-    const { answers, err, ms } = await this.ask({ action: choice('What should the team do next with this item?', allowed) }, this.fit({ situation }, item));
-    const d = this.pickChoice('next_action', answers?.action, err, rule, new Set(Object.keys(allowed)));
-    return this.record(key, { ...d, allowed: Object.keys(allowed) }, ms);
   }
 }

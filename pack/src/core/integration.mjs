@@ -1,19 +1,27 @@
 // Kế hoạch tích hợp bền: nhận diện cherry-pick đã commit nhưng chưa kịp lưu checkpoint.
-import { changedFiles } from '../gate/gate.mjs';
-import { git, revParse } from './git.mjs';
+import { changedFiles, strayAnswers } from '../match/answers.mjs';
+import { git, revParse, trackedChanges } from './git.mjs';
 import { fail, oneLine } from './util.mjs';
+
+// File không bao giờ được push: ngoài thư mục trận, trông như secret, evidence đặt sai chỗ, exam-info.json.
+export const unpushable = (path, folder) => !path.startsWith(`${folder}/`) || /(^|\/)\.env(\.|$)|\.pem$|id_rsa/i.test(path)
+  || new RegExp(`^${folder}/(evidence|challenge/evidence)/`).test(path) || /(^|\/)exam-info\.json$/.test(path);
 
 export async function integrateCandidate(rt, key, message) {
   if (rt.workflow.publishOwner && rt.workflow.publishOwner !== key) fail('PUBLISH_BUSY', 'another item is being published');
   const { checkoutRoot } = rt.session.paths, folder = rt.session.descriptor.matchId, wt = rt.wtPaths(key);
   const j = rt.journal, ji = j.item(key);
   const files = await changedFiles(wt.worktreeRoot, 'HEAD');
-  const outside = files.filter(f => !f.path.startsWith(`${folder}/`));
+  // Kiểm ở đây, trước khi commit lên main local, mọi thứ commit_and_push sẽ từ chối: commit bị từ chối ở bước push vẫn
+  // nằm trên main và chặn push của mọi item sau (LXRMBRA2: file 10 MB của TASK-07 bị mốc 5 MB cũ chặn, BUG-11 không
+  // nộp được, mất 130 điểm).
+  const outside = files.filter(f => unpushable(f.path, folder));
   if (outside.length) fail('PATH_NOT_ALLOWED', outside.map(f => f.path).join(', '));
-  await rt.requireGate(key, wt.worktreeRoot);
   if (ji.integratePlan && files.length) fail('INTEGRATION_PENDING', 'finish the frozen integration before changing the candidate');
-  if (files.length) {
-    await git(['add', '--', folder], { cwd: wt.worktreeRoot });
+  // Chốt cuối khi worker đã đi: bản answers/<ID>/ lạc chỗ (vd src/answers/) không bao giờ lên main (strayAnswers).
+  const stray = strayAnswers(files, folder);
+  if (files.length > stray.length) {
+    await git(['add', '--', folder, ...stray.map(p => `:(exclude)${p}`)], { cwd: wt.worktreeRoot });
     await git(['commit', '-m', oneLine(`${key}: ${message ?? 'work'}`, 120)], { cwd: wt.worktreeRoot });
   }
   const head = await revParse(wt.worktreeRoot);
@@ -37,7 +45,8 @@ export async function integrateCandidate(rt, key, message) {
       plan.pending = null; j.save();
     }
   }
-  if ((await git(['status', '--porcelain', '--untracked-files=no'], { cwd: checkoutRoot })).out) fail('WORKTREE_CONFLICT', 'main has uncommitted changes');
+  const dirty = await trackedChanges(checkoutRoot);
+  if (dirty.length) fail('WORKTREE_CONFLICT', `main has uncommitted changes (${dirty.slice(0, 5).join(', ')})`);
   if (!plan) {
     const commits = (await git(['rev-list', '--reverse', `${ji.integratedWorktreeHead ?? ji.worktreeBase}..${head}`], { cwd: checkoutRoot })).out.split(/\r?\n/).filter(Boolean);
     plan = ji.integratePlan = { head, mainBefore: await revParse(checkoutRoot), commits, cursor: 0, pending: null }; j.save();
@@ -56,8 +65,9 @@ export async function integrateCandidate(rt, key, message) {
   }
   const headRevision = await revParse(checkoutRoot), count = plan.commits.length, mainBefore = plan.mainBefore;
   ji.integratedRevision = headRevision; ji.integratedWorktreeHead = head; delete ji.integratePlan;
-  const { fixedNow, sync } = rt.recordBaselineFix(key); j.save();
+  // Mốc item lên main: item nhắc tới nó trong đề (dependsOn) so với baseAt của mình để biết kết quả đã cũ.
+  ji.integratedAt = new Date().toISOString();
+  j.save();
   return { integrated: true, headRevision, commits: count, baseChanged: mainBefore !== ji.worktreeBase,
-    ...(fixedNow.length ? { baselineFixed: fixedNow, syncWorktrees: sync } : {}),
-    hint: `${mainBefore !== ji.worktreeBase ? 'Main moved: run_gate where=main before push. ' : ''}Run commit_and_push or resume publish_item.${sync.length ? ` Sync yielded worktrees ${sync.join(', ')} after publishing the baseline fix.` : ''}` };
+    hint: 'Run commit_and_push or resume publish_item.' };
 }

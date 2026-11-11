@@ -20,5 +20,10 @@ Tests: `*.test.ts|*.spec.ts` next to the file or under `__tests__/`/`test/`.
 - Express: error middleware must have 4 args; async handlers need error forwarding.
 - ORM (Prisma/TypeORM/Sequelize/Mongoose): missing `include/relations`, transactions, `findOne` returning null.
 - Env config read at import time vs runtime.
+- Next.js dev (`next dev --turbo`) + Tailwind v4: logical utilities behind a breakpoint (`md:ms-*`, `md:ps-*`, `md:pe-*`,
+  `md:start-*`) compile to an empty `@media {}` block (Lightning CSS drops nested logical properties for Next's default
+  browser targets); the production build is fine. When the MVS checks dev, use a plain CSS rule
+  `@media (min-width: 48rem) { .x { margin-inline-start: ... } }` in the global stylesheet (or the physical utility
+  if the app has no RTL) instead of debugging Tailwind. Never change browserslist or build config for it.
 
 **Never**: `.skip`/`.only`/`xit` in tests, `// @ts-ignore` or `any` to silence a real type error, edit lockfiles by hand.

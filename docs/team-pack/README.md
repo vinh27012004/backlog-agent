@@ -1,10 +1,10 @@
 # Bộ tài liệu dựng Team Orchestrator Pack — MTM 2026
 
-**Workflow hiện hành 31/10/2026:** [13 · Candidate, retry, evidence và publish](13-workflow-toi-uu.md).
-Mặc định worker + reviewer cho code, worker + solver cho answer_only; verifier tất định nằm trong helper.
+**Workflow hiện hành 03/11/2026:** [13 · Workflow candidate](13-workflow-toi-uu.md).
+Mỗi item một worker (code, test, evidence); helper nộp nguyên kết quả, không gate, reviewer hay solver.
 
 > **Phiên bản 1.0 · 25/10/2026.** Đã đối chiếu với: MTM Player **0.9.33**, kiểm lại trên **0.9.35** ngày 27/10, **0.9.39** ngày 29/10, **0.9.41** ngày 30/10 và **0.9.44** ngày 01/11
-> (source trong `vendor/mtm-player-0.9.44/app/`), [technical guide **0.5.1**](../btc/technical-guide-0.5.1.md), sample pack **0.5.1**
+> (source trong `vendor/mtm-player-0.9.45/app/`), [technical guide **0.5.1**](../btc/technical-guide-0.5.1.md), sample pack **0.5.1**
 > (`vendor/team-orchestrator-pack-0.5.1/`), tài liệu API *Digital Cuder: Start work và Submit*, slide Kick-off
 > 23/10, Game Rules, Q&A, và Codex CLI **0.163.0** trên máy dev.
 >
@@ -20,12 +20,12 @@ Mặc định worker + reviewer cho code, worker + solver cho answer_only; verif
    thêm `codex exec`, `codex app-server`, Claude CLI… Vì vậy vòng `MatchRunner` Python hiện tại
    (mỗi agent một `codex exec`) **không dùng được lúc thi**.
 3. Đội tự xây: **MCP helper** (Node.js, không dependency) giữ credential, gọi Game Master, ghi
-   progress log, chạy git và gate; **skills** (chiến thuật); **agent profiles**; **installer +
+   progress log, chạy git; **skills** (chiến thuật); **agent profiles**; **installer +
    checker**.
 4. Player chỉ biết đội đang làm gì qua **progress log NDJSON**. Log phải đúng schema từng dòng, và
    **không được vượt 256 KB**, nếu không dashboard của Player ngừng đọc.
 5. Mỗi item chỉ nộp được **1 lần**, phải gọi **Start Work** trước. `gitRevision` là SHA đầy đủ của
-   commit đã push lên **branch được giao**. Gate phải chạy lại bằng code trước khi nộp.
+   commit đã push lên **branch được giao**.
 6. Mọi thứ phải chịu được việc **bị kill bất cứ lúc nào**: khi tạm dừng hay hết trận, Player kill cả
    cây tiến trình mà không báo trước. Khi resume, Player tạo root mới với `RESUME_GAME_V1`.
 
@@ -67,7 +67,7 @@ Khi BTC phát hành Player bản mới, đối chiếu lại theo [02 §12](02-h
 | [02-hop-dong-player.md](02-hop-dong-player.md) | Hợp đồng với Player: cách chạy Codex, prompt, descriptor, layout, kiểm tra pack | Người làm helper, installer |
 | [03-game-master.md](03-game-master.md) | Trang `/match`, API Start Work / Submit, mã lỗi, idempotency | Người làm helper |
 | [04-progress-log.md](04-progress-log.md) | Schema từng event, luật chuyển trạng thái, thứ tự, ngân sách byte | Người làm helper, skill |
-| [05-mcp-helper.md](05-mcp-helper.md) | Đặc tả MCP helper: tool, state, poller, HTTP, git, gate | Người làm helper |
+| [05-mcp-helper.md](05-mcp-helper.md) | Đặc tả MCP helper: tool, state, poller, HTTP, git | Người làm helper |
 | [06-agents-va-skills.md](06-agents-va-skills.md) | Agent profiles, 3 skill bắt buộc, skill theo loại item, AGENTS.md, brief/result của subagent | Người viết prompt |
 | [07-quy-trinh-tran.md](07-quy-trinh-tran.md) | Kịch bản chạy một trận: chuẩn bị, xếp lịch, pipeline item, PI, nộp, chờ, dừng, hồi phục | Cả đội |
 | [08-guardrails.md](08-guardrails.md) | Luật an toàn và lớp thực thi (helper, execpolicy, prompt, installer) | Cả đội |
@@ -90,7 +90,7 @@ Khi BTC phát hành Player bản mới, đối chiếu lại theo [02 §12](02-h
 | **helper** | MCP server `team_runtime` của đội (Node.js), Codex khởi chạy theo `.codex/config.toml`. |
 | **frame / descriptor** | Khối Player gửi trong prompt: dòng marker (vd `START_GAME_V4`) + một dòng JSON descriptor + các khối policy nối sau. |
 | **progress log** | `TeamWorkspace\team-sdlc-pack\logs\<matchId>.progress.ndjson`: kênh trạng thái duy nhất tới Player. |
-| **gate** | Bước kiểm tra do code chạy lại (diff, file cấm, build, test, MVS) trước khi commit/nộp. |
+| **gate** | Bước kiểm tra do code chạy lại (diff, file cấm, build, test, MVS) trước khi nộp. Đã bỏ 03/11; còn trong judge của trận cũ. |
 | **MVS** | Minimum Verification Scenarios: kịch bản tối thiểu cho CR/BUG, chỉ nhận được lúc Start Work. |
 | **receipt** | Biên nhận nộp bài = `submission.id` server trả về. |
 

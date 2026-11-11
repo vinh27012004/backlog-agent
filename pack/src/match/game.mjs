@@ -55,26 +55,29 @@ export class GameMaster {
   }
 
   // GET /api/v1/match/<matchId>: nguồn dữ liệu thật của trang /match/<matchId> (03 §2.4).
-  async fetchMatch({ optional = false } = {}) {
+  // log: false cho poll nhanh (trước START_GAME, quanh mốc ra đề): như feed, chỉ networkActivity, không GAME_MASTER_API
+  // (hai dòng khoảng 600 byte mỗi lần đọc, poll 250 ms thì vượt trần log 230 KB trong vài phút).
+  async fetchMatch({ optional = false, log = true } = {}) {
     const matchId = this.session.descriptor.matchId;
     const url = `${this.origin}/api/v1/match/${encodeURIComponent(matchId)}`;
+    const api = log ? (...args) => this.api(...args) : () => {};
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!this.loggedIn) await this.login();
-      this.api('REFRESH', 'REQUESTED', { method: 'GET', url, summary: 'Refresh match page.', optional });
+      api('REFRESH', 'REQUESTED', { method: 'GET', url, summary: 'Refresh match page.', optional });
       let res;
       try {
         res = await this.http.request(url, { headers: { Accept: 'application/json' } });
       } catch (error) {
-        this.api('REFRESH', 'FAILED', { method: 'GET', url, summary: 'Match refresh failed.', optional });
+        api('REFRESH', 'FAILED', { method: 'GET', url, summary: 'Match refresh failed.', optional });
         throw error;
       }
       if (res.status === 401 && attempt === 0) {
-        this.api('REFRESH', 'FAILED', { method: 'GET', url, status: 401, requestId: res.requestId, summary: 'Session expired.', optional });
+        api('REFRESH', 'FAILED', { method: 'GET', url, status: 401, requestId: res.requestId, summary: 'Session expired.', optional });
         this.loggedIn = false;
         continue;
       }
       const ok = res.status >= 200 && res.status < 300 && res.json;
-      this.api('REFRESH', ok ? 'SUCCEEDED' : 'FAILED', { method: 'GET', url, status: res.status, requestId: res.requestId,
+      api('REFRESH', ok ? 'SUCCEEDED' : 'FAILED', { method: 'GET', url, status: res.status, requestId: res.requestId,
         summary: ok ? 'Match page refreshed.' : `Match refresh failed: ${errorMessage(res)}`, optional });
       if (res.status === 401) fail('MATCH_LOGIN_AUTHENTICATION_REQUIRED', 'still 401 after login');
       if (!ok) fail('REFRESH_FAILED', errorMessage(res));

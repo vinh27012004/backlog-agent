@@ -1,5 +1,5 @@
 // Test fail ở baseline (Practice #6, HIET12OA): start_work giao đúng một item chủ (item đầu tiên có đề/MVS đòi chạy cả
-// bộ test), giao lại khi chủ đã xong mà test vẫn fail; integrate ghi bản sửa và trả các worktree còn mở cần sync.
+// bộ test), giao lại khi chủ đã xong.
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,11 +25,7 @@ function runtime() {
     writeFileSync(join(dir, 'start.json'), JSON.stringify({ minimumVerificationScenarios: mvs }));
     rt.journalObj.item(key).startedAt = new Date().toISOString();
   };
-  const worktree = key => {   // worktree git: thư mục có file .git
-    mkdirSync(rt.wtPaths(key).worktreeRoot, { recursive: true });
-    writeFileSync(join(rt.wtPaths(key).worktreeRoot, '.git'), 'gitdir: x\n');
-  };
-  return { rt, item, worktree };
+  return { rt, item };
 }
 
 test('one owner per baseline failure: the first item whose MVS runs the suite, reassigned when it ends without the fix', () => {
@@ -48,42 +44,18 @@ test('one owner per baseline failure: the first item whose MVS runs the suite, r
   assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'CR-01', youFix: true });
 });
 
-test('integrate records the baseline fix and lists the open worktrees to sync; later items see it as fixed', () => {
-  const { rt, item, worktree } = runtime();
-  for (const k of ['BUG-01', 'BUG-02', 'CR-01']) { item(k, 'Expected: `pnpm test` exits 0.'); worktree(k); }
-  rt.journalObj.item('CR-01').integratedRevision = 'abc';   // đã nộp: không cần sync
-  rt.baselineBrief('BUG-02');
-  rt.journalObj.item('BUG-02').lastGate = { passed: true, fixesBaseline: [FAILING] };
-  rt.journalObj.item('BUG-02').integratedRevision = 'def';
-
-  assert.deepEqual(rt.recordBaselineFix('BUG-02'), { fixedNow: [FAILING], sync: ['BUG-01'] });
-  assert.deepEqual(rt.journalObj.data.preparation.baselineFixed, { [FAILING]: 'BUG-02' });
-  assert.deepEqual(rt.recordBaselineFix('BUG-02'), { fixedNow: [], sync: [] }, 'recorded once');
-
-  item('TASK-02', 'run typecheck and existing tests');
-  assert.deepEqual(rt.baselineBrief('TASK-02'), { failing: [], fixedBy: { [FAILING]: 'BUG-02' } });
-});
-
-// ZVUYZ41V BUG-02: exec publish gọi gate main không có allowTestChange, tests-guard chặn thay đổi test đã được chấp nhận.
-test('the main gate reuses the test change the worktree gate accepted for the same item', () => {
-  const { rt } = runtime();
-  const change = { reason: 'migration cascades invoices', source: 'migration.sql:10-12' };
-  assert.equal(rt.gateTestChange('BUG-02', false, null), null);
-  rt.journalObj.item('BUG-02').testChange = change;
-  assert.deepEqual(rt.gateTestChange('BUG-02', false, null), change, 'main gate');
-  assert.equal(rt.gateTestChange('BUG-02', true, null), null, 'a worktree gate takes it from the fix-result only');
-  const other = { reason: 'r', source: 's' };
-  assert.deepEqual(rt.gateTestChange('BUG-02', false, other), other, 'an explicit argument wins');
-  assert.equal(rt.gateTestChange('CR-01', false, null), null, 'never borrowed from another item');
-});
-
-// 803P85ZA TASK-02: gate main chặn package.json vì exec publish không truyền needsDependency mà gate worktree đã nhận.
-test('the main gate reuses needsDependency from the worktree gate of the same item', () => {
-  const { rt } = runtime();
-  assert.equal(rt.gateNeedsDependency('TASK-02', false, false), false);
-  rt.journalObj.item('TASK-02').needsDependency = true;
-  assert.equal(rt.gateNeedsDependency('TASK-02', false, false), true, 'main gate');
-  assert.equal(rt.gateNeedsDependency('TASK-02', true, false), false, 'a worktree gate takes it from the fix-result only');
-  assert.equal(rt.gateNeedsDependency('BUG-01', false, false), false, 'never borrowed from another item');
-  assert.equal(rt.gateNeedsDependency('BUG-01', true, true), true, 'an explicit argument wins');
+// EIOR38SI: chủ báo baseline_fixed rồi helper đưa bản sửa lên main; item bắt đầu sau đó không còn phải chờ ai.
+test('an item started after the owner landed the baseline fix is told the fix is on main; a pending fix keeps its owner', () => {
+  const { rt, item } = runtime();
+  item('BUG-01', '## BUG-01-TC-03\nExpected: `pnpm test` exits 0.');
+  item('CR-01', '## CR-01-TC-04 existing tests\nAll tests pass.');
+  item('TASK-01', '## TASK-01-TC-01\nTrace the reorder position.');
+  assert.equal(rt.baselineBrief('BUG-01').youFix, true);
+  rt.journalObj.data.preparation.baselineFix = { owner: 'BUG-01', state: 'pending', files: [] };
+  rt.journalObj.item('BUG-01').endedAt = new Date().toISOString();
+  assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'BUG-01', youFix: false }, 'a reported fix is not reassigned');
+  rt.journalObj.data.preparation.baselineFix = { owner: 'BUG-01', state: 'landed', revision: 'abc123' };
+  assert.deepEqual(rt.baselineBrief('CR-01'), { failing: [FAILING], owner: 'BUG-01', youFix: false, fixedOnMain: 'abc123' });
+  rt.baselineBrief('TASK-01');
+  assert.deepEqual(['BUG-01', 'CR-01', 'TASK-01'].map(k => rt.journalObj.item(k).needsSuite), [true, true, false]);
 });

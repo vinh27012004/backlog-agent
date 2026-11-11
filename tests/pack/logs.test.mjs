@@ -1,78 +1,110 @@
-// Log Condenser (port tests/test_gate.py LogsTest): chữ ký lỗi ổn định qua các lần thử, rút gọn log.
+// Tra log hàng loạt cho PI (QDYZMY1K: fixer PI-02/PI-03 thử limit/pageSize/take, hỏi root schema, tự lặp hàng trăm
+// truy vấn). Server giả theo đúng ngữ nghĩa search_logs: từ nguyên vẹn, mới nhất trước, tối đa 20 dòng, kèm total.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compileErrors, condense, failingTestNames, signature } from '../../pack/src/gate/logs.mjs';
+import { bulkSearch, hourWindow, idRuns, matchesQuery, searchLogsHelp, words } from '../../pack/src/match/logs.mjs';
 
-const MAVEN_FAIL = `[INFO] Scanning for projects...
-[ERROR] Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.2 s <<< FAILURE! - in com.shop.order.OrderServiceTest
-java.lang.AssertionError: expected:<900000> but was:<810000>
-\tat org.junit.Assert.fail(Assert.java:89)
-\tat com.shop.order.OrderServiceTest.applyPercentCoupon(OrderServiceTest.java:88)
-\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-[ERROR] Failures:
-[ERROR]   OrderServiceTest.applyPercentCoupon:88 expected:<900000> but was:<810000>
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.0:test
-`;
-
-test('java signature skips library frames and ignores line numbers', () => {
-  assert.equal(signature(MAVEN_FAIL), 'AssertionError@com.shop.order.OrderServiceTest.applyPercentCoupon');
-  assert.ok(failingTestNames(MAVEN_FAIL).includes('OrderServiceTest.applyPercentCoupon'));
-  assert.equal(signature(MAVEN_FAIL.replace('OrderServiceTest.java:88', 'OrderServiceTest.java:95')), signature(MAVEN_FAIL));
-});
-
-test('compile errors per stack', () => {
-  const cases = {
-    '[ERROR] /w/src/main/java/OrderService.java:[42,17] cannot find symbol': 'OrderService.java',
-    "src/order.ts(12,5): error TS2339: Property 'rate' does not exist": 'order.ts',
-    "src/order.ts:12:5 - error TS2339: Property 'rate' does not exist": 'order.ts',
-    "/w/Order.cs(10,5): error CS0103: The name 'rate' does not exist [/w/Shop.csproj]": 'Order.cs',
-    'order/order.go:12:3: undefined: rate': 'order.go',
-    "PHP Parse error:  syntax error, unexpected '}' in /w/app/Order.php on line 12": 'Order.php',
-    '  File "app/x.py", line 3\n    def f(:\nSyntaxError: invalid syntax': 'x.py'
+const pad = n => String(n).padStart(2, '0');
+let seq = 3100000;
+const entry = (ts, service, message, context = {}) => ({ ts, service, level: 'INFO', message, context: { ...context, seq: ++seq } });
+// 30 schedule.posted cho SCH-0001..0030 rải nhiều ngày; giờ 2025-10-15T08 có 45 dòng rule-engine (quá 20).
+const data = [
+  ...Array.from({ length: 30 }, (_, i) => entry(`2025-11-${pad(1 + (i % 20))}T${pad(i % 24)}:0${i % 10}:00.000Z`, 'schedules', 'schedule.posted', { scheduleId: `SCH-${String(i + 1).padStart(4, '0')}` })),
+  // Phút 12..56: không phút nào trùng số tháng (10), nên chia theo từ phút tách được.
+  ...Array.from({ length: 45 }, (_, i) => entry(`2025-10-15T08:${pad(i + 12)}:${pad((i * 7) % 60)}.000Z`, 'rule-engine', 'rule.applied', { txnId: `TX-${String(i + 1).padStart(5, '0')}` })),
+  ...Array.from({ length: 5 }, (_, i) => entry(`2025-10-16T0${i}:10:00.000Z`, 'rule-engine', 'rule.applied', { txnId: `TX-${String(100 + i).padStart(5, '0')}` })),
+];
+function server({ failFirst = 0 } = {}) {
+  let calls = 0, failures = failFirst;
+  const invoke = async args => {
+    calls++;
+    if (failures > 0) { failures--; return { isError: true, content: [{ type: 'text', text: 'rate limited' }] }; }
+    const hits = data.filter(e => (!args.service || e.service === args.service) && matchesQuery(e, args.query ?? '')).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+    return { content: [{ type: 'text', text: JSON.stringify({ total: hits.length, returned: Math.min(20, hits.length), entries: hits.slice(0, 20) }) }] };
   };
-  for (const [log, file] of Object.entries(cases)) {
-    assert.equal(compileErrors(log)[0][0], file, log);
-    assert.ok(signature(log).startsWith(`compile:${file}:`), log);
-  }
-  // Số trong thông báo bị thay bằng N: cùng lỗi ở dòng khác vẫn cùng chữ ký.
-  assert.equal(signature('src/a.ts(3,1): error TS2554: Expected 2 arguments, but got 1.'), 'compile:a.ts:TSN: Expected N arguments, but got N.');
+  return { invoke, count: () => calls };
+}
+
+test('search_logs words: lower case, split at every non-letter/digit, field names included', () => {
+  assert.deepEqual(words('2025-10-18T22:51:08.468Z'), ['2025', '10', '18t22', '51', '08', '468z']);
+  assert.ok(matchesQuery(data[0], 'SCH-0001'));
+  assert.ok(matchesQuery(data[0], 'scheduleId'));
+  assert.ok(!matchesQuery(data[0], 'SCH-000*'.replace('*', '9999')));
+  assert.deepEqual(hourWindow({ from: '2025-10-15T08', to: '2025-10-15T10' }).words, ['15t08', '15t09', '15t10']);
+  assert.equal(hourWindow({ from: '2025-10-15T10', to: '2025-10-15T08' }), null);
 });
 
-test('root is stripped so the signature is stable across worktrees', () => {
-  const log = r => `Traceback (most recent call last):\n  File "${r}/app/order.py", line 33, in total\nAssertionError: x`;
-  const a = signature(log('/work/BUG-07-a1'), { root: '/work/BUG-07-a1' });
-  assert.equal(a, signature(log('/work/BUG-07-a2'), { root: '/work/BUG-07-a2' }));
-  assert.equal(a, 'AssertionError@app/order.py:total');
+test('bulk ids return every entry once, sorted by ts then seq, and say the data is complete', async () => {
+  const s = server();
+  const queries = Array.from({ length: 30 }, (_, i) => ({ service: 'schedules', query: `SCH-${String(i + 1).padStart(4, '0')}` }));
+  const r = await bulkSearch({ invoke: s.invoke, queries });
+  assert.equal(r.entries.length, 30);
+  assert.equal(r.complete, true);
+  assert.equal(r.calls, 35, '30 ids, 3 empty ids above, SCH-0000 below, one coverage call');
+  assert.equal(r.extended, undefined, 'the range was already whole');
+  assert.deepEqual(r.coverage, [{ service: 'schedules', fetched: 30, total: 30 }]);
+  assert.deepEqual(r.entries.map(e => e.ts), [...r.entries.map(e => e.ts)].sort());
 });
 
-test('windows stdlib frames are not project code', () => {
-  const log = 'Traceback (most recent call last):\n' +
-    '  File "C:\\Python310\\lib\\unittest\\loader.py", line 154, in loadTestsFromName\n' +
-    '    module = __import__(module_name)\n' +
-    '  File "D:\\w\\BUG-07\\tests\\test_export.py", line 3, in <module>\n' +
-    "ImportError: cannot import name 'export_csv' from 'shop.customers'";
-  assert.equal(signature(log, { root: 'D:\\w\\BUG-07' }), 'ImportError@tests/test_export.py:<module>');
-  assert.equal(signature(log), 'ImportError@BUG-07/tests/test_export.py:<module>');
+test('an hours window splits a busy hour by minute and drops entries outside the window; an unwindowed query over 20 is reported incomplete', async () => {
+  const s = server();
+  const r = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'rule-engine' }], hours: { from: '2025-10-15T08', to: '2025-10-15T08' } });
+  assert.equal(r.entries.length, 45, 'every entry of the busy hour');
+  assert.ok(r.entries.every(e => e.ts.startsWith('2025-10-15T08')));
+  assert.equal(r.complete, true);
+  const wide = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'rule-engine', query: 'applied' }] });
+  assert.equal(wide.complete, false);
+  assert.equal(wide.entries.length, 20);
+  assert.match(wide.incomplete[0].reason, /more than 20 matches/);
+  assert.equal(wide.incomplete[0].total, 50);
 });
 
-test('go, node and vitest failures', () => {
-  assert.equal(signature('--- FAIL: TestTotal (0.00s)\n    order_test.go:21: got 810 want 900\nFAIL'), 'TestFailure@test:TestTotal');
-  assert.equal(signature("TypeError: Cannot read properties of undefined (reading 'id')\n" +
-    '    at Object.<anonymous> (/w/node_modules/jest/x.js:1:1)\n' +
-    '    at OrderService.total (/w/src/order/order.service.ts:40:12)'), 'TypeError@src/order/order.service.ts:OrderService.total');
-  const vitest = n => ` FAIL  tests/money.test.ts > money > rounds VND\nAssertionError: expected ${n} to be 100\n ❯ tests/money.test.ts:${n}:15\n`;
-  assert.equal(signature(vitest(12)), 'AssertionError@tests/money.test.ts');
-  assert.equal(signature(vitest(12)), signature(vitest(30)));
-  assert.equal(signature('nothing recognisable here'), null);
+// Phút và giây trùng số tháng (09:10:10 tháng 10): từ 10 có trong mọi dòng của tháng nên không tách được bằng ts. Tool
+// phải báo thiếu (để fixer thêm id hay từ lọc), không được im lặng coi là đủ.
+test('a minute word that equals the month number cannot split the hour, and the lookup says so', async () => {
+  // Cùng 09:10:10, chỉ khác mili giây: mọi từ thời gian ngắn đều là 10 (trùng tháng), không nhánh nào tách được.
+  const busy = Array.from({ length: 25 }, (_, i) => entry(`2025-10-20T09:10:10.${String(100 + i)}Z`, 'rule-engine', 'rule.applied'));
+  const invoke = async args => {
+    const hits = busy.filter(e => matchesQuery(e, args.query ?? '')).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+    return { content: [{ type: 'text', text: JSON.stringify({ total: hits.length, returned: Math.min(20, hits.length), entries: hits.slice(0, 20) }) }] };
+  };
+  const r = await bulkSearch({ invoke, queries: [{ service: 'rule-engine' }], hours: { from: '2025-10-20T09', to: '2025-10-20T09' } });
+  assert.equal(r.complete, false);
+  assert.match(r.incomplete[0].reason, /not reached by minute words/);
 });
 
-test('condense keeps the failure, drops noise, falls back to the tail', () => {
-  const out = condense(`${Array(500).fill('[INFO] Downloading something').join('\n')}\n${MAVEN_FAIL}`);
-  assert.match(out, /expected:<900000> but was:<810000>/);
-  assert.match(out, /OrderServiceTest\.applyPercentCoupon\(OrderServiceTest\.java:88\)/);
-  assert.doesNotMatch(out, /Downloading|org\.junit\.Assert\.fail/);
-  assert.ok(out.split('\n').length < 15);
-  const tail = condense(Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n')).split('\n');
-  assert.equal(tail.at(-1), 'line 99');
-  assert.equal(tail.length, 20);
+test('a failed call is retried with backoff before the query counts as incomplete', async () => {
+  const s = server({ failFirst: 1 });
+  const r = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'schedules', query: 'SCH-0001' }] });
+  assert.equal(r.entries.length, 1);
+  assert.equal(r.complete, true);
+  assert.equal(s.count(), 3, 'failed call, retry, coverage');
+});
+
+test('the PI brief text carries the real input schema, the matching rule and the bulk call', () => {
+  const text = searchLogsHelp({ properties: { query: { type: 'string', maxLength: 500 }, service: { type: 'string' } } });
+  assert.match(text, /"maxLength":500/);
+  assert.match(text, /2025-10-18 never selects a day/);
+  assert.match(text, /company_lookup \{name: "search_logs", backlogItemKey, queries:/);
+  assert.match(text, /limit, pageSize, take or maxResults are refused/);
+});
+
+// QDO8W480 PI-04: danh mục có 70 schedule, thợ tra SCH-1001..SCH-1050; complete:true, ba trường báo cáo sai.
+test('a guessed consecutive id range is extended past both ends while ids still have entries, and coverage shows what is missing', async () => {
+  const s = server();
+  const queries = Array.from({ length: 12 }, (_, i) => ({ query: `SCH-${String(i + 8).padStart(4, '0')}` }));   // SCH-0008..0019 trong 0001..0030
+  const r = await bulkSearch({ invoke: s.invoke, queries });
+  assert.equal(r.complete, true);
+  assert.equal(r.entries.length, 30, 'every schedule, not only the 12 asked for');
+  assert.deepEqual(r.extended.map(x => [x.prefix, x.asked, x.added.length, x.added[0], x.added.at(-1)]), [['SCH-', ['SCH-0008', 'SCH-0019'], 18, 'SCH-0001', 'SCH-0030']]);
+  assert.deepEqual(r.coverage, [{ service: 'schedules', fetched: 30, total: 30 }]);
+  // Dãy không liền hay dưới 5 id: không đoán thêm; coverage vẫn cho thấy phần thiếu.
+  const few = await bulkSearch({ invoke: s.invoke, queries: [{ query: 'SCH-0001' }, { query: 'SCH-0005' }, { query: 'TX-00001' }] });
+  assert.equal(few.extended, undefined);
+  assert.deepEqual(few.coverage, [{ service: 'schedules', fetched: 2, total: 30 }, { service: 'rule-engine', fetched: 1, total: 50 }]);
+  assert.deepEqual(idRuns([{ query: 'A-1' }, { query: 'A-2' }, { query: 'A-3' }, { query: 'A-4' }, { query: 'A-6' }]), []);
+  const hours = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'rule-engine' }], hours: { from: '2025-10-16T00', to: '2025-10-16T04' } });
+  assert.equal(hours.extended, undefined);
+  assert.deepEqual(hours.coverage, [{ service: 'rule-engine', fetched: 5, total: 50 }]);
+  assert.match(searchLogsHelp(null), /complete:true only says every query you sent returned all of its matches/);
 });

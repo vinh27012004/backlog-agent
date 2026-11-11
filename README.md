@@ -17,7 +17,7 @@ backlog-agent/
 ├── docs/
 │   ├── team-pack/       thiết kế hiện hành, practice log
 │   └── btc/             tài liệu của BTC: guide, luật chơi, Q&A, API (NDA)
-└── vendor/              phần mềm của BTC, chỉ đọc: mtm-player-0.9.44/ (gitignore), team-orchestrator-pack-0.5.1/
+└── vendor/              phần mềm của BTC, chỉ đọc: mtm-player-0.9.45/ (gitignore), team-orchestrator-pack-0.5.1/
 ```
 
 Bản Python orchestrator cũ (gọi `codex exec`), prompt `agents/` và fixture `samples/` đã xoá ngày 30/10 sau khi

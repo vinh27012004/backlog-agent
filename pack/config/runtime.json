@@ -1,3 +1,16 @@
 {
-  "maxItemsInFlight": 5
+  "maxItemsInFlight": 0,
+  "maxHeavyCommands": null,
+  "deadlineOverflow": 2,
+  "autoPrepare": true,
+  "autoPublish": true,
+  "bootOnConfigure": true,
+  "compactStartFrame": true,
+  "preGameWatch": true,
+  "prewarmWorktrees": true,
+  "preGamePollMs": 500,
+  "releasePollMs": 250,
+  "autoChecks": true,
+  "linkedModules": true,
+  "scopedTests": true
 }

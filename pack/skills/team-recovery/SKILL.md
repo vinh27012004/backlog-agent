@@ -8,15 +8,15 @@ Configure the RESUME frame verbatim, report ORCHESTRATOR_RESTARTED (helper suppl
 Do not reclone, erase journal, discard work or assume old native threads/jobs survive.
 PREPARE follows game-preparation while skipping completed stages.
 
-GAME: login_match, refresh_match, next_actions.
+GAME: configure_session boots the match itself (`boot`); without `boot.ok`, call login_match and refresh_match. Then next_actions.
 - Pending submitIntent without receipt: replay submit_work with the original revision before changing candidate.
 - Published candidate: publish_item resumes its checkpoint. Receipt already present means no second POST.
-- Missing RAM jobs: recreate the gate; stable candidate/proofs/reviews remain in journal and are checked again.
+- Missing RAM jobs: a handed-off fix-result is published again with publish_item; the candidate stays in the journal.
 - Pending integration plan: resume publish to reconcile the frozen cherry-pick before allowing worker writes.
-- Incomplete worker/repair: spawn a new native worker with saved worktree/materials and the COMPLETE todo,
-  continue version numbering, register its thread using worker_checkpoint resume.
-- Stale/yielded worktree: sync only without a writer or pending submission, refresh affected evidence, and preflight
-  a new numbered result. Never overwrite a prior handoff to make an old gate look current.
+- Incomplete worker: spawn a new native worker with saved worktree/materials, continue version numbering, register
+  its thread using worker_checkpoint resume.
+- Stale/yielded worktree: sync only without a writer or pending submission, refresh affected evidence, and hand off
+  a new numbered result. Never overwrite a prior handoff.
 - Then work through next_actions in its order like any other turn, prepare_item included: an item that was waiting
   for a slot before the restart is still owed its start. Recovering old items never replaces that list.
 

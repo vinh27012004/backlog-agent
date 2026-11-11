@@ -1,14 +1,13 @@
 # Vận hành team-sdlc-pack
 
-Workflow 31/10: dùng prepare_item để lấy đủ brief; code item mặc định worker + reviewer, answer_only worker +
-solver độc lập. candidate_preflight kiểm result/answer/evidence trước full review. run_gate là job helper,
-không cần verifier LLM. result_handoff bind review/solver vào candidateId; publish_item quản lý verification,
-integrate/gate main/push/submit có checkpoint. next_actions trả hàng đợi và thời gian chờ.
+Workflow 03/11: dùng prepare_item để lấy đủ brief; mỗi item một team_fixer code, chạy test, chụp evidence và ghi
+fix-result. publish_item {fixResultFile} ghi candidate, kiểm answer/evidence (chỉ cảnh báo), integrate, push, submit
+có checkpoint. Không gate, reviewer, solver hay vòng sửa. next_actions trả hàng đợi và thời gian chờ.
 
-Mỗi bàn giao dùng results JSON mới, không ghi đè. Sửa answer/evidence thì followup worker cũ với todo đầy đủ.
+Mỗi bàn giao dùng results JSON mới, không ghi đè.
 Yield worker_checkpoint trước sync/final evidence. capture_evidence có download trong cùng login/profile,
 giữ bytes và trả hash; context scenario/worktree/appMode/before_fix hoặc final ghi vào manifest.
-Source/environment đổi phải kiểm phần mất hiệu lực. Rebase do push rejection luôn dừng để gate lại trước push.
+Source/environment đổi sau bàn giao thì candidate stale. Push bị từ chối thì rebase, sạch thì push tiếp.
 
 1. Cài: `pwsh -NoProfile -File install.ps1 -TeamWorkspace D:\mtm\<TEAM_ID>`.
 2. Trust TeamWorkspace trong Codex (`%USERPROFILE%\.codex\config.toml`):
@@ -27,9 +26,9 @@ Log lệnh của helper: `matches/<matchId>/.team-work/logs/`. Journal: `.team-w
 
 KB và source: `knowledgeHints` là gợi ý theo stack/regex, kèm `skills/<path>:line`, không phải nguyên nhân đã chứng minh.
 Company Tools được gọi với `backlogItemKey` sẽ lưu kết quả, tham số, thời điểm tra và SHA-256 cạnh vật liệu item;
-fixer/reviewer trích file kết quả và ID/section, đối chiếu source `file:line` rồi ghi kiểm chứng thực tế.
+fixer trích file kết quả và ID/section, đối chiếu source `file:line` rồi ghi kiểm chứng thực tế.
 
 Helper lưu dấu vân tay source tại `.codegraph/team-source.json` sau khi index thành công trên source không đổi.
-Nó kiểm cả file chưa commit/mới/xoá, làm mới graph trước triage, sau sync worktree và trước full review.
-Index cũ thiếu dấu này được sync lại; lỗi hoặc kiểm tra vượt ngân sách trả độ mới `unknown`, không chặn gate/publish.
+Nó kiểm cả file chưa commit/mới/xoá, làm mới graph trước triage, và sau sync worktree.
+Index cũ thiếu dấu này được sync lại; lỗi hoặc kiểm tra vượt ngân sách trả độ mới `unknown`, không chặn publish.
 Source đổi hoặc graph bị cắt không được dùng để xếp code item `easy`; đọc source/`rg` khi graph không đủ tin cậy.

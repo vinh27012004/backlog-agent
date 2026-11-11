@@ -16,3 +16,6 @@ vendor/mtm-player-*/
 
 # harness mẫu của dự án khác (có tên khách hàng): chỉ để tham khảo, không commit
 harness/
+
+# playwright-core cho test của pack (tests/pack/support.mjs tự cài, phiên bản ở pack/config/playwright.json)
+/playwright/

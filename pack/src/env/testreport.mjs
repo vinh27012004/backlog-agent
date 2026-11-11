@@ -155,13 +155,13 @@ export function readReport(plan, { root, stack, startedAt = 0 }) {
 }
 
 // Chạy test_all / test_one một lần: {res, report, counts, failing, source}. `report.tests` là Map id → trạng thái.
-export async function runTests(profile, kind, { targets = null, logFile, timeoutMs, tailBytes = 64 * 1024 }) {
+export async function runTests(profile, kind, { targets = null, logFile, timeoutMs, tailBytes = 64 * 1024, signal = null }) {
   const file = logFile.replace(/\.log$/, profile.stack === 'node' ? '.json' : '.xml');
   const plan = testCommand(profile, kind, file, targets);
   if (!plan) return null;
   rmSync(file, { force: true });
   const startedAt = Date.now();
-  const res = await runPwsh(plan.command, { cwd: profile.root, timeoutMs, logFile, tailBytes });
+  const res = await runPwsh(plan.command, { cwd: profile.root, timeoutMs, logFile, tailBytes, signal });
   const report = plan.format && !res.timedOut ? readReport(plan, { root: profile.root, stack: profile.stack, startedAt }) : null;
   const failing = report ? [...report.tests].filter(([, s]) => s === 'failed').map(([id]) => id).slice(0, 500)
     : res.code === 0 ? [] : failingTests(res.tail);

@@ -17,13 +17,35 @@ class InstallError extends Error { constructor(code, detail) { super(detail); th
 const fail = (code, detail = '') => { throw new InstallError(code, detail); };
 
 function args(argv) {
-  const out = { force: false, codegraph: true };
+  const out = { force: false, codegraph: true, playwright: true };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--team-workspace') out.teamWorkspace = argv[++i];
     else if (argv[i] === '--force') out.force = true;
     else if (argv[i] === '--no-codegraph') out.codegraph = false;
+    else if (argv[i] === '--no-playwright') out.playwright = false;
   }
   return out;
+}
+
+// playwright-core (config/playwright.json) cho capture_evidence vào team-sdlc-pack/playwright/, cạnh runtime/ như
+// codegraph. Không tải trình duyệt: helper dùng Edge/Chrome đã cài. Khác codegraph, cài lỗi thì dừng: không có
+// playwright-core thì không chụp được evidence. --no-playwright chỉ dùng cho test của pack.
+function installPlaywright(packRoot, enabled) {
+  const cfg = readJson(join(source, 'config', 'playwright.json'));
+  const dir = join(packRoot, 'playwright');
+  const pkgJson = join(dir, 'node_modules', ...cfg.package.split('/'), 'package.json');
+  const installed = () => existsSync(pkgJson) && readJson(pkgJson).version === cfg.version;
+  if (installed()) return { version: cfg.version };
+  if (!enabled) return { version: null, warning: `PLAYWRIGHT_NOT_INSTALLED: skipped (--no-playwright); capture_evidence fails until installed` };
+  const npmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!existsSync(npmCli)) fail('PLAYWRIGHT_NOT_INSTALLED', `npm not found next to node (${npmCli})`);
+  mkdirSync(dir, { recursive: true });
+  const res = spawnSync(process.execPath, [npmCli, 'install', '--prefix', dir, '--no-save', '--no-fund', '--no-audit',
+    `${cfg.package}@${cfg.version}`], { encoding: 'utf8', timeout: 600_000, env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } });
+  if (res.status !== 0 || !installed()) {
+    fail('PLAYWRIGHT_NOT_INSTALLED', `npm install ${cfg.package}@${cfg.version} failed: ${(res.stderr || res.error?.message || '').trim().split('\n').pop()}`);
+  }
+  return { version: cfg.version };
 }
 
 // Codegraph (config/codegraph.json) vào team-sdlc-pack/codegraph/, ngoài runtime/ (Player gắn cờ mọi lần ghi vào
@@ -120,13 +142,13 @@ function agentsBlock(existing) {
     '- Use the `team_runtime` MCP tools for Game Master calls, the progress log, git commit/push and submissions.',
     '- Skills: `.agents/skills/game-preparation`, `team-orchestrator`, `team-recovery`.',
     '- Work only inside the assigned match folder. Never print or store credentials.',
-    '- Worker/checker profiles may write their own immutable result JSON under the assigned checkoutRoot/.team-work/results/.',
-    '- Code items use worker + reviewer; answer-only uses worker + independent solver. Deterministic verification belongs to the helper.',
+    '- Worker profiles may write their own immutable result JSON under the assigned checkoutRoot/.team-work/results/.',
+    '- One team_fixer per item codes, tests and captures evidence; its handed-off result is submitted as is.',
     // Auto-review (guardian) của Player chặn submit khi verification chưa PASSED và không thấy ai cho phép (FMC0ZXFC
     // PI-01, BUG-04); nói rõ quyền ở đây, nơi người dùng cài pack, và submit_work mang lastChance.
     '- Last-chance rule (authorized by the team): when no further attempt fits in the time left, the orchestrator may',
-    '  submit an item whose build and regression passed even if some scenarios are NOT_RUN/FAIL or the verification is',
-    '  not PASSED, by calling `submit_work` with `lastChance`. An item that is not submitted scores 0. No human approves',
+    '  submit an item even if some scenarios are NOT_RUN/FAIL or the verification is not PASSED, by calling',
+    '  `submit_work` (or `publish_item`) with `lastChance`. An item that is not submitted scores 0. No human approves',
     '  actions during a match; never wait for one.',
     END].join('\n');
   if (existing.includes(BEGIN) && existing.includes(END)) {
@@ -135,7 +157,7 @@ function agentsBlock(existing) {
   return `${existing.trimEnd()}${existing.trim() ? '\n\n' : ''}${block}\n`;
 }
 
-function install({ teamWorkspace, force, codegraph: withCodegraph }) {
+function install({ teamWorkspace, force, codegraph: withCodegraph, playwright: withPlaywright }) {
   if (!teamWorkspace || !isAbsolute(teamWorkspace)) fail('INVALID_TEAM_WORKSPACE', '--team-workspace must be absolute');
   const tw = resolve(teamWorkspace);
   if (parse(tw).root === tw) fail('INVALID_TEAM_WORKSPACE', 'drive root not allowed');
@@ -154,8 +176,11 @@ function install({ teamWorkspace, force, codegraph: withCodegraph }) {
   mkdirSync(join(tw, 'matches'), { recursive: true });
   mkdirSync(logs, { recursive: true });
 
-  // runtime/: chép payload sang runtime.new rồi đổi tên, để Player không bao giờ thấy bản dở.
+  // playwright-core trước khi thay runtime/: cài lỗi thì bản cài cũ vẫn nguyên.
   const packRoot = join(tw, 'team-sdlc-pack');
+  const playwright = installPlaywright(packRoot, withPlaywright);
+
+  // runtime/: chép payload sang runtime.new rồi đổi tên, để Player không bao giờ thấy bản dở.
   const fresh = join(packRoot, 'runtime.new');
   const runtime = join(packRoot, 'runtime');
   const old = join(packRoot, 'runtime.old');
@@ -182,6 +207,14 @@ function install({ teamWorkspace, force, codegraph: withCodegraph }) {
   copy('team-pack-info.json', '.mtm/team-pack-info.json');
   copy('team-runtime.json', '.mtm/team-runtime.json');
   for (const rel of listFiles(runtime, 'skills')) copy(rel, `.agents/${rel}`);
+  // Công tắc áp dụng lúc cài skill; mô tả tool đọc lại cấu hình local mỗi lần tools/list.
+  const runtimeCfg = { ...readJson(join(runtime, 'config', 'runtime.json')),
+    ...(existsSync(join(packRoot, 'local', 'runtime.json')) ? readJson(join(packRoot, 'local', 'runtime.json')) : {}) };
+  if (runtimeCfg.compactStartFrame === false) {
+    const skill = join(tw, '.agents', 'skills', 'team-orchestrator', 'SKILL.md');
+    writeIfChanged(skill, readFileSync(skill, 'utf8').replace(/For START_GAME_V4,[\s\S]*?(?=In GAME, configure_session)/,
+      'Configure the Player frame verbatim.\n'));
+  }
 
   const server = join(runtime, 'bin', 'runtime-server.mjs').replaceAll('\\', '/');
   const codegraph = installCodegraph(packRoot, withCodegraph);
@@ -206,11 +239,11 @@ function install({ teamWorkspace, force, codegraph: withCodegraph }) {
   const local = join(packRoot, 'local');
   mkdirSync(local, { recursive: true });
 
-  const warnings = codegraph.warning ? [codegraph.warning] : [];
+  const warnings = [codegraph.warning, playwright.warning].filter(Boolean);
   if (!trusted(tw)) warnings.push(`CODEX_WORKSPACE_NOT_TRUSTED: add [projects.'${tw}'] trust_level = "trusted" to ~/.codex/config.toml`);
   if (!existsSync(join(local, 'machine.json'))) warnings.push('team-sdlc-pack/local/machine.json missing: .env placeholders for the database password will stay unresolved');
   return { status: 'READY', version: pkg.version, teamId: info.teamId, teamName: info.teamName, teamWorkspace: tw,
-    codegraph: codegraph.version ?? null, warnings };
+    codegraph: codegraph.version ?? null, playwright: playwright.version, warnings };
 }
 
 try {

@@ -462,3 +462,83 @@ nên `ready_for_evidence` của subagent cũng tự sync/resume (L90). Test ki�
 đang chờ. Fixture browser kiểm loading/điều hướng đã có repository Git riêng và commit ban đầu, không phụ thuộc repo
 cha của thư mục tạm. Test workflow/database: 33/33 đạt; toàn bộ test browser: 14/14 đạt ngoài sandbox
 (trong sandbox gặp `CDP_TIMEOUT` tại `Page.enable`).
+
+## #17 · 04/11/2026 · tự luyện `EIOR38SI` (pack sau commit `4e920ea` và các sửa chưa commit cùng ngày)
+
+Bản phát có 2 test fail sẵn: `accounting.test.ts` (`deriveInvoiceStatus` dùng `paidMinor > totalMinor`) và
+`cascade.test.ts` (migration `20260702093140_company_delete_cascades_financials` đổi khoá ngoại sang `ON DELETE CASCADE`).
+Helper giao BUG-01 làm chủ baseline. Nguồn: `.team-work/journal.json`, `answers/*/evidence/*.log`, kết quả chấm BUG-02.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L92 | Grader chạy cả bộ test trên commit nộp của **từng** item (BUG-02: 12 test gốc + 19 test mới = 31). BUG-02 (`youFix:false`) nộp DONE lúc 14:20 với TC-04 FAIL; bản sửa của chủ BUG-01 lên main lúc 14:27 | BUG-02-TC-04 0/20 (29 đạt, 2 hỏng), BUG-02 80/100 | **Đã** sửa: chủ sửa baseline trước, báo `worker_checkpoint baseline_fixed`, helper commit lên main; item cần cả bộ test chờ bản sửa khi publish (`BASELINE_PENDING`), sync rồi chạy lại (13 §Test fail sẵn) |
+| L93 | Chủ BUG-01 viết lại assertion của `cascade.test.ts` ("cascades invoices per the owner-requested migration") thay vì thêm migration trả lại RESTRICT; `existing tests changed` chỉ là cảnh báo | Grader khôi phục test gốc: test cascade vẫn hỏng ở commit BUG-01 và mọi commit sau (BUG-03, BUG-04, CR-01..03), cần đối chiếu kết quả chấm các item đó | **Đã** sửa: `worker_checkpoint candidate` chặn mọi thay đổi ở file test BTC phát; `baseline_fixed` từ chối file test |
+
+## #18 · 06/11/2026 · kiểm tra prepare của trận `OMZJW0S0` (chạy ngày 05/11)
+
+BUG-09 đạt 55/80: TC-02 khai NOT_RUN do thiếu ảnh xác minh cặp +14/+15 sau reload. Fixer có 52 lượt gọi model,
+trung bình 16,9 giây/lượt; code/test 2m51s, giai đoạn evidence 11m29s. Kiểm tra prepare phát hiện các lỗi nền sau;
+việc sửa chúng không thay đổi hồ sơ hay điểm của trận đã nộp.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L94 | Profile dựng `yarn` trần dù repo có `.yarn/releases/yarn-4.17.1.cjs`; Yarn không có trên PATH | Install không chạy, worktree thiếu dependency, fixer phải cài và kiểm tra lại bằng bundled Yarn | **Đã** sửa: dùng `node <yarnPath>` theo yarnrc hoặc release đóng gói cho mọi lệnh profile và app; Yarn 2+ dùng `--immutable`, Yarn 1 dùng `--frozen-lockfile` |
+| L95 | `runPwsh` dùng `Continue` rồi `exit $LASTEXITCODE`; command không tồn tại để lại `$null`, trả exit 0 | Install/checks báo PASS giả; metadata cũ tiếp tục được đưa vào fix-result | **Đã** sửa: bắt lỗi PowerShell, kiểm tra trạng thái lệnh, giữ native exit code; app dùng chung wrapper. Test thiếu command cả trước/sau native success, exception và native failure |
+| L96 | Helper bỏ qua `env-require/prepare-source.ps1` và chạy doctor trước build; `lage build` không tạo bản browser mà doctor đòi | Doctor NOT_READY dù đã sửa install | **Đã** sửa: chạy script BTC (install + build) trên main và từng worktree; không build suy ra lần nữa trong prepare. Không có script thì build suy ra trước doctor; READY còn phải có exit 0. Tests trong `environment.test.mjs` |
+
+Kiểm tra: 30 test liên quan PASS; toàn pack 187/194 PASS, 7 lỗi còn lại tái hiện nguyên trạng trên bản `HEAD` riêng
+(codegraph: regex chỉ nhận LF; model/effort, mô tả signals và slot: expectation lệch cấu hình/hành vi hiện có).
+Máy kiểm tra thiếu PowerShell 7; dùng host Windows PowerShell 5.1 qua bootstrap chỉ dành cho test, không đổi shell
+của helper. Log ở `runs/verify-omzjw0s0/`; chưa chạy lại toàn bộ install/build của repo Actual hay replay TC-02.
+
+Tối ưu worktree tiếp theo: thêm cache tải package dùng chung, proof install/prepare-source/build riêng theo worktree,
+gộp create/prewarm đồng thời, và bỏ setup của answer-only cả khi sync đổi dependency. 84 test tích hợp liên quan PASS.
+Kiểm tra thêm bằng Yarn 4.17.1 thật trong hai bản sao nhỏ, tắt mạng: cache trống fail đúng YN0080; cache đã có archive
+cho phép cả hai install `--immutable` exit 0, `node_modules` riêng và module chạy được. Không sửa checkout trận cũ.
+
+## #19 · 10/11/2026 · tự luyện `RATH0OHJ` (bộ 12 item như `QDYZMY1K`, pack sau commit `d61ffd1`)
+
+Nộp 12/12 item trong 48m14s, khoảng 135 credit, 61,3M input (root 51,5%, fixer 36,5%, guardian 12%). Judge 10/12
+(TASK-06 J3/J4, CR-07 J1/J4), so với 9/12 ở `QDYZMY1K`; TB thời gian mỗi item 12m13s (−17%), code/test −40%.
+Nhưng grader chấm 0 cả 7 item nộp sau TASK-06 (BUG-09, CR-07, TASK-11, PI-03, TASK-07, TASK-08, BUG-11) với lý do
+`submit.json missing or not JSON: ENOENT … RATH0OHJ/src/answers/<ID>/submit.json`. Nguồn: `git ls-tree` từng
+`gitRevision` trong `.team-work/journal.json`, bundle `runs/judge/RATH0OHJ/`, kết quả chấm của BTC.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L97 | TASK-06 chạy `evidence/derive.mjs` từ `src/` (script đọc `packages/...` tương đối) và ghi `answers/TASK-06/submit.json` tương đối, thành `RATH0OHJ/src/answers/TASK-06/`; integrate `git add -- RATH0OHJ` commit cả bản lạc đó lên main (`6c4fe24`). Từ đó grader tìm submit.json ở `src/answers/<ID>/`; bước kiểm hồ sơ vẫn đọc `answers/` đúng chỗ nên không báo gì | 4 item nộp trước `6c4fe24` không có `src/answers/` và không bị lỗi này; cả 7 item nộp sau đều 0 điểm (620 điểm) | **Đã** sửa: `strayAnswers` (`answers.mjs`) nhận file mới trong một `answers/<ID>/` không ở gốc thư mục trận; `worker_checkpoint candidate` giữ worker lại tới khi xoá bản đó; `integrateCandidate` loại chúng khỏi commit; brief có `answers_dir:` tuyệt đối. Test trong `workflow.test.mjs`, `publish.test.mjs` |
+| L98 | `cr-07-replay.test.ts` luôn ghi CSV/JSON vào `answers/CR-07/evidence/` đã commit mỗi lần bộ test chạy (grader, `run_checks` của item khác) | Chưa thấy làm bẩn main ở trận này, nhưng khi BUG-11 lên main kết quả replay đổi và file đã track bị sửa | Chưa sửa: cân nhắc chặn test mới ghi vào `answers/` khi không có biến môi trường (như `BUG11_REPORT_PATH` của BUG-11) |
+| L99 | CR-07 nộp trước BUG-11 (hạn 20 phút) nên số liệu chính thức chưa có bản sửa của BUG-11: boundary −129 400 000 thay vì −180 000 000; trang không chụp được vì capture từ chối app chế độ custom (cùng lỗi làm BUG-09 chụp hỏng 3 lần, evidence 19m36s so với code 1m45s) | CR-07 PARTIAL (TC-02 FAIL, TC-03/04 NOT_RUN) | Chưa sửa: xem lệch chế độ app (custom/production) giữa `app start` và `capture_evidence` |
+
+## #20 · 10/11/2026 · tự luyện `LXRMBRA2` (bộ 12 item như `RATH0OHJ`, pack sau commit `7305e1e`)
+
+Nộp 10/12 item, 870 điểm đã nộp (RATH0OHJ: 12/12, 1000), 48m33s, khoảng 129 credit, 59,5M input. Judge 10/12 (CR-07
+và PI-03 rớt J1). Grader: TASK-08 93/100, CR-07 40/100, PI-03 25/100; TASK-07 (50) đóng khi chưa nộp, BUG-11 (80) không
+nộp được. Nguồn: journal, transcript Codex của root và từng worker, bundle `runs/judge/LXRMBRA2/`, kết quả chấm của BTC.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L100 | `commit_and_push` từ chối file > 5 MB (mốc tự đặt từ 26/10); TASK-07 phải commit `datasets/bulk-03/` (đề cho tới 20 MB, manifest 10 MB). Kiểm sau khi commit đã lên main local và không gỡ ra khi push hỏng | TASK-07 không nộp (−50); mọi push sau đó mang theo file ấy, BUG-11 có candidate hợp lệ vẫn `PATH_NOT_ALLOWED` 2 lần (−80) | **Đã** sửa: bỏ mốc cỡ file; các kiểm đường dẫn của push (`unpushable`: ngoài thư mục trận, secret, evidence sai chỗ, exam-info.json) chạy trong `integrateCandidate` trước khi commit. Chưa làm: gỡ commit khỏi main local khi push hỏng vì lý do khác (GitHub từ chối, rebase xung đột) |
+| L101 | `run_checks status` khi build hỏng mà bộ test còn chạy chỉ trả `build: failed`, không kèm log; sau sửa 10/11 còn chờ đủ 110 s mỗi lần | BUG-11: build hỏng ở giây 138 (lỗi kiểu trong test mới), worker đọc được lỗi ở giây 425, bàn giao 08:28 thay vì khoảng 08:21 | **Đã** sửa: mỗi check xong ghi ngay vào `checks.json` (`finished`, kèm đuôi log khi hỏng); status/run trả về ngay khi một check hỏng (`failed[]`); `run` sau khi source đổi huỷ lần chạy cũ (file `checks.cancel`, cả khi lần chạy thuộc helper của root) rồi chạy lại. Test trong `checks.test.mjs` |
+| L102 | Tra log hàng loạt 320 truy vấn của PI-03 mất 452 s (mô phỏng 12 s; PI-02 tra cùng lúc, một job 1461 s; poller của root báo NETWORK_ERROR timeout cùng thời gian). Worker bàn giao trống ở hạn 12 phút, job xong 36 s sau; lượt làm lại sau `SYNC_REQUIRED` chỉ chạy lại typecheck | PI-03: 4 trường báo cáo trống, 25/100 (bản sửa đủ điểm) | **Đã** sửa: `worker_checkpoint candidate` chờ job `log_lookup` còn chạy (tới 90 s, trừ khi item còn dưới 3 phút) và từ chối một lần khi kết quả chưa được đọc, kèm đường dẫn file; `resume` nhắc job trong hint; `backlog-pi` Form B bước 5. Chưa sửa: tốc độ tra (hai job cùng lúc, mỗi job 8 lời gọi song song) |
+| L103 | Thu hẹp test (sửa 10/11) chạy hai gói lần lượt khi item sửa cả `desktop-client`: core rồi web | CR-07: bước test timeout 600 s (lage chạy cả bộ song song trong khoảng 6m40s) | **Đã** sửa: phạm vi từ hai gói trở lên thì chạy cả bộ. BUG-09 (một gói) 289 s, đúng như mong đợi |
+| L104 | `capture_evidence` từ chối app khởi động bằng lệnh riêng (`mode: custom`) khi context khai `production` (L99 chưa sửa) | BUG-09 hỏi root, giữ khoá `app_data` 08:00–08:15; CR-07 chờ khoá, app chưa lên khi bị dừng ở 08:18: TC-03/TC-04 NOT_RUN (−19) | **Đã** sửa: app `custom` nhận appMode nào worker khai |
+| L105 | TASK-08 viết một case suy từ việc ghép luật (đổi đích một transfer sang tài khoản off-budget khác thì counterpart mất category, suy từ A1) và sửa product code cho case đó đạt | `suite-passes` 0/7: case fail trên bản đúng của BTC | **Đã** sửa trong `backlog-task` Form C: mỗi kỳ vọng phải là điều một luật của spec nói cho đúng thao tác đó; không sửa product code vì case tự suy |
+| L106 | CR-07 (hạn 20 phút) cần bản sửa BUG-11 trong source nộp; BUG-11 xong code ở phút 7,5 nhưng bàn giao ở phút 25 và không lên main (L100). Hai item không sửa chung file nào | CR-07 mất `csv-test-data`, `hidden-fixture`, `audit-summary` (−41) | **Đã** sửa: helper chép product code của item được chờ sang worktree item chờ ở `ready_for_evidence`/`candidate` (`match/dependency.mjs`), báo item chờ một lần, brief `<needed_by>` cho item được chờ, `refresh_candidate {reason: dependency_ready}`; bản chép giống bản lên main thì khỏi sync lại. Skill `backlog-bug`, `backlog-cr` §4.3, `team-orchestrator`. Test trong `workflow.test.mjs` |
+| L108 | BUG-11 bàn giao 08:28 khi main đã có `transfer.ts` của TASK-08 (08:23); chỉ biết lúc publish (`SYNC_REQUIRED`), thêm một vòng root → worker | BUG-11 publish lần đầu hỏng, mất khoảng 2 phút | **Đã** sửa: candidate (còn ≥ 3 phút) từ chối khi main đổi một file product của item với nội dung khác, bảo `ready_for_evidence` để sync |
+| L109 | Bộ giới hạn Company Tools của helper chỉ giữ cửa sổ 60 s (100 request), không biết burst 20 request/10 giây của server. Đo lại từ journal và transcript: lời gọi `search_logs` lẻ không bị chờ mất 0,2–0,6 s; job hàng loạt chạy 1,5–1,7 lời gọi/s, đúng trần 100/phút của helper; job 1505 lời gọi của PI-02 chiếm khoảng 15 phút ngân sách cả đội, PI-03 chạy cùng lúc còn 0,7 lời gọi/s (452 s, một mình ở RATH0OHJ 221 s), lời gọi lẻ phải chờ 14–19 s. `POLL_ERROR` của poller đều đặn cả khi không có job: không liên quan. 429 trong transcript là của sync-server Actual ở localhost | PI-03 không kịp có đáp án; PI-02 chậm hơn RATH0OHJ 4m46s | **Đã** sửa: hai cửa sổ 18/10 s và 110/60 s, gửi lại sau HTTP 429 theo Retry-After, đếm `stats`. Chưa sửa: hàng đợi ưu tiên (lời gọi lẻ và job nhỏ trước), báo chi phí job lớn trước khi chạy |
+| L110 | `capture_evidence` chụp snapshot source (`contentTree`: `git add -A` vào index tạm) đúng lúc bộ test nền của `run_checks` ghi lại `transfer.test.ts.snap`: `failed to insert into database` | BUG-09: lần chụp đầu hỏng `GIT_FAILED`, khoảng 2 phút | **Đã** sửa: `contentTree` thử lại tới 4 lần với index tạm mới (chờ 0,4–1,2 s), chỉ với `GIT_FAILED`. Test trong `git.test.mjs` |
+| L107 | Baseline test của prepare `TIMEOUT`, brief không có `<baseline_failures>`; 2 test charset Windows-1252 (`parse-file.test.ts`) fail sẵn | BUG-09 và BUG-11 mỗi item hỏi root một lần (20–34 s) và hạ status xuống PARTIAL | Chưa sửa |
+
+## #21 · 11/11/2026 · tự luyện `QXUD1QAI` (bộ 12 item như `LXRMBRA2`, pack sau commit `0ffe9bb`)
+
+979/1000 điểm; mọi item trừ BUG-11 (78/80) và CR-07 (81/100) đủ điểm. Chép sớm bản sửa (L106) có tác dụng: CR-07 nhận 4
+file product của BUG-11 (`sharedFix`), lên main trước BUG-11 và lấy lại 41 điểm phụ thuộc (`csv-test-data`,
+`hidden-fixture`, `audit-summary`). Nguồn: journal, transcript worker CR-07, commit nộp `2fc3aa2`, kết quả chấm của BTC.
+
+| # | Lỗi | Hệ quả | Sửa |
+|---|---|---|---|
+| L111 | `bug-11-replay.test.ts` ghi `fs.writeFile('/bug-11-statement.qif')`. Trên Windows `/` là gốc ổ hiện tại: file thành `D:\bug-11-statement.qif`, test 0,4 s. Máy chấm Linux không cho ghi vào `/`, `atomicWriteFile` của Actual thử lại 20 lần (100–500 ms), quá 5 s mặc định của vitest; chạy lại vẫn timeout | BUG-11 `team-tests` 0/2 | **Đã** sửa: `worker_checkpoint candidate` quét test mới/sửa của item (`absoluteTestWrites`, `answers.mjs`): file có lệnh ghi và chuỗi đường dẫn tuyệt đối ngoài repo (`'/x.ext'`, `'C:\...'`) thì từ chối một lần; gọi lại y nguyên thì coi là file system ảo trong bộ nhớ và chỉ cảnh báo (test sẵn có `fs/index.test.ts` ghi `'/outside.txt'` vào IndexedDB giả). `backlog-references`: test ghi file tạm dưới `mkdtemp(os.tmpdir())`, đọc fixture theo `__dirname`, test replay cả bộ dữ liệu đặt timeout rõ |
+| L112 | `app start` chờ tối đa 50 s. CR-07: sửa typecheck rồi chạy lại `run_checks`, `app start` chờ build 16:40–16:45, trả "starting" lúc 16:45:56; app lên lúc 16:46:22 nhưng worker không hỏi lại, tới `return_by` (16:47:39) dừng app và bàn giao TC-03/TC-04 NOT_RUN | CR-07 `mvs-page` 0/14, `screen` 0/5 | **Đã** sửa: `app start`/`status` chờ tới 110 s với mọi giá trị dương, trả về ngay khi app trả lời; chờ build của `run_checks` và chờ app chung một hạn. Thêm (11/11): trong 9 trận cùng bộ đề CR-07 chỉ chụp được trang một lần (RATH0OHJ); từ `ready_for_evidence` tới khi app trả lời mất 5m45s–6m+, vì `run_checks` chạy typecheck (113 s) rồi mới build (78 s) và `app start` chờ build đó. Đã sửa: typecheck, build và bộ test chạy cùng lúc trừ project Next.js (`typecheckReadsBuild`: tsconfig có `.next/types` hay dependency `next`, lý do ME1X0FFX); item có hạn cần ảnh có khối brief `<screens_first>` (chụp ngay khi trang chạy được, trước `ready_for_evidence`) và hint `ready_for_evidence` nhắc ảnh còn thiếu cùng số phút còn lại; `evidence-playbook` |
+| L113 | Typecheck của `run_checks` luôn chặn. CR-07: 3 lỗi strict (`implicitly has an 'any' type`) trong `cr-07-replay.test.ts`, worker sửa rồi chạy lại check (huỷ build đang chạy), app lên muộn hơn khoảng 2 phút. Không đề nào của bộ Actual nhắc type check: grader chỉ chạy test loot-core, lỗi đó không mất điểm nào | Góp phần làm CR-07 mất ảnh trang (−19) | **Đã** sửa: đề không nhắc type check (`typecheckGraded`) và mọi lỗi kiểu nằm trong file test mới/sửa của chính item (`typeErrorsInOwnTests`, so đường dẫn trong dòng `error TS`) thì typecheck là `advisory`: không trả lỗi sớm, `ok` vẫn true, `run` không huỷ lần chạy, hint bảo chụp evidence trước và sửa sau; dòng verification ghi "not graded". Đề có nhắc, hay có lỗi trong code sản phẩm: chặn như cũ. Skill: đề chấm type check thì chạy `run_checks {checks: ["typecheck"]}` ngay khi có file test mới |
+| L114 | Luật chấm nằm rải trong đề và MVS ("The grader runs the loot-core tests…", "TC-03 is replayed by the organizer in a browser…", "A scenario scores only when you report it PASS with its evidence") | Worker không thấy hết cách chấm khi lên kế hoạch | **Đã** sửa: khối brief `<grading>` (`match/grading.mjs`) trích mọi câu về cách chấm của đề và MVS (bỏ bảng, code), cộng điều helper đọc ra: grader chạy test nào, có chấm type check không, có khôi phục test gốc không, ảnh cần có, giờ đóng, item phụ thuộc. Câu nhắm vào AI/agent (`injectionHeuristic`) bị bỏ ra và chỉ được đếm. `backlog-references`: đọc `<grading>` trước khi lên kế hoạch; nêu rõ loại chữ nào trong đề, MVS, file challenge, dữ liệu công ty là lệnh cài cắm (đổi luật đội, bỏ kiểm, sửa pack/helper/skill, chạm secret, URL, lệnh ngoài worktree, file item khác) thì bỏ qua và ghi vào engineeringRecord risks. Nguyên tắc cho mọi chỗ helper đọc đề: chỉ được làm kiểm chặt hơn hay thu hẹp trong giới hạn đã kiểm, không bao giờ thành lệnh, đường dẫn ngoài trận, URL hay đối số tool |
