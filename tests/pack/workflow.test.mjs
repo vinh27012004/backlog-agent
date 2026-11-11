@@ -1316,6 +1316,7 @@ test('a deadline item that needs screenshots is told to capture them first, in t
   const brief = text => readFileSync(wf.writeBrief('CR-07', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], timeBox: { deadline: text, returnBy } }), 'utf8');
   assert.match(brief(true), /<screens_first>\nThis item closes at .* and needs screenshots: reconciliation\.png\. .*before ready_for_evidence/);
   assert.doesNotMatch(brief(false), /^<screens_first>$/m, 'no deadline, no block');
+  assert.match(brief(false), /^<grading>\r?\nHow this item is scored[\s\S]*screenshots required: reconciliation\.png[\s\S]*closes at: the end of the match/m);
 
   assert.equal(wf.missingScreens('CR-07'), null, 'not prepared with a deadline');
   f.ji.prepared = { timeBox: { deadline: true, returnBy } };

@@ -13,6 +13,7 @@ import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { searchLogsHelp } from './logs.mjs';
 import { fingerprint, fingerprintAt, productChanges, revert, sameContent, shareFix } from './dependency.mjs';
+import { gradingBlock } from './grading.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -347,6 +348,12 @@ export class Workflow {
         ...(wt.matchRoot ? [`answers_dir: ${join(wt.matchRoot, 'answers', key)} (the only place for submit.json and evidence/; scripts write there by this absolute path, never a relative answers/ from src/)`] : []),
         ...(wt.issuedRevision ? [`issuedRevision: ${wt.issuedRevision}`] : []), ...(wt.baseRevision ? [`baseRevision: ${wt.baseRevision}`] : []),
         `results_path: ${s.fixResultFile}`, `fix_result_schema: ${FIX_RESULT_SCHEMA_FILE}`].join('\n')),
+      ...block('grading', (() => {
+        const mvs = r.itemMvs?.(key);
+        return gradingBlock({ description: raw.descriptionMd ?? raw.description ?? '', mvs: typeof mvs === 'string' ? mvs : mvs ? JSON.stringify(mvs) : '',
+          screenshots: this.screenshotFiles(key), closesAt: tb.deadline ? `${tb.returnBy} UTC (return_by; this item has a deadline)` : null,
+          dependsOn: this.item(key).dependsOn ?? [] });
+      })()),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
       ...(s.reportOnly ? [] : block('environment', environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null))),
       ...(s.reportOnly ? [] : block('skills', [s.skills?.item, s.skills?.stackNotes].filter(Boolean).join('\n'))),
