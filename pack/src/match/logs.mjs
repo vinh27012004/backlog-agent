@@ -118,13 +118,58 @@ export async function bulkSearch({ invoke, queries, hours = null, concurrency = 
     done++;
     if (onProgress && done % 50 === 0) onProgress({ done, of: plan.length, calls, entries: found.size });
   }));
+  // Dãy id liên tiếp (SCH-1001..SCH-1050) do thợ tự đoán điểm đầu và cuối: tra tiếp ra hai phía tới khi gặp
+  // EXTEND_EMPTY id liền không có dòng nào. QDO8W480 PI-04: danh mục có 70 schedule (SCH-1001..1070), thợ tra 50 id,
+  // kết quả ghi complete:true và ba trường báo cáo tính từ 189/645 dòng của tháng 12 đều sai (45 điểm).
+  const extended = [];
+  if (!window && !stopped) {
+    for (const run of idRuns(base)) {
+      const row = { ...(run.service ? { service: run.service } : {}), prefix: run.prefix, asked: [run.format(run.min), run.format(run.max)], added: [] };
+      for (const step of [1, -1]) {
+        let empty = 0;
+        for (let n = (step > 0 ? run.max : run.min) + step, tried = 0; n >= 0 && empty < EXTEND_EMPTY && tried < EXTEND_MAX && !stopped; n += step, tried++) {
+          const q = { ...(run.service ? { service: run.service } : {}), query: run.format(n) };
+          const page = await ask(q);
+          if (!page) { incomplete.push({ ...describe1(q), total: null, got: 0, reason: 'call failed' }); break; }
+          if (!page.total) { empty++; continue; }
+          empty = 0; keep(page); row.added.push(q.query);
+          if (page.total > page.entries.length) incomplete.push({ ...describe1(q), total: page.total, got: page.entries.length, reason: 'more than 20 matches: add hours or narrower words' });
+        }
+      }
+      if (row.added.length) extended.push({ ...row, added: row.added.sort() });
+    }
+  }
+  // Mỗi service có dòng trong kết quả: đã lấy bao nhiêu trên tổng số dòng của service (một lời gọi mỗi service).
+  const coverage = [];
+  const services = [...new Set([...base.map(q => q.service), ...[...found.values()].map(e => e?.service)].filter(s => typeof s === 'string' && s))].slice(0, 12);
+  for (const service of services) {
+    if (stopped) break;
+    const page = await ask({ service, query: '' });
+    if (page) coverage.push({ service, fetched: [...found.values()].filter(e => e?.service === service).length, total: page.total });
+  }
   return { calls, entries: sortLog(found.values()), complete: !incomplete.length && !stopped, incomplete: incomplete.slice(0, 50),
+    ...(extended.length ? { extended } : {}), ...(coverage.length ? { coverage } : {}),
     incompleteCount: incomplete.length, ...(stopped ? { stopped } : {}), ...(window ? { window: { from: hours.from, to: hours.to, hourWords: window.words.length } } : {}) };
 }
 // Số lời gọi tối thiểu của một lần tra (mỗi truy vấn × mỗi giờ của khung; chưa tính phần chia theo phút).
 export function planSize({ queries, hours = null }) {
   const n = Array.isArray(queries) && queries.length ? queries.length : 1;
   return n * (hours ? hourWindow(hours)?.words.length ?? 1 : 1);
+}
+// Các dãy id liên tiếp trong danh sách truy vấn: cùng service, cùng tiền tố, từ 5 id số liền nhau trở lên.
+const EXTEND_EMPTY = 3, EXTEND_MAX = 300;
+export function idRuns(queries) {
+  const groups = new Map();
+  for (const q of queries) {
+    const m = /^([A-Za-z][A-Za-z0-9]*[-_])(\d{1,9})$/.exec(q.query ?? '');
+    if (!m) continue;
+    const key = `${q.service ?? ''}|${m[1]}|${m[2].length}`;
+    const g = groups.get(key) ?? { service: q.service ?? null, prefix: m[1], width: m[2].length, nums: new Set() };
+    g.nums.add(Number(m[2])); groups.set(key, g);
+  }
+  return [...groups.values()].filter(g => g.nums.size >= 5 && Math.max(...g.nums) - Math.min(...g.nums) + 1 === g.nums.size)
+    .map(g => ({ service: g.service, prefix: g.prefix, min: Math.min(...g.nums), max: Math.max(...g.nums),
+      format: n => `${g.prefix}${String(n).padStart(g.width, '0')}` }));
 }
 const describe1 = q => ({ ...(q.service ? { service: q.service } : {}), query: q.query });
 
@@ -136,5 +181,6 @@ export function searchLogsHelp(inputSchema) {
     'Matching: the entry (field names included) and the query are lower-cased and split into words at every non-letter/digit; every query word must equal a whole word of the entry (AND, any order, no wildcard). ts 2025-10-18T22:51:08.468Z gives the words 2025, 10, 18t22, 51, 08, 468z: query 2025-10-18T22 selects that hour (in every month that has a day 18), 2025-10-18 never selects a day (18 matches any 18), 2025.10.3 matches any entry with the words 2025, 10 and 3, TX-007* matches nothing. Good filters: message words (applied, posted), ids (TX-00282, SCH-0103), hour words (18t22), seq numbers, field names (txnId).',
     'Fetch in bulk, never in your own loops: company_lookup {name: "search_logs", backlogItemKey, queries: [{service, query}, ...] (up to 2500, build the list in code, e.g. every TX-00001..TX-00716 or SCH-0001..SCH-0320), hours: {from: "2025-10-15T08", to: "2025-11-03T09"} (optional: each query once per hour in that window, entries outside it dropped)}. The helper runs them in parallel, splits an hour with more than 20 matches by minute, and saves ONE file (savedTo) with every entry once, sorted by ts then context.seq, plus complete:true or the list of incomplete queries. It answers within about 100 s or returns a jobId: job_status {jobId, waitSeconds: 110}. Company Tools allow the whole team about 100 calls a minute, so 300 calls take 3 minutes: a lookup that cannot finish before your return_by is refused at once with the number of calls that still fit. An hours window costs one call per query per hour (a full month is 744 for ONE query): use it only for a window of a few hours or days; otherwise list ids (the first 20 entries of a service show its id fields) and message words. Shorter lookups run first, and single lookups are never held up by a bulk one.',
     'Compute the answers with a script over that file (never by reading entries), and only from complete data: complete:false means the counts are lower bounds, say so and add the missing queries.',
+    'complete:true only says every query you sent returned all of its matches. It says nothing about entries your queries never asked for. Take id lists from the catalogue in the test data (get_test_data), not from a guessed range: every id of the catalogue, plus the services the incident rules name (deploy, support, removals). The helper extends a consecutive id range past both ends while ids still have entries (extended) and reports per service how many entries you fetched out of its total (coverage): when a service the rules count is far from covered, find what is missing before you answer.',
   ].join('\n');
 }

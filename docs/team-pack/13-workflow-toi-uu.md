@@ -507,6 +507,25 @@ mất 588 s; cả hai nộp trường báo cáo trống.
 - Đã xem lại, không phải lỗi hạ tầng: lần build app đầu của CR-05 hỏng vì chính code của thợ import
   `loot-core/platform/client/fetch` (không có trong `exports`; CR-07 mắc cùng lỗi và tự sửa ở phút 18,6), không phải
   do node_modules liên kết.
+- PI-04 sai cả ba trường báo cáo (45 điểm) dù script tính đúng luật KB-OPS-13: danh mục trong test data có 70 schedule
+  (SCH-1001..1070), thợ tự đoán `SCH-1001..SCH-1050` trước khi đọc danh mục; file kết quả ghi `complete: true` (mọi
+  truy vấn ĐÃ GỬI đủ dòng) nên script không nghi ngờ, và tính trên 189/645 dòng của tháng 12. Sửa trong
+  `match/logs.mjs`: dãy id liên tiếp từ 5 id trở lên được tra tiếp ra hai phía tới khi gặp 3 id liền không có dòng nào
+  (`idRuns`, kết quả `extended`); mỗi service có dòng trong kết quả thêm `coverage {service, fetched, total}` (một lời
+  gọi mỗi service); hint và khối `<search_logs>` nói rõ `complete` không có nghĩa là đủ sự cố, id lấy từ danh mục.
+- Ba CR cùng sửa ba file đăng ký (`FinancesApp.tsx`, `PrimaryButtons.tsx`, `budget/app.ts`): CR-05 dừng ở
+  `WORKTREE_CONFLICT`, thợ gỡ tay 3 phút, publish hỏng 3 lần (CR-07: 2 lần). `worktree sync` (`tools.mjs`
+  `unionMerge`): file xung đột sau `git apply --3way` mà cả item lẫn main đều không xoá dòng nào của file đó (numstat
+  xoá = 0) được gộp bằng `git merge-file --union` (giữ cả hai phần thêm), kết quả trả `autoMerged` và nhắc thợ đọc lại
+  rồi `run_checks`. Một bên có sửa dòng thì vẫn là xung đột như cũ. Trong trận, thợ CR-07 nối route vào cuối dòng có
+  sẵn bằng lệnh Replace (thành dòng bị sửa): `backlog-references` thêm luật mỗi đăng ký là một dòng mới, không đụng
+  dòng có sẵn.
+- CR-07 `hidden-fixture` (−11), chưa có cách sửa phía đội. Lỗi `Cannot read properties of undefined (reading 'get')`
+  tái hiện được đúng một chỗ: `migrateIds` (`rules/rule-utils.ts:133`) gọi `mappings.get` khi một rule được dựng mà
+  `loadMappings()` chưa chạy; `createSchedule` chèn một rule nên sập ở đó khi `loadRules()` đã đăng ký listener. Bước
+  tạo và post schedule là phần mới của bộ 14 item (bộ 12 item không có, `hidden-fixture` từng đạt ở OMZJW0S0). Source
+  nộp của CR-07 không gọi `.get` trên giá trị nào có thể undefined, và replay của đội (có `loadMappings()` ở đầu) chạy
+  qua. Chưa xác định vì sao bản đúng của BTC qua được: cần hỏi BTC, kèm cách tái hiện này.
 - Chưa làm: tải toàn bộ log một lần cho cả trận. Chia theo từ phút/giây bị trùng với tháng và ngày trong `dueDate`,
   chia theo giờ tốn 744 lời gọi mỗi service (4 service gần 25 phút ở 120 lời gọi/phút).
 

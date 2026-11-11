@@ -2,7 +2,7 @@
 // truy vấn). Server giả theo đúng ngữ nghĩa search_logs: từ nguyên vẹn, mới nhất trước, tối đa 20 dòng, kèm total.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bulkSearch, hourWindow, matchesQuery, searchLogsHelp, words } from '../../pack/src/match/logs.mjs';
+import { bulkSearch, hourWindow, idRuns, matchesQuery, searchLogsHelp, words } from '../../pack/src/match/logs.mjs';
 
 const pad = n => String(n).padStart(2, '0');
 let seq = 3100000;
@@ -40,7 +40,9 @@ test('bulk ids return every entry once, sorted by ts then seq, and say the data 
   const r = await bulkSearch({ invoke: s.invoke, queries });
   assert.equal(r.entries.length, 30);
   assert.equal(r.complete, true);
-  assert.equal(r.calls, 30);
+  assert.equal(r.calls, 35, '30 ids, 3 empty ids above, SCH-0000 below, one coverage call');
+  assert.equal(r.extended, undefined, 'the range was already whole');
+  assert.deepEqual(r.coverage, [{ service: 'schedules', fetched: 30, total: 30 }]);
   assert.deepEqual(r.entries.map(e => e.ts), [...r.entries.map(e => e.ts)].sort());
 });
 
@@ -76,7 +78,7 @@ test('a failed call is retried with backoff before the query counts as incomplet
   const r = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'schedules', query: 'SCH-0001' }] });
   assert.equal(r.entries.length, 1);
   assert.equal(r.complete, true);
-  assert.equal(s.count(), 2);
+  assert.equal(s.count(), 3, 'failed call, retry, coverage');
 });
 
 test('the PI brief text carries the real input schema, the matching rule and the bulk call', () => {
@@ -85,4 +87,24 @@ test('the PI brief text carries the real input schema, the matching rule and the
   assert.match(text, /2025-10-18 never selects a day/);
   assert.match(text, /company_lookup \{name: "search_logs", backlogItemKey, queries:/);
   assert.match(text, /limit, pageSize, take or maxResults are refused/);
+});
+
+// QDO8W480 PI-04: danh mục có 70 schedule, thợ tra SCH-1001..SCH-1050; complete:true, ba trường báo cáo sai.
+test('a guessed consecutive id range is extended past both ends while ids still have entries, and coverage shows what is missing', async () => {
+  const s = server();
+  const queries = Array.from({ length: 12 }, (_, i) => ({ query: `SCH-${String(i + 8).padStart(4, '0')}` }));   // SCH-0008..0019 trong 0001..0030
+  const r = await bulkSearch({ invoke: s.invoke, queries });
+  assert.equal(r.complete, true);
+  assert.equal(r.entries.length, 30, 'every schedule, not only the 12 asked for');
+  assert.deepEqual(r.extended.map(x => [x.prefix, x.asked, x.added.length, x.added[0], x.added.at(-1)]), [['SCH-', ['SCH-0008', 'SCH-0019'], 18, 'SCH-0001', 'SCH-0030']]);
+  assert.deepEqual(r.coverage, [{ service: 'schedules', fetched: 30, total: 30 }]);
+  // Dãy không liền hay dưới 5 id: không đoán thêm; coverage vẫn cho thấy phần thiếu.
+  const few = await bulkSearch({ invoke: s.invoke, queries: [{ query: 'SCH-0001' }, { query: 'SCH-0005' }, { query: 'TX-00001' }] });
+  assert.equal(few.extended, undefined);
+  assert.deepEqual(few.coverage, [{ service: 'schedules', fetched: 2, total: 30 }, { service: 'rule-engine', fetched: 1, total: 50 }]);
+  assert.deepEqual(idRuns([{ query: 'A-1' }, { query: 'A-2' }, { query: 'A-3' }, { query: 'A-4' }, { query: 'A-6' }]), []);
+  const hours = await bulkSearch({ invoke: s.invoke, queries: [{ service: 'rule-engine' }], hours: { from: '2025-10-16T00', to: '2025-10-16T04' } });
+  assert.equal(hours.extended, undefined);
+  assert.deepEqual(hours.coverage, [{ service: 'rule-engine', fetched: 5, total: 50 }]);
+  assert.match(searchLogsHelp(null), /complete:true only says every query you sent returned all of its matches/);
 });

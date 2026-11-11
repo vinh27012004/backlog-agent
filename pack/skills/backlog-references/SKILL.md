@@ -59,6 +59,13 @@ unchanged, and whenever the item says grading reads the original tests, run
 `worktree status`). Name each changed test file and the item that changed it, and keep your own result honest: never
 write "no tests changed" when that diff is not empty (Practice J56ZZWSS: TASK-02-TC-04 said so while its commit
 carried BUG-02's test edits).
+Other items register things in the same shared files at the same time (route tables, sidebar or menu lists, handler
+maps and their types, import blocks, barrel exports). Add each registration as a NEW line of its own and leave every
+existing line byte for byte as it is: never append to the end of an existing line, never rewrap, reorder or reformat
+the block. A text replace that turns `<Route A />` into `<Route A /><Route B />` rewrites A's line; insert a new line
+instead. When both sides only added lines, the helper keeps both at sync; one rewritten line makes it a conflict you
+resolve by hand while the clock runs (QDO8W480: CR-05, CR-07 and CR-08 all touched the same three files; CR-05 lost
+three minutes and its page screenshots).
 Never change protected exam-info.json or env-require files.
 
 # Handoffs

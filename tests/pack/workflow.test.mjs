@@ -295,7 +295,7 @@ test('a bulk log lookup that cannot finish before return_by is refused at once w
   // Không có hạn trả bài (chưa prepare): không chặn.
   delete f.ji.prepared;
   const free = await f.rt.companyLookup(big);
-  assert.equal(free.result.calls, 980);
+  assert.equal(free.result.calls, 982, '980 lookups and one coverage call per service');
 });
 
 test('next actions use the nearest release and offer the publish of a handed-off candidate', async () => {
@@ -1412,4 +1412,31 @@ test('the brief points to capture_evidence runScript for an issued script that r
   assert.match(brief, /\{action: "runScript", file: "challenge\/CR-05-seed\.js", argFile: "company\/01-get_test_data\.json", argPath: "data"\}/);
   const plain = readFileSync(f.rt.workflow.writeBrief('CR-05', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], files: ['challenge/CR-05-seed.ts'] }), 'utf8');
   assert.doesNotMatch(plain, /<page_scripts>/);
+});
+
+// QDO8W480: CR-05, CR-07, CR-08 cùng thêm route, mục sidebar và handler vào ba file; CR-05 dừng ở WORKTREE_CONFLICT,
+// thợ gỡ tay 3 phút, publish hỏng 3 lần.
+test('sync keeps both additions when main and the item only added lines to the same place; a changed line is still a conflict', async () => {
+  const f = fixture(), file = join('M1', 'src', 'routes.js');
+  const registry = 'export const routes = [\n  "/reports",\n  "/settings",\n];\n';
+  const land = (text, message) => { writeFileSync(join(f.checkout, file), text); sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', message], f.checkout); };
+  const mine = () => readFileSync(join(f.wt.worktreeRoot, file), 'utf8').replace(/\r\n/g, '\n');
+  land(registry, 'registry');
+  assert.equal((await f.rt.worktree({ action: 'sync', backlogItemKey: f.key })).synced, true);
+  // Cả hai thêm một dòng ngay sau "/reports".
+  writeFileSync(join(f.wt.worktreeRoot, file), registry.replace('  "/settings",', '  "/month-close",\n  "/settings",'));
+  land(registry.replace('  "/settings",', '  "/reconciliation-audit",\n  "/settings",'), 'CR-07');
+  const synced = await f.rt.worktree({ action: 'sync', backlogItemKey: f.key });
+  assert.deepEqual(synced.autoMerged, ['M1/src/routes.js']);
+  assert.match(synced.hint, /the helper kept both additions/);
+  assert.deepEqual(mine().split('\n').filter(l => l.includes('"/')).map(l => l.trim()).sort(), ['"/month-close",', '"/reconciliation-audit",', '"/reports",', '"/settings",']);
+  assert.doesNotMatch(mine(), /<<<<<<<|>>>>>>>/);
+  assert.equal(f.ji.worktreeBase, sh('git', ['rev-parse', 'HEAD'], f.checkout));
+  assert.equal(readFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'utf8').replace(/\r\n/g, '\n'), 'export const value=2;\n', 'other own changes kept');
+  // Item sửa một dòng có sẵn (nối thêm vào cuối dòng): xung đột thật, worktree giữ nguyên.
+  const before = mine().replace('  "/reports",', '  "/reports", "/extra",');
+  writeFileSync(join(f.wt.worktreeRoot, file), before);
+  land(readFileSync(join(f.checkout, file), 'utf8').replace(/\r\n/g, '\n').replace('  "/reports",', '  "/reports",\n  "/budget",'), 'CR-08');
+  await assert.rejects(f.rt.worktree({ action: 'sync', backlogItemKey: f.key }), /WORKTREE_CONFLICT.*routes\.js.*unchanged/);
+  assert.equal(mine(), before);
 });
