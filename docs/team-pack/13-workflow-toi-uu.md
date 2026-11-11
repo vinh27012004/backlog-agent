@@ -486,6 +486,15 @@ mất 588 s; cả hai nộp trường báo cáo trống.
   - Item có hạn riêng (`deadlineMinutes`) được vượt giới hạn tối đa `deadlineOverflow` item (runtime.json, mặc định 2,
     0–4; 0 là tắt): QDO8W480 TASK-07 (hạn 15 phút) ra ở phút 19,2 khi 5 slot bận, Start Work ở phút 28,3, đóng ở
     phút 34,4 chưa nộp. Thứ tự lấy slot vẫn là `suggestedOrder` (PI, rồi ít phút còn lại nhất).
+- Bỏ giới hạn số item làm cùng lúc (quyết định của user 11/11): `maxItemsInFlight` mặc định 0 = không giới hạn
+  (`loadRuntimeConfig` trả `Infinity`; 1–32 trong `local/runtime.json` đặt lại giới hạn, khi đó `deadlineOverflow` còn
+  tác dụng). Mọi item được prepare và spawn thợ ngay khi ra đề; Codex `max_concurrent_threads_per_session` 16 → 32.
+  Máy được giữ ở lúc chạy lệnh nặng: `env/heavy.mjs` `withHeavySlot` bọc từng lệnh typecheck, build, test của
+  `run_checks`, tối đa `maxHeavyCommands` lệnh cùng lúc trên cả máy (mặc định một nửa số luồng CPU, ít nhất 3). Chỗ là
+  file tạo độc quyền trong `.team-work/scratch/heavy/` vì `run_checks` chạy ở helper của root lẫn của từng thợ; chỗ của
+  tiến trình đã chết được lấy lại. Lệnh đang chờ ghi `queued[name]` vào `checks.json`, kết quả có `queuedMs`; timeout
+  của lệnh tính từ lúc có chỗ. Chưa bọc: build của `app start` khi không dùng lại bản build của run_checks, cài
+  dependency của worktree.
 - Chưa làm: tải toàn bộ log một lần cho cả trận. Chia theo từ phút/giây bị trùng với tháng và ngày trong `dueDate`,
   chia theo giờ tốn 744 lời gọi mỗi service (4 service gần 25 phút ở 120 lời gọi/phút).
 

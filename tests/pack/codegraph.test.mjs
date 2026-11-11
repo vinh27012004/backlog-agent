@@ -38,7 +38,7 @@ test('installer declares the codegraph MCP server only when the pinned version i
   assert.match(plain, /\[mcp_servers\.team_runtime\][\s\S]*\[shell_environment_policy\]/);
   // L48: giới hạn subagent đủ cho 4 item cùng lúc kèm verifier + reviewer (Codex mặc định từ chối subagent thứ tư).
   // Checkout core.autocrlf=true ghi config CRLF.
-  assert.match(plain, /\[agents\]\r?\nmax_concurrent_threads_per_session = 16\r?\n/);
+  assert.match(plain, /\[agents\]\r?\nmax_concurrent_threads_per_session = 32\r?\n/);
 
   const shim = fakeCodegraph(tw);
   const withIt = install(tw);

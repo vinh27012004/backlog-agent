@@ -1,5 +1,6 @@
 {
-  "maxItemsInFlight": 5,
+  "maxItemsInFlight": 0,
+  "maxHeavyCommands": null,
   "deadlineOverflow": 2,
   "autoPrepare": true,
   "autoPublish": true,

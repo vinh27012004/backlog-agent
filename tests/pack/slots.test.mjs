@@ -39,17 +39,23 @@ test('notice lists items not started while fewer than 4 items run; a PI needs no
   assert.equal(prepare.itemNotice(), null);
 });
 
-test('the slot count comes from config/runtime.json, a local runtime.json overrides it, bad values fall back to 4', () => {
-  assert.equal(loadRuntimeConfig().maxItemsInFlight, 5);
+// 11/11 (sau QDO8W480): mặc định không giới hạn số item làm cùng lúc; máy được giữ bằng hàng chờ lệnh nặng (heavy.mjs).
+test('items in flight are unlimited by default; a local runtime.json may set a limit, bad values mean no limit', () => {
+  assert.equal(loadRuntimeConfig().maxItemsInFlight, Infinity);
   const local = tempDir('mtm-runtime-cfg-');
-  for (const [value, expected] of [[3, 3], [8, 8], ['6', 6], [0, 4], [9, 4], ['many', 4], [2.5, 4]]) {
+  for (const [value, expected] of [[3, 3], [8, 8], ['6', 6], [32, 32], [0, Infinity], [33, Infinity], ['many', Infinity], [2.5, Infinity]]) {
     writeFileSync(join(local, 'runtime.json'), JSON.stringify({ maxItemsInFlight: value }));
     assert.equal(loadRuntimeConfig(local).maxItemsInFlight, expected, String(value));
   }
   writeFileSync(join(local, 'runtime.json'), 'not json');
-  assert.equal(loadRuntimeConfig(local).maxItemsInFlight, 5, 'unreadable local file: pack default');
+  assert.equal(loadRuntimeConfig(local).maxItemsInFlight, Infinity, 'unreadable local file: pack default');
   const full = [row('BUG-01', 'started'), row('BUG-02', 'started'), row('CR-01', 'started'), row('TASK-02', 'started'), row('TASK-01', 'todo')];
   assert.deepEqual(runtime(full, 5).itemNotice().newItems, ['TASK-01'], 'a fifth slot starts the waiting item');
+  const open = runtime(full, 0).itemNotice();
+  assert.deepEqual(open.newItems, ['TASK-01']);
+  assert.equal(open.freeSlots, undefined, 'no number to report without a limit');
+  assert.match(open.hint, /Not started yet: start TASK-01 now/);
+  assert.equal(runtime(full, 0).freeSlots(full), Infinity);
 });
 
 test('root tool results carry the notice; match_state, proxied calls and errors do not', async () => {

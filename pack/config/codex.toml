@@ -31,10 +31,11 @@ CODEGRAPH_MCP_TOOLS = __CODEGRAPH_TOOLS__
 
 # ZVUYZ41V (L48): spawn_agent thứ tư bị từ chối ("agent thread limit reached") khi đã có 3 subagent chạy. Mỗi item
 # một team_fixer (item tier strong thêm một worker evidence), cộng PI và item answer-only không giữ slot; BTC không giới
-# hạn nên đặt 16 cho dư.
+# hạn nên đặt 16 cho dư. 11/11: helper thôi giới hạn số item làm cùng lúc (runtime.json maxItemsInFlight 0), bộ 14 item
+# có thể chạy cả 14 thợ nên nâng lên 32.
 # Codex 0.165 kiểm khoá này (>= 1, không có giá trị "không giới hạn"); tên cũ là max_threads.
 [agents]
-max_concurrent_threads_per_session = 16
+max_concurrent_threads_per_session = 32
 
 [shell_environment_policy]
 exclude = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"]

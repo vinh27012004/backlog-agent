@@ -69,8 +69,10 @@ const PACK_CONFIG = join(dirname(fileURLToPath(import.meta.url)), '..', 'config'
 export function loadRuntimeConfig(localDir = null) {
   const read = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
   const cfg = { ...read(join(PACK_CONFIG, 'runtime.json')), ...(localDir ? read(join(localDir, 'runtime.json')) : {}) };
+  // maxItemsInFlight 0 (mặc định từ 11/11, cũng là giá trị khi ghi sai): không giới hạn số item làm cùng lúc; máy được
+  // giữ bằng maxHeavyCommands (env/heavy.mjs: số lệnh typecheck/build/test chạy cùng lúc). 1–32: giới hạn như trước.
   const max = Number(cfg.maxItemsInFlight);
-  return { ...cfg, maxItemsInFlight: Number.isInteger(max) && max >= 1 && max <= 8 ? max : 4 };
+  return { ...cfg, maxItemsInFlight: Number.isInteger(max) && max >= 1 && max <= 32 ? max : Infinity };
 }
 // Không bắt đầu item mới khi còn ít hơn số phút này (skill: "Under 4 minutes left: no new items").
 const NEW_ITEM_MIN = 4;
@@ -664,9 +666,9 @@ export class Runtime {
     if (pendingPI.length) hints.push(`🚨 CRITICAL: PI ${pendingPI.join(', ')} is live! First team to submit gets 100% points. Prepare and dispatch PI immediately!`);
     if (fresh.length) hints.push(`Fix-result ready: ${fresh.map(r => r.key).join(', ')}; follow next_actions now (publish_item with that fixResultFile).`);
     if (answerOnly.length) hints.push(`Needs no slot (PI / answer-only): start ${answerOnly.join(', ')} now (One item, step 1), then carry on.`);
-    if (freeSlots > 0 && slotted.length) hints.push(`Not started yet with ${freeSlots} free slot(s): start ${slotted.join(', ')} now (One item, step 1), then carry on.`);
+    if (freeSlots > 0 && slotted.length) hints.push(`Not started yet${Number.isFinite(freeSlots) ? ` with ${freeSlots} free slot(s)` : ''}: start ${slotted.join(', ')} now (One item, step 1), then carry on.`);
     if (!hints.length && !pendingPI.length) return null;
-    return { ...(pendingPI.length ? { urgentPI: pendingPI } : {}), ...(newItems.length ? { newItems, ...(freeSlots > 0 ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
+    return { ...(pendingPI.length ? { urgentPI: pendingPI } : {}), ...(newItems.length ? { newItems, ...(freeSlots > 0 && Number.isFinite(freeSlots) ? { freeSlots } : {}) } : {}), ...(answerOnly.length ? { answerOnly } : {}),
       ...(fresh.length ? { newResults: fresh } : {}), hint: hints.join(' ') };
   }
 
@@ -688,8 +690,9 @@ export class Runtime {
   // Bộ test thu hẹp về các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
   runChecks(args) {
     const pi = typeOf(args?.backlogItemKey) === 'PI' && args.action !== 'status' && args.checks === undefined;
+    const cfg = this.runtimeConfig();
     return runChecks({ teamWorkspace: this.teamWorkspace, ...args, ...(pi ? { checks: ['typecheck'] } : {}),
-      scopeTests: this.runtimeConfig().scopedTests !== false });
+      scopeTests: cfg.scopedTests !== false, maxHeavy: cfg.maxHeavyCommands ?? null });
   }
 
   runtimeConfig() {
