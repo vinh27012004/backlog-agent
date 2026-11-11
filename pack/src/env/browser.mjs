@@ -14,6 +14,7 @@ import { detectProfile } from './environment.mjs';
 import { recordEvidence } from './evidence.mjs';
 
 const MAX_TOTAL_MS = 50_000;
+const SCRIPT_MS = 40_000;
 const SETTLE_MS = 12_000;
 // pack/ trong repo, team-sdlc-pack/runtime/ khi đã cài: playwright/ nằm cạnh nó (repo/playwright, team-sdlc-pack/playwright).
 const PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -169,7 +170,7 @@ export function failureHint(step, state, code) {
 
 // Mỗi lần gọi mở một trang trắng: bước thao tác trước goto/login chắc chắn hỏng sau khi chờ hết giờ (NBDB5U0O BUG-02:
 // click "New invoice" trên about:blank). Báo ngay, không mở trình duyệt.
-const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download']);
+const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download', 'runScript']);
 
 // Chỉ báo đang tải còn hiện: aria-busy, progressbar không xác định, skeleton/spinner phổ biến. null = không có.
 const BUSY = `() => {
@@ -240,6 +241,47 @@ export async function fillDroppedIdbKeys(state, page) {
   return state;
 }
 
+// Bước runScript: chạy một script BTC phát trong trang của app. QDO8W480 CR-05: `challenge/CR-05-seed.js` ("Evaluate
+// this function in the app's page with the fixture's data as its argument, for example with Playwright:
+// page.evaluate(seed, data)") nạp dữ liệu chính thức vào budget đang mở; capture_evidence không có bước nào chạy được
+// nó, thợ tự viết script Playwright, mất 5 phút rồi hết giờ: TC-02, TC-03, TC-04 NOT_RUN, mất 17/45 điểm (CR-08 cùng
+// kiểu). Chỉ nhận file BTC phát cho item đó (.team-work/items/<ID>/files/ hoặc challenge/ trong matchRoot), không nhận
+// script do thợ viết. Tham số: `arg` (JSON) hoặc `argFile` (file JSON của item hay trong matchRoot; file kết quả
+// Company Tools được mở lớp content[0].text) và `argPath` ("data", "data.rows.0").
+const inside = (root, file) => { const rel = relative(root, file); return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel); };
+export function scriptStep(teamWorkspace, s, i, { base, key }) {
+  const bad = msg => fail('INVALID_ARGUMENT', `runScript at step ${i + 1}: ${msg}`);
+  if (!base || !key) bad('needs context {backlogItemKey, matchRoot}');
+  const itemDir = join(dirname(locateMatchRoot(teamWorkspace, base).logDir), 'items', key);
+  const pick = (value, roots, what) => {
+    if (typeof value !== 'string' || !value) bad(`${what} must be a path`);
+    const found = (isAbsolute(value) ? [resolve(value)] : roots.map(r => resolve(r, value))).find(f => existsSync(f) && statSync(f).isFile());
+    if (!found) bad(`${what} ${value} not found (looked in ${roots.join(', ')})`);
+    const real = realpathSync(found);
+    if (!roots.some(r => existsSync(r) && inside(realpathSync(r), real))) fail('PATH_NOT_ALLOWED', `runScript at step ${i + 1}: ${what} must be one of the files issued for ${key} (${roots.join(' or ')})`);
+    if (statSync(real).size > 512 * 1024) bad(`${what} is larger than 512 KB`);
+    return real;
+  };
+  const file = pick(s.file, [join(itemDir, 'files'), join(base, 'challenge')], 'file');
+  const source = readFileSync(file, 'utf8').replace(/^﻿/, '').replace(/[;\s]+$/, '');
+  if (!source.trim()) bad('file is empty');
+  let arg = s.arg;
+  if (s.argFile !== undefined) {
+    if (arg !== undefined) bad('give arg or argFile, not both');
+    const argFile = pick(s.argFile, [itemDir, base], 'argFile');
+    try { arg = JSON.parse(readFileSync(argFile, 'utf8')); } catch { bad(`argFile ${s.argFile} is not JSON`); }
+    const text = arg?.content?.[0]?.text;
+    if (typeof text === 'string' && arg?.tool) { try { arg = JSON.parse(text); } catch { /* giữ nguyên */ } }
+  }
+  if (s.argPath !== undefined) {
+    for (const part of String(s.argPath).split('.').filter(Boolean)) {
+      if (arg === null || typeof arg !== 'object' || !(part in arg)) bad(`argPath ${s.argPath}: no ${part}`);
+      arg = arg[part];
+    }
+  }
+  return { file, source, arg };
+}
+
 export async function captureEvidence({ teamWorkspace, steps, viewport = { width: 1366, height: 900 }, browserProfile = null,
   timeoutMs = 45_000, context = null }) {
   if (!Array.isArray(steps) || !steps.length || steps.length > 60) fail('INVALID_ARGUMENT', 'steps must be 1-60 actions');
@@ -248,6 +290,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const vp = { width: Math.min(3840, Math.max(320, viewport.width | 0 || 1366)), height: Math.min(4000, Math.max(240, viewport.height | 0 || 900)) };
   // Kiểm toàn bộ bước trước khi mở trình duyệt.
   const rules = new Map();
+  const scripts = new Map();
   const accounts = new Map();
   const output = { base: context?.matchRoot ? locateMatchRoot(teamWorkspace, context.matchRoot).matchRoot : null, key: context?.backlogItemKey ?? null };
   let opened = false;
@@ -257,6 +300,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path, output);
     if (s.action === 'download') s.path = evidencePath(teamWorkspace, s.path, { ...output, pngOnly: false });
     if (s.action === 'route') rules.set(i, routeRule(s, i));
+    if (s.action === 'runScript') scripts.set(i, scriptStep(teamWorkspace, s, i, output));
     if (s.action === 'drag') {
       if (!s.to || typeof s.to !== 'object' || (s.to.selector === undefined && s.to.text === undefined)) {
         fail('INVALID_ARGUMENT', `step ${i + 1}: drag needs to:{selector|text, index?}`);
@@ -654,6 +698,21 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           case 'route':
             active.unshift(rules.get(i));
             break;
+          case 'runScript': {
+            // File là một biểu thức: hàm thì gọi với arg, giá trị khác thì trả luôn. Chuỗi biểu thức đi qua CDP nên
+            // không vướng CSP của trang.
+            const { file, source, arg } = scripts.get(i);
+            const run = page.evaluate(`(async () => { const v = (${source}
+); return typeof v === 'function' ? v(${arg === undefined ? '' : JSON.stringify(arg)}) : v; })()`);
+            let timer;
+            const value = await Promise.race([run, new Promise((_, no) => { timer = setTimeout(() => no(new HelperError('SCRIPT_TIMEOUT', `the script did not finish in ${Math.round(left(SCRIPT_MS) / 1000)} s`)), left(SCRIPT_MS)); })])
+              .catch(error => { if (error instanceof HelperError) throw error; fail('SCRIPT_FAILED', `${firstLine(error)}`.slice(0, 600)); })
+              .finally(() => clearTimeout(timer));
+            let result = null;
+            try { result = value === undefined ? null : JSON.stringify(value); } catch { result = String(value); }
+            log.push({ step: i + 1, action: 'runScript', file, ...(result === null ? {} : { result: result.length > 2000 ? `${result.slice(0, 2000)}…` : JSON.parse(result) }) });
+            break;
+          }
           case 'unroute':
             active.length = 0;
             break;
@@ -712,7 +771,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
           default:
             fail('INVALID_ARGUMENT', `unknown action ${s.action} at step ${i + 1}`);
         }
-        if (!['assertText', 'login', 'drag', 'screenshot'].includes(s.action)) log.push({ step: i + 1, action: s.action });
+        if (!['assertText', 'login', 'drag', 'screenshot', 'runScript'].includes(s.action)) log.push({ step: i + 1, action: s.action });
       }
     } catch (caught) {
       // Lỗi của Playwright (trang đóng, phím không tồn tại...) cũng tới agent như lỗi của bước, kèm trạng thái trang.

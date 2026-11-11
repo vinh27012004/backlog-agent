@@ -86,6 +86,19 @@ const neededByBlock = list => `${list.map(d => `${d.key}${d.minutesLeft != null 
   + 'Fix the product code first. As soon as the fix is done and your focused tests are green, call worker_checkpoint ready_for_evidence: the helper copies your product changes (not tests, not test configuration, not answers/) into their worktrees then, so they can finish before they close. '
   + 'Keep the product code stable after that: change tests and evidence freely, but a later product change reaches them only when it is copied again at your candidate, which may be too late. '
   + 'Never wait for them and never change their files.';
+// File BTC phát mà phải chạy trong trang của app (QDO8W480 CR-05: challenge/CR-05-seed.js, "Evaluate this function in
+// the app's page ... page.evaluate(seed, data)"; thợ tự viết script Playwright, mất 5 phút rồi hết giờ).
+const PAGE_SCRIPT = /page\.evaluate|in the app'?s page|window\.\$send/i;
+export function pageScripts(dir, files) {
+  return (files ?? []).filter(f => /\.(?:c|m)?js$/i.test(f) && !/\.test\.[cm]?js$/i.test(f)).filter(f => {
+    try { return PAGE_SCRIPT.test(readFileSync(join(dir, 'files', f), 'utf8').slice(0, 4000)); } catch { return false; }
+  });
+}
+const pageScriptsBlock = (files, key) => `${files.join(', ')}: issued scripts that run inside the app's page (they load the official data through the app). `
+  + `Run each with capture_evidence, never with a Playwright script of your own: one call with context {backlogItemKey, matchRoot, ...} and steps goto (the app, with its data file or budget open: the script works on what is open), `
+  + `{action: "runScript", file: "${files[0]}", argFile: "company/01-get_test_data.json", argPath: "data"} (the argument the script's header names; take the file and path from <company_facts>, or pass arg inline), `
+  + `then goto the screen, the steps of the scenario and screenshot/download. Use one browserProfile for all calls so the loaded data stays. `
+  + `The result of the script is in the step log. Scenarios that need this data (the page, its screenshot, the exported file) count only with it loaded: do this right after your app is up, before polishing anything else for ${key}.`;
 // Item có hạn cần ảnh màn hình (QXUD1QAI CR-07, hạn 20 phút: app lên 6 phút sau ready_for_evidence, không kịp chụp;
 // trong 9 trận cùng bộ đề CR-07 chỉ chụp được một lần).
 const screensFirstBlock = (files, tb) => `This item closes at ${tb.returnBy ?? 'return_by'} (UTC) and needs screenshots: ${files.join(', ')}. `
@@ -369,6 +382,7 @@ export class Workflow {
         ...(s.files ?? []).map(f => join(s.materialsDir ?? r.itemDir(key), 'files', f))].join('\n')),
       ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}, this.item(key).sharedFix ?? null) : null),
       ...block('needed_by', (() => { const list = this.neededBy(key, { minutes: true }); return list.length ? neededByBlock(list) : null; })()),
+      ...block('page_scripts', (() => { const list = pageScripts(s.materialsDir ?? r.itemDir(key), s.files); return list.length ? pageScriptsBlock(list, key) : null; })()),
       ...block('screens_first', (() => { const files = tb.deadline ? this.screenshotFiles(key) : []; return files.length ? screensFirstBlock(files, tb) : null; })()),
       ...block('requirements', s.requirements ?? null),
       ...block('required_evidence', s.requiredEvidence ?? null),
