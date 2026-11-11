@@ -28,6 +28,7 @@ export class CompanyTools {
     this.protocolVersion = null;
     this.tools = null;
     this.sent = [];
+    this.waiting = [];
     this.nextId = 1;
   }
 
@@ -35,11 +36,25 @@ export class CompanyTools {
     return `${this.session.gameMasterOrigin}/api/v1/mcp/${encodeURIComponent(this.session.descriptor.matchId)}`;
   }
 
-  // Mọi cửa sổ trượt cùng lúc: chờ tới khi request mới không vượt cửa sổ nào.
-  async throttle() {
+  // Request/phút helper tự cho phép (cửa sổ chặt nhất), để ước lượng một lần tra hàng loạt mất bao lâu.
+  ratePerMinute() {
+    const limits = typeof this.limits === 'function' ? this.limits() : this.limits;
+    return Math.min(...limits.map(([ms, max]) => max * 60_000 / ms));
+  }
+
+  // Mọi cửa sổ trượt cùng lúc: chờ tới khi request mới không vượt cửa sổ nào. `weight`: request đang chờ có weight nhỏ
+  // hơn đi trước (0: lời gọi lẻ; tra hàng loạt: số lời gọi của cả lần tra, nên lần tra ngắn xong trước). QDO8W480: 341
+  // lời gọi của PI-03 chia băng thông với 1015 lời gọi của PI-02 và mất 588 s thay vì khoảng 200 s.
+  async throttle(weight = 0) {
     const t0 = Date.now();
     const limits = typeof this.limits === 'function' ? this.limits() : this.limits;
+    const me = { weight };
+    this.waiting.push(me);
+    try { await this.throttleTurn(me, limits, t0); } finally { this.waiting.splice(this.waiting.indexOf(me), 1); }
+  }
+  async throttleTurn(me, limits, t0) {
     for (;;) {
+      if (this.waiting.some(w => w.weight < me.weight)) { await sleep(40); continue; }
       const now = Date.now(), longest = Math.max(...limits.map(([ms]) => ms));
       this.sent = this.sent.filter(t => now - t < longest);
       let wait = 0;
@@ -52,10 +67,10 @@ export class CompanyTools {
     }
   }
 
-  async rpc(method, params, { notify = false } = {}) {
+  async rpc(method, params, { notify = false, weight = 0 } = {}) {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.rpcOnce(method, params, { notify });
+        return await this.rpcOnce(method, params, { notify, weight });
       } catch (error) {
         if (error.code !== 'COMPANY_RATE_LIMITED' || attempt >= RETRY_429) throw error;
         this.stats.rejected429++;
@@ -64,10 +79,10 @@ export class CompanyTools {
     }
   }
 
-  async rpcOnce(method, params, { notify = false } = {}) {
+  async rpcOnce(method, params, { notify = false, weight = 0 } = {}) {
     const key = this.session.secrets.apiKey;
     if (!key) fail('NOT_CONFIGURED', 'company tools need the team API key (GAME phase)');
-    await this.throttle();
+    await this.throttle(weight);
     const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream' };
     if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
@@ -103,15 +118,15 @@ export class CompanyTools {
     await this.rpc('notifications/initialized', {}, { notify: true });
   }
 
-  async call(method, params) {
+  async call(method, params, opts = {}) {
     await this.ensureInitialized();
     try {
-      return await this.rpc(method, params);
+      return await this.rpc(method, params, opts);
     } catch (error) {
       if (error.code !== 'COMPANY_SESSION_EXPIRED') throw error;
       this.protocolVersion = null;
       await this.ensureInitialized();
-      return this.rpc(method, params);
+      return this.rpc(method, params, opts);
     }
   }
 
@@ -123,8 +138,8 @@ export class CompanyTools {
     return this.tools;
   }
 
-  async invoke(name, args) {
-    return this.call('tools/call', { name, arguments: args ?? {} });
+  async invoke(name, args, { weight = 0 } = {}) {
+    return this.call('tools/call', { name, arguments: args ?? {} }, { weight });
   }
 }
 

@@ -461,6 +461,26 @@ PI-03 hỏi ở giây 357, lặp 320 truy vấn `SCH-xxxx` và chạm trần 12 
   khác mà item không sửa. Tắt: `"scopedTests": false`.
 
 
+## Sau QDO8W480 (11/11): hạn trả bài của item helper tự publish, tra log theo thứ tự và theo hạn
+
+QDO8W480 (bộ 14 item): ba PI hạn 10 phút mất 164/260 điểm. PI-04 bàn giao ở phút 5,4 khi chưa sửa source (item đóng ở
+phút 10); PI-02 tra 2 truy vấn × 507 giờ = 1015 lời gọi, job chạy 19 phút; 341 lời gọi của PI-03 chạy chung băng thông
+mất 588 s; cả hai nộp trường báo cáo trống.
+
+- `timeBox` (`tools.mjs`, `publishReserve`): item helper tự publish (PI, item chỉ trả lời, `autoPublish` bật) chừa
+  `SELF_PUBLISH_RESERVE_MIN` = 2 phút thay vì 5 (publish thật của PI 12–49 s, không có lượt root). `timeBox` và dòng
+  của `match_state` có `reserveMinutes`; ngưỡng cơ hội cuối (`lastCallThreshold`) của các item này bằng đúng mức đó,
+  nên thợ không bị gọi dừng khi còn 4 phút như trước. BUG/CR (root publish) giữ 5 phút và ngưỡng cũ.
+- Thứ tự gọi Company Tools (`company.mjs` `throttle(weight)`): request đang chờ có weight nhỏ hơn đi trước. Lời gọi lẻ
+  weight 0; mỗi lời gọi của một lần tra hàng loạt mang weight bằng số lời gọi của cả lần tra (`planSize`), nên lần tra
+  ngắn xong trước và lời gọi lẻ không bị giữ sau một lần tra dài.
+- `logLookup` từ chối ngay (`LOOKUP_TOO_LARGE`) lần tra không kịp xong trước `returnBy` của item: số lời gọi tối thiểu
+  (truy vấn × giờ) cộng phần còn lại của các lần tra ngắn hơn đang chạy, chia cho `ratePerMinute()` (cửa sổ chặt nhất
+  của `companyLimits`, mặc định 108/phút). Lỗi ghi số lời gọi còn vừa và cách thu hẹp. Lần tra từ 20 lời gọi trở xuống
+  và item chưa có `returnBy` không bị chặn. Khối `<search_logs>` của brief nói rõ giá của khung giờ.
+- Chưa làm: tải toàn bộ log một lần cho cả trận. Chia theo từ phút/giây bị trùng với tháng và ngày trong `dueDate`,
+  chia theo giờ tốn 744 lời gọi mỗi service (4 service gần 25 phút ở 120 lời gọi/phút).
+
 ## Sau LXRMBRA2 (10/11): lỗi sớm của run_checks, tra log trước khi bàn giao, file lớn
 
 - `run_checks`: mỗi check xong ghi vào `checks.json` (`finished`); một check hỏng trong lúc check khác còn chạy thì
