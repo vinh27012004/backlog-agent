@@ -51,7 +51,10 @@ const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid J
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
 // (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
-const lastCallThreshold = row => row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES;
+// Item helper tự publish (row.reserveMinutes nhỏ hơn mức thường, tools.mjs publishReserve): cơ hội cuối mở đúng lúc
+// returnBy, không cắt lượt của thợ sớm hơn (PI hạn 10 phút trước đây bị gọi dừng khi còn 4 phút).
+const lastCallThreshold = row => (row?.reserveMinutes && row.reserveMinutes < 5 ? row.reserveMinutes
+  : row?.deadlineMinutes ? Math.min(LAST_CALL_MINUTES, Math.max(2, Math.floor(row.deadlineMinutes * 0.4))) : LAST_CALL_MINUTES);
 const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCallThreshold(row);
 // Item mà đề của item khác nhắc tới (OMZJW0S0 CR-07: "The audit of that data is right only on source that also contains
 // the BUG-11 fixes"). BUG-11 lên main 05:11:26 sau lần sync cuối của CR-07, CR-07 bàn giao 05:14:55 với CSV/summary

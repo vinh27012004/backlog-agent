@@ -31,8 +31,13 @@ test('a PI attempt is capped and gets a checkpoint; other items keep the match o
   assert.equal(task.checkpointBy, undefined);
   left = 8;
   const late = rt.timeBox({ key: 'PI-02', deadlineMinutes: null });
-  assert.equal(late.workMinutes, 3);
-  near(late.checkpointBy, now + 3 * 60_000);
+  // Helper tự publish PI: chừa 2 phút (QDO8W480: PI hạn 10 phút bị chừa 5, PI-04 còn 3,5 phút và chưa sửa source).
+  assert.equal(late.workMinutes, 6);
+  assert.equal(late.reserveMinutes, 2);
+  near(late.checkpointBy, now + 6 * 60_000);
+  assert.equal(rt.timeBox({ key: 'BUG-01', deadlineMinutes: 15 }).workMinutes, 3, 'root publishes BUG/CR: 5 minutes kept');
+  rt.runtimeConfig = () => ({ autoPublish: false });
+  assert.equal(rt.timeBox({ key: 'PI-02', deadlineMinutes: 10 }).workMinutes, 3, 'autoPublish off: root publishes the PI too');
 });
 
 test('a job wait returns early when a PI is released, and at once while one waits to be started', async () => {

@@ -277,6 +277,27 @@ test('company_lookup is a read-only lookup for root and workers and refuses tool
   await assert.rejects(async () => f.rt.companyLookup({ name: 'search_logs' }), /backlogItemKey/);
 });
 
+// QDO8W480: PI-02 (hạn 10 phút) tra 2 truy vấn × 507 giờ = 1015 lời gọi; job chạy 19 phút, xong sau khi item đóng.
+test('a bulk log lookup that cannot finish before return_by is refused at once with what still fits', async () => {
+  const f = fixture('PI-01');
+  f.rt.company.list = async () => [{ name: 'search_logs', inputSchema: {} }];
+  const weights = [];
+  f.rt.company.invoke = async (name, args, opts) => { weights.push(opts?.weight ?? 0); return { content: [{ type: 'text', text: JSON.stringify({ total: 0, returned: 0, entries: [] }) }] }; };
+  f.rt.company.ratePerMinute = () => 100;
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 4 * 60_000).toISOString() } };
+  const big = { name: 'search_logs', backlogItemKey: f.key, queries: [{ service: 'rules' }, { service: 'deploy' }], hours: { from: '2025-10-14T00', to: '2025-11-03T09' } };
+  await assert.rejects(async () => f.rt.companyLookup(big), e => e.code === 'LOOKUP_TOO_LARGE'
+    && /needs at least 980 calls \(2 queries × 490 hours\): about 10 minutes at 100 calls a minute/.test(e.message) && /About 39\d calls fit/.test(e.message));
+  assert.equal(weights.length, 0, 'nothing was sent');
+  const ok = await f.rt.companyLookup({ ...big, hours: { from: '2025-10-15T08', to: '2025-10-15T12' } });
+  assert.equal(ok.result.complete, true);
+  assert.deepEqual([...new Set(weights)], [10], 'calls carry the size of their lookup as weight');
+  // Không có hạn trả bài (chưa prepare): không chặn.
+  delete f.ji.prepared;
+  const free = await f.rt.companyLookup(big);
+  assert.equal(free.result.calls, 980);
+});
+
 test('next actions use the nearest release and offer the publish of a handed-off candidate', async () => {
   const f = fixture(), file = f.result(1); await f.preflight(file); f.rt.releases = () => ({ next: { at: new Date(Date.now() + 3000).toISOString() } });
   const next = f.rt.workflow.actions(); assert.ok(next.waitMs <= 4000);
@@ -349,6 +370,14 @@ test('in the last minutes the worker is stopped and the candidate published firs
   assert.equal(stop.action, 'stop_worker');
   // ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt xuống NOT_RUN khi bị dừng. Lời dừng do helper soạn, giữ PASS đã kiểm.
   assert.match(stop.followup, /Keep every scenario you already verified as PASS/);
+  // QDO8W480: item helper tự publish (reserveMinutes 2) hạn 10 phút không bị dừng khi còn 4 phút, chỉ khi còn 2.
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
+  const self = minutesLeft => { f.rt.itemRows = () => [{ ...rows(minutesLeft)[0], deadlineMinutes: 10, reserveMinutes: 2 }]; return f.rt.workflow.actions().nextActions.find(a => a.key === f.key); };
+  assert.notEqual(self(4)?.action, 'stop_worker', 'still inside its own time');
+  assert.equal(self(4)?.lastCall, undefined);
+  assert.deepEqual([self(2).action, self(2).lastCall], ['stop_worker', true]);
+  f.rt.itemRows = () => [{ ...rows(4)[0], deadlineMinutes: 10 }];
+  assert.equal(f.rt.workflow.actions().nextActions.find(a => a.key === f.key).action, 'stop_worker', 'a root-published item keeps the old threshold');
 });
 
 // ME1X0FFX: candidate {result} ghi BUG-02-fixer-1.json rồi trả problems; root thấy publish_item, publish hỏng và nhắn

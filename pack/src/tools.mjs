@@ -12,7 +12,7 @@ import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
 import { dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, prepareWorktreeEnv, setupEnvironment } from './env/environment.mjs';
 import { unlinkNodeModules } from './env/linked-modules.mjs';
-import { bulkSearch, searchLogsHelp } from './match/logs.mjs';
+import { bulkSearch, planSize, searchLogsHelp } from './match/logs.mjs';
 import { setupInputFile } from './env/setup-cache.mjs';
 import { modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
@@ -53,6 +53,10 @@ export function kbQuery(raw, type) {
 }
 // Phút để dành cho integrate + push + submit sau khi fixer trả kết quả (root vài lượt).
 const PUBLISH_RESERVE_MIN = 5;
+// Item helper tự publish (PI, item chỉ trả lời; autoPublish): không có lượt root nào, publish thật 12–49 s. QDO8W480: ba
+// PI hạn 10 phút bị chừa 5 phút, PI-04 (prepare 90 s) còn 3,5 phút, bàn giao ở phút 5,4 chưa sửa source trong khi item
+// đóng ở phút 10: mất 24 điểm fix; PI-03 bàn giao khi còn 2,4 phút và lần tra log chưa xong.
+const SELF_PUBLISH_RESERVE_MIN = 2;
 // PI là cuộc đua (Game Rules §6: 100/90/75/60% theo thứ hạng, bấm giờ từ lúc đề hiện): mỗi lượt fixer tối đa
 // PI_ATTEMPT_MIN thay vì tới giờ hết trận; tới PI_CHECKPOINT_MIN mà chưa xác nhận được giả thuyết nào thì fixer trả
 // partial kèm danh sách giả thuyết để root cho kiểm song song (SRE: định kỳ xét lại hướng đi). Chỉnh sau diễn tập.
@@ -596,20 +600,25 @@ export class Runtime {
       const box = i.status === 'CLOSED' ? null : this.timeBox(i);
       return { key: i.key, type: i.type, title: i.title, status: i.status,
         points: i.points, deadlineMinutes: i.deadlineMinutes, minutesLeft: this.gm.itemMinutesLeft(i), local: this.localState(i.key),
-        revisionNo: i.revisionNo, returnBy: box?.returnBy ?? null, ...(box?.checkpointBy ? { checkpointBy: box.checkpointBy } : {}) };
+        revisionNo: i.revisionNo, returnBy: box?.returnBy ?? null, reserveMinutes: box?.reserveMinutes ?? null, ...(box?.checkpointBy ? { checkpointBy: box.checkpointBy } : {}) };
     });
   }
 
   // Giờ fixer phải trả kết quả: trước khi item (hoặc trận) đóng, chừa PUBLISH_RESERVE_MIN cho integrate và nộp; PI thêm trần
   // PI_ATTEMPT_MIN mỗi lượt và mốc checkpointBy. Giờ tuyệt đối theo đồng hồ máy, tính từ lúc gọi (lượt mới đọc lại từ
   // match_state); trận PAUSED thì hạn thật lùi lại, nên root đọc lại returnBy sau khi trận chạy tiếp.
+  publishReserve(key) {
+    const self = this.runtimeConfig().autoPublish !== false && (typeOf(key) === 'PI' || this.answerOnlyItem(key));
+    return self ? SELF_PUBLISH_RESERVE_MIN : PUBLISH_RESERVE_MIN;
+  }
   timeBox(item) {
     const left = this.gm.itemMinutesLeft(item);
     if (left === null) return null;
     const pi = typeOf(item.key) === 'PI';
-    const work = Math.min(Math.max(1, left - PUBLISH_RESERVE_MIN), pi ? PI_ATTEMPT_MIN : Infinity);
+    const reserve = this.publishReserve(item.key);
+    const work = Math.min(Math.max(1, left - reserve), pi ? PI_ATTEMPT_MIN : Infinity);
     const at = minutes => new Date(Date.now() + minutes * 60_000).toISOString();
-    return { minutesLeft: left, deadline: typeof item.deadlineMinutes === 'number', workMinutes: Math.round(work * 10) / 10,
+    return { minutesLeft: left, deadline: typeof item.deadlineMinutes === 'number', reserveMinutes: reserve, workMinutes: Math.round(work * 10) / 10,
       returnBy: at(work), ...(pi ? { checkpointBy: at(Math.min(PI_CHECKPOINT_MIN, work)) } : {}) };
   }
 
@@ -1632,8 +1641,22 @@ export class Runtime {
   async logLookup({ name, key, queries, hours, waitSeconds }) {
     if (name !== 'search_logs') fail('INVALID_ARGUMENT', 'queries and hours are for search_logs only');
     if (queries !== undefined && (!Array.isArray(queries) || queries.some(q => !q || typeof q !== 'object'))) fail('INVALID_ARGUMENT', 'queries must be an array of {service?, query?}');
+    // Lần tra không kịp xong trước returnBy của item thì từ chối ngay, kèm số lời gọi còn vừa. QDO8W480: PI-02 (hạn 10
+    // phút) tra 2 truy vấn × 507 giờ = 1015 lời gọi, chạy 19 phút, xong sau khi item đóng 11 phút và chỉ được 6 dòng.
+    let size;
+    try { size = planSize({ queries, hours }); } catch { size = 1; }
+    const rate = this.company.ratePerMinute?.() ?? 100;
+    const ahead = [...this.jobs.jobs.values()].filter(j => j.kind === 'log_lookup' && j.state === 'running' && (j.plan ?? 0) <= size)
+      .reduce((a, j) => a + Math.max(0, (j.plan ?? 0) - (j.calls ?? 0)), 0);
+    const returnBy = Date.parse(this.journal?.data.items?.[key]?.prepared?.timeBox?.returnBy ?? '');
+    const minutesLeft = Number.isFinite(returnBy) ? (returnBy - Date.now()) / 60_000 : null;
+    if (minutesLeft !== null && size > 20 && (size + ahead) / rate > minutesLeft) {
+      const fits = Math.max(0, Math.floor(minutesLeft * rate - ahead));
+      fail('LOOKUP_TOO_LARGE', `this lookup needs at least ${size} calls (${queries?.length ?? 1} queries${hours ? ` × ${Math.round(size / (queries?.length || 1))} hours` : ''})${ahead ? ` behind ${ahead} calls of running lookups` : ''}: about ${Math.ceil((size + ahead) / rate)} minutes at ${Math.round(rate)} calls a minute, and ${key} must hand off in ${Math.max(0, minutesLeft).toFixed(1)} minutes. About ${fits} calls fit. Narrow it: list the ids you need instead of an hours window (one call per id), or a window of a few hours around the release; then compute from what you have and say which part is a lower bound`);
+    }
     const job = this.jobs.start('log_lookup', async job => {
-      const res = await bulkSearch({ invoke: args => this.company.invoke('search_logs', args), queries, hours,
+      job.plan = size; job.calls = 0;
+      const res = await bulkSearch({ invoke: args => { job.calls++; return this.company.invoke('search_logs', args, { weight: size }); }, queries, hours,
         onProgress: p => job.progress.push(`${p.done}/${p.of} queries, ${p.calls} calls, ${p.entries} entries`) });
       const dir = join(this.itemDir(key), 'company');
       mkdirSync(dir, { recursive: true });

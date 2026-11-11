@@ -121,6 +121,11 @@ export async function bulkSearch({ invoke, queries, hours = null, concurrency = 
   return { calls, entries: sortLog(found.values()), complete: !incomplete.length && !stopped, incomplete: incomplete.slice(0, 50),
     incompleteCount: incomplete.length, ...(stopped ? { stopped } : {}), ...(window ? { window: { from: hours.from, to: hours.to, hourWords: window.words.length } } : {}) };
 }
+// Số lời gọi tối thiểu của một lần tra (mỗi truy vấn × mỗi giờ của khung; chưa tính phần chia theo phút).
+export function planSize({ queries, hours = null }) {
+  const n = Array.isArray(queries) && queries.length ? queries.length : 1;
+  return n * (hours ? hourWindow(hours)?.words.length ?? 1 : 1);
+}
 const describe1 = q => ({ ...(q.service ? { service: q.service } : {}), query: q.query });
 
 // Đoạn hướng dẫn trong brief PI: schema thật của tool (từ company_tools) và cách tra cho đủ.
@@ -129,7 +134,7 @@ export function searchLogsHelp(inputSchema) {
   return [
     `search_logs input: ${props}. There is no paging: limit, pageSize, take or maxResults are refused or ignored. Each call returns at most 20 entries, NEWEST first, with total (all matches).`,
     'Matching: the entry (field names included) and the query are lower-cased and split into words at every non-letter/digit; every query word must equal a whole word of the entry (AND, any order, no wildcard). ts 2025-10-18T22:51:08.468Z gives the words 2025, 10, 18t22, 51, 08, 468z: query 2025-10-18T22 selects that hour (in every month that has a day 18), 2025-10-18 never selects a day (18 matches any 18), 2025.10.3 matches any entry with the words 2025, 10 and 3, TX-007* matches nothing. Good filters: message words (applied, posted), ids (TX-00282, SCH-0103), hour words (18t22), seq numbers, field names (txnId).',
-    'Fetch in bulk, never in your own loops: company_lookup {name: "search_logs", backlogItemKey, queries: [{service, query}, ...] (up to 2500, build the list in code, e.g. every TX-00001..TX-00716 or SCH-0001..SCH-0320), hours: {from: "2025-10-15T08", to: "2025-11-03T09"} (optional: each query once per hour in that window, entries outside it dropped)}. The helper runs them in parallel, splits an hour with more than 20 matches by minute, and saves ONE file (savedTo) with every entry once, sorted by ts then context.seq, plus complete:true or the list of incomplete queries. It answers within about 100 s or returns a jobId: job_status {jobId, waitSeconds: 110}. A whole service over its full span is about 744 hour words: prefer ids or the release windows from the deploy service.',
+    'Fetch in bulk, never in your own loops: company_lookup {name: "search_logs", backlogItemKey, queries: [{service, query}, ...] (up to 2500, build the list in code, e.g. every TX-00001..TX-00716 or SCH-0001..SCH-0320), hours: {from: "2025-10-15T08", to: "2025-11-03T09"} (optional: each query once per hour in that window, entries outside it dropped)}. The helper runs them in parallel, splits an hour with more than 20 matches by minute, and saves ONE file (savedTo) with every entry once, sorted by ts then context.seq, plus complete:true or the list of incomplete queries. It answers within about 100 s or returns a jobId: job_status {jobId, waitSeconds: 110}. Company Tools allow the whole team about 100 calls a minute, so 300 calls take 3 minutes: a lookup that cannot finish before your return_by is refused at once with the number of calls that still fit. An hours window costs one call per query per hour (a full month is 744 for ONE query): use it only for a window of a few hours or days; otherwise list ids (the first 20 entries of a service show its id fields) and message words. Shorter lookups run first, and single lookups are never held up by a bulk one.',
     'Compute the answers with a script over that file (never by reading entries), and only from complete data: complete:false means the counts are lower bounds, say so and add the missing queries.',
   ].join('\n');
 }

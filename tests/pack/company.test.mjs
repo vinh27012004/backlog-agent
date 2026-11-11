@@ -9,7 +9,7 @@ function fakeCompany({ limits, statuses = [] } = {}) {
   const http = {
     async request(url, { body }) {
       const msg = JSON.parse(body);
-      sent.push({ at: Date.now(), method: msg.method });
+      sent.push({ at: Date.now(), method: msg.method, query: msg.params?.arguments?.query ?? null });
       const status = msg.method === 'tools/call' && statuses.length ? statuses.shift() : 200;
       const headers = new Headers(status === 429 ? { 'retry-after': '0.1' } : {});
       if (status === 429) return { status, headers, json: null, text: '' };
@@ -41,6 +41,21 @@ test('every window holds: a burst waits for the short window, then the long one'
   assert.ok(at[5] >= 1400, `the sixth call waited for the long window (${at})`);
   assert.equal(company.stats.requests, 8);
   assert.ok(company.stats.throttledMs > 0);
+});
+
+// QDO8W480: 341 lời gọi của PI-03 chia băng thông với 1015 lời gọi của PI-02 (588 s thay vì khoảng 200 s).
+test('a waiting call of a smaller lookup goes before the calls of a larger one; single calls go first', async () => {
+  const { company, sent } = fakeCompany({ limits: [[300, 2]] });
+  await company.ensureInitialized();
+  const big = Array.from({ length: 4 }, (_, i) => company.invoke('search_logs', { query: `big${i}` }, { weight: 1000 }));
+  const small = Array.from({ length: 2 }, (_, i) => company.invoke('search_logs', { query: `small${i}` }, { weight: 300 }));
+  const single = company.invoke('kb_search', { query: 'single' });
+  await Promise.all([...big, ...small, single]);
+  const order = sent.filter(s => s.method === 'tools/call').map(s => s.query.replace(/\d+$/, ''));
+  assert.deepEqual(order, ['single', 'small', 'small', 'big', 'big', 'big', 'big']);
+  assert.equal(company.waiting.length, 0);
+  assert.equal(company.ratePerMinute(), 400);
+  assert.equal(new CompanyTools({ session: {}, http: {} }).ratePerMinute(), 108);
 });
 
 test('HTTP 429 waits for Retry-After and sends again; a third refusal is an error', async () => {
