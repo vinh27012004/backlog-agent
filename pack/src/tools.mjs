@@ -287,7 +287,7 @@ export class Runtime {
           waitSeconds: num('start/status: any positive value waits up to 110 s and returns as soon as the app answers (start the exec with // @exec: {"yield_time_ms": 120000}); 0 does not wait. Default 110.') }, ['action', 'backlogItemKey']),
         handler: a => app({ teamWorkspace: this.teamWorkspace, ...a }) },
       { name: 'run_checks', description: 'Any agent: run the closing checks of a worktree from its project profile (typecheck, production build, full test suite; a PI item runs typecheck only unless checks says otherwise; when the item text says the grader runs the tests of one named workspace package, the test check runs only that package plus any workspace package the item changed, reported as scope) at the same time, each logged to answers/<ID>/evidence/ (typecheck.log, build.log, full-suite.log). worker_checkpoint ready_for_evidence already starts it on the synced worktree: then call action status. Waits up to waitSeconds (max 110; start the exec with // @exec: {"yield_time_ms": 120000}) and returns per check state passed|failed|timeout|skipped, exit code, test counts, failing test ids and the log tail of a failure; state running means call action status again. When source (outside answers/ and challenge/) and environment are unchanged since the last finished run it returns that run at once (cached: true) instead of running again. Stops the item\'s running app before a build; app start waits for a running build and reuses a passing one. worker_checkpoint candidate copies these results into the fix-result verification. Use it instead of chaining these commands in the shell and polling their logs.',
-        inputSchema: obj({ action: { type: 'string', enum: ['run', 'status'], description: 'run (default) starts the checks; status waits for the current run.' },
+        inputSchema: obj({ action: { type: 'string', enum: ['run', 'status', 'mutants'], description: 'run (default) starts the checks; status waits for the current run; mutants undoes each of your changes to existing product code in turn and runs your new test files, listing the changes no new test catches (worker_checkpoint candidate asks for it when you changed existing code and added tests).' },
           backlogItemKey: str('Item key.'), matchRoot: str('Absolute matchRoot of the worktree (from the brief).'),
           checks: { type: 'array', items: { type: 'string', enum: ['typecheck', 'build', 'test'] }, description: 'Default all three; e.g. ["typecheck"] for an early type check while coding.' },
           force: bool('Run even when the source is unchanged since the last run (default false).'),
@@ -716,7 +716,7 @@ export class Runtime {
   // full suite (QDYZMY1K: timeout 600 s ở PI-02 và PI-03) chỉ làm chậm. Worker chạy test của module bị sửa bằng test_one.
   // Bộ test thu hẹp về các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
   runChecks(args) {
-    const pi = typeOf(args?.backlogItemKey) === 'PI' && args.action !== 'status' && args.checks === undefined;
+    const pi = typeOf(args?.backlogItemKey) === 'PI' && !['status', 'mutants'].includes(args.action) && args.checks === undefined;
     const cfg = this.runtimeConfig();
     return runChecks({ teamWorkspace: this.teamWorkspace, ...args, ...(pi ? { checks: ['typecheck'] } : {}),
       scopeTests: cfg.scopedTests !== false, maxHeavy: cfg.maxHeavyCommands ?? null });

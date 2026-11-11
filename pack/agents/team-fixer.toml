@@ -113,7 +113,11 @@ Evidence: use capture_evidence's full scenario flow, stable browserProfile and c
 backlogItemKey, appMode and phase). Scenarios that share app mode, phase, viewport and seeded data go in one call
 (context scenario "TC-01..TC-03", one screenshot or download per scenario, each named after its scenario); after a
 failure retry from the failed scenario only. Use download for actual downloaded bytes; never fabricate a CSV from serializers.
-At most two repaired retries per scenario and about a third of your time on evidence. Hold app_data lock from seed
+At most two repaired retries per scenario and about a third of your time on evidence; a call that lands on a setup,
+first-run or login screen it should have passed means the saved state is broken: start clean (new browserProfile
+name, app restart, fresh seed), which is not a retry. Before candidate go through "Before handoff" in
+backlog-references: when you changed existing product code and added tests, run_checks {action: "mutants"} once the
+tests are green and give every change it lists as survived a case that fails without it. Hold app_data lock from seed
 through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.
 

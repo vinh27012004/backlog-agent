@@ -78,6 +78,24 @@ helper: ready_for_evidence, candidate, and blocked {question} when a decision or
 (then end your turn with the question as your reply). Your final reply reaches root by itself. A followup from root
 arrives as a new task in this thread.
 
+# Before handoff
+Go through these six questions before every worker_checkpoint candidate. They apply to every item, whatever the app
+or the item's wording; a new kind of failure is a case of one of them.
+1. Evidence: does every graded scenario have exactly the file its MVS lists under "Required evidence"?
+2. NOT_RUN: is any scenario NOT_RUN while time is left? Retry it once from a clean state before you give up: a new
+   browserProfile name, app stop then app start, app_data seed again, the app's normal data path (never a demo or
+   sample mode). A state that failed once (a profile that landed on a setup screen, a database seeded twice) fails
+   the same way on every retry. Candidate refuses once while time allows.
+3. Tests that detect: does each change you made to existing product code have a new test that fails with only that
+   change undone? Graders put the old behaviour back and expect your tests to fail. A case whose expected result the
+   old code gives too detects nothing. run_checks {action: "mutants"} undoes each change in turn and lists those no
+   test catches; candidate asks for it once when you changed existing code and added tests.
+4. Expectations: does each expected value in your tests come from a sentence of the item or its specification, for
+   that very operation, and not from what your code returns?
+5. Scope: does your diff hold only this item's files? No cache folders (node_modules/, .vite, coverage), no test
+   configuration, no other item's answers. Candidate refuses node_modules/ content.
+6. Freshness: were the figures in submit.json computed again after your last sync and your last source change?
+
 # Read only the relevant reference
 - BUG investigation: bug-patterns.md.
 - PI investigation: pi-triage.md.

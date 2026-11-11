@@ -27,7 +27,12 @@ Check the item description immediately upon opening:
   - For collection-wide conditions use **Batch, import and pagination** in `backlog-references/domain-checks.md`.
     Exercise a representative real entry point across its actual processing boundary and check the records beyond it.
   - Demonstrate observed specification violations on unfixed code, fix production behavior, and verify green without
-    relaxing the expected result. If reference/mutant builds are unavailable, report only the detection you observed.
+    relaxing the expected result. Graders grade detection with mutants, which are usually the very defects you fixed:
+    each fix needs a case that fails with only that fix undone. Build the fixture so the old and the new code give
+    different results; when the rule is about precedence (a preferred pass before a fallback, a tie-break), the
+    candidate the rule picks must not also be the one the fallback picks (EXP3I47A TASK-08: the preferred line came
+    second, the fallback order gave the same assignment, mutant import-payee-after-rules survived, -4). Once the suite
+    is green call run_checks {action: "mutants"} and fix every change it lists as survived.
   - Iterate with the required suite command on the integration directory and the targeted module tests only. Call the
     full run_checks once, when the source fixes and every case are final: any later edit under the source tree makes
     that run stale and the whole suite runs again (RATH0OHJ TASK-08: a full run at minute 13 was discarded by later

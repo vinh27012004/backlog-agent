@@ -168,6 +168,18 @@ export function failureHint(step, state, code) {
   return null;
 }
 
+// Profile vừa khôi phục mà app chuyển `goto` sang đường dẫn khác rồi một bước hỏng: trạng thái đã lưu (budget demo
+// hay làm dở, phiên cũ) thường là nguyên nhân. EXP3I47A BUG-09: sau "Try Demo" mỗi goto rơi về /bootstrap, ba lần thử
+// trên cùng profile đều hỏng và cả ba kịch bản NOT_RUN (−65); YSKRYL4B đổi tên profile và chụp xong trong 9 s.
+export function profileHint({ profile, restored, gotoUrl, url }) {
+  if (!profile || !restored || !gotoUrl || !url) return null;
+  let from, to;
+  try { from = new URL(gotoUrl); to = new URL(url); } catch { return null; }
+  if (from.origin !== to.origin || from.pathname.replace(/\/$/, '') === to.pathname.replace(/\/$/, '')) return null;
+  if (from.pathname === '/' || from.pathname === '') return null; // trang gốc tự chuyển tới màn hình chính là bình thường
+  return `This call restored browserProfile "${profile}" and the app sent ${from.pathname} to ${to.pathname}. When that is a login screen, put the login step back. Otherwise the saved state is the likely cause (a demo or half-made document, a stale setup): retry once with a new browserProfile name and rebuild that state in the same call. A clean start is not one of your repair retries.`;
+}
+
 // Mỗi lần gọi mở một trang trắng: bước thao tác trước goto/login chắc chắn hỏng sau khi chờ hết giờ (NBDB5U0O BUG-02:
 // click "New invoice" trên about:blank). Báo ngay, không mở trình duyệt.
 const PAGE_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'drag', 'waitFor', 'assertText', 'screenshot', 'download', 'runScript']);
@@ -366,6 +378,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const downloads = [];
   let ctx;
   let page;
+  let restoredProfile = false;
+  let lastGoto = null;
   try {
     const options = { viewport: vp, deviceScaleFactor: 1, acceptDownloads: true };
     // IndexedDB khôi phục lỗi (Playwright không giữ được giá trị nhị phân, hay bản ghi out-of-line thiếu value: budget
@@ -377,6 +391,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       } catch { return null; }
     };
     if (stateFile && existsSync(stateFile)) {
+      restoredProfile = true;
       ctx = await instance.newContext({ ...options, storageState: stateFile }).catch(() => null);
       if (!ctx) {
         const partial = withoutIdb();
@@ -561,6 +576,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         const q = { selector: s.selector, text: s.text, index: s.index };
         switch (s.action) {
           case 'goto':
+            lastGoto = s.url;
             await navigate(s.url);
             break;
           case 'click': {
@@ -796,7 +812,8 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       if (at >= 0) {
         const step = steps[at];
         const state = await evaluate(PAGE_STATE, { selector: step.selector ?? null, text: step.text ?? null }).catch(() => null);
-        const hint = failureHint(step, state, error.code);
+        const hint = failureHint(step, state, error.code)
+          ?? profileHint({ profile: browserProfile, restored: restoredProfile, gotoUrl: lastGoto, url: state?.url ?? page.url() });
         error.details = { failedStep: at + 1, action: step.action, ...(state ?? {}), ...(hint ? { hint } : {}), stepsDone: log,
           screenshotsDone: shots.map(x => x.path),
           ...(diagnostic ? { diagnostic, diagnosticNote: 'screen at the failed step for debugging only: never list it as scenario evidence or rename it' } : {}),
@@ -819,8 +836,10 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
         const tmp = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
         // indexedDB: app lưu dữ liệu local trong IndexedDB (OMZJW0S0 BUG-09: budget "Don't use a server") mất ở lần gọi
         // sau nếu chỉ giữ cookie/localStorage; newContext({storageState}) khôi phục cả IndexedDB.
-        writeFileSync(tmp, JSON.stringify(await fillDroppedIdbKeys(await ctx.storageState({ indexedDB: true }), page)));
-        renameSync(tmp, stateFile);
+        // Có hạn: trang còn kẹt ("Creating budget…") làm storageState/evaluate chờ mãi, lời gọi vượt hạn của chính nó và
+        // bị MCP cắt ở 120 s (EXP3I47A BUG-09). Hết hạn thì giữ profile cũ.
+        const state = await Promise.race([ctx.storageState({ indexedDB: true }).then(s => fillDroppedIdbKeys(s, page)), sleep(8000).then(() => null)]);
+        if (state) { writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, stateFile); }
       } catch { /* trình duyệt đã đóng */ }
     }
     await Promise.race([instance.close().catch(() => null), sleep(2000)]);

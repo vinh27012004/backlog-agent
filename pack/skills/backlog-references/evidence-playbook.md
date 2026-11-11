@@ -3,7 +3,12 @@
 Read before screenshot, download or data scenarios. Scenarios that share app mode, phase, viewport and seeded data go
 in one call (context.scenario "TC-01..TC-03", one screenshot or download per scenario named after it; §2); split only
 for a different app mode, phase, viewport or data. At most two repaired retries per call and about a third of the
-time box; report unfinished checks NOT_RUN. Before final evidence call worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
+time box; report unfinished checks NOT_RUN. A retry on the same broken state is not a repair: when a call lands on a
+first-run, setup or login screen it should have passed, or keeps loading, the saved profile or data is the fault.
+Start again clean (a new browserProfile name, app restart, fresh seed) and do not count that clean start as a retry
+(EXP3I47A BUG-09: three captures on a profile spoilt by "Try Demo" all fell back to the setup screen, the worker handed
+off all three scenarios NOT_RUN with 23 minutes left, -65; YSKRYL4B took a new profile and captured in 9 s). Never use
+a demo or sample-data mode for evidence: its data does not survive a reload. Before final evidence call worker_checkpoint ready_for_evidence: it syncs your worktree to main and usually returns writesAllowed:true, so start
 the app again and capture at once. Only when it returns writesAllowed:false: stop writes and end your turn with its
 hint as your reply; root gets the sync from the helper and sends a followup to resume (never send_message to root).
 An item with a deadline that needs screenshots (the brief's `<screens_first>`) captures them before

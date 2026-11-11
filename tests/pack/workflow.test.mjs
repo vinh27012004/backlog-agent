@@ -1440,3 +1440,49 @@ test('sync keeps both additions when main and the item only added lines to the s
   await assert.rejects(f.rt.worktree({ action: 'sync', backlogItemKey: f.key }), /WORKTREE_CONFLICT.*routes\.js.*unchanged/);
   assert.equal(mine(), before);
 });
+
+// Checklist "Before handoff" mục 2 (EXP3I47A BUG-09: cả ba kịch bản NOT_RUN khi còn 23 phút, −65).
+test('candidate refuses once while a scenario is NOT_RUN and time is left, and never near return_by', async () => {
+  const f = fixture('BUG-01'), wf = f.rt.workflow;
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }] }));
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } };
+  const first = wf.notRunGate('BUG-01');
+  assert.match(first, /^TC-1 is NOT_RUN with \d+ minutes left before return_by.*new browserProfile name.*demo or sample mode.*call candidate again as is$/);
+  assert.equal(wf.notRunGate('BUG-01'), null, 'the same NOT_RUN set is refused only once');
+  const g = fixture('BUG-01');
+  writeFileSync(join(g.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }] }));
+  g.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 3 * 60_000).toISOString() } };
+  assert.equal(g.rt.workflow.notRunGate('BUG-01'), null, 'no time for a retry: hand off as is');
+});
+
+// Checklist mục 3 (EXP3I47A TASK-08: test mới không đỏ khi bỏ chỗ sửa, grader cài lại đúng lỗi đó, −4).
+test('candidate asks once for the mutation check and once more while a change survives it', async () => {
+  const f = fixture('BUG-01'), wf = f.rt.workflow;   // fixture sửa src/lib.js (value=1 → 2)
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } };
+  const ask = await wf.mutantGate('BUG-01');
+  assert.match(ask.problem, /changed existing product code \(1 change\) and added tests.*run_checks \{action: "mutants"\}/);
+  assert.match((await wf.mutantGate('BUG-01')).warning, /no mutation check on your final source/);
+  const source = (await wf.snapshot('BUG-01')).source;
+  const record = { state: 'done', source, hunks: [{ file: 'src/lib.js', line: 1, preview: 'export const value=2;', result: 'survived' }] };
+  writeFileSync(join(f.rt.session.paths.teamWork, 'items', 'BUG-01', 'mutants.json'), JSON.stringify(record));
+  assert.match((await wf.mutantGate('BUG-01')).problem, /no new test fails when these changes are undone: src\/lib\.js:1 \(export const value=2;\)/);
+  assert.match((await wf.mutantGate('BUG-01')).warning, /accepted on the second handoff/);
+  record.hunks[0].result = 'caught';
+  writeFileSync(join(f.rt.session.paths.teamWork, 'items', 'BUG-01', 'mutants.json'), JSON.stringify(record));
+  assert.equal(await wf.mutantGate('BUG-01'), null, 'every change caught: nothing to say');
+  const pi = fixture('PI-03');
+  writeFileSync(join(pi.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
+  pi.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } };
+  assert.equal(await pi.rt.workflow.mutantGate('PI-03'), null, 'PI races for time: no mutation check');
+});
+
+// YSKRYL4B CR-07: vitest chạy từ thư mục trận ghi cache vào <folder>/node_modules/, helper commit 32 file đó.
+test('candidate refuses tool caches under node_modules/', async () => {
+  const f = fixture('BUG-01');
+  f.result(1);
+  mkdirSync(join(f.wt.matchRoot, 'node_modules', '.vite', 'vitest'), { recursive: true });
+  writeFileSync(join(f.wt.matchRoot, 'node_modules', '.vite', 'vitest', 'results.json'), '{}');
+  const { problems } = await f.rt.workflow.handoffCheck('BUG-01');
+  assert.ok(problems.some(p => /^files under node_modules\/ would be committed: M1\/node_modules\. They are a tool cache/.test(p)), JSON.stringify(problems));
+});

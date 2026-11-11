@@ -539,6 +539,29 @@ mất 588 s; cả hai nộp trường báo cáo trống.
 - Push không còn giới hạn cỡ file; `unpushable` (integration.mjs) chặn đường dẫn cấm trước khi commit lên main local.
 - `capture_evidence` nhận app `custom` với appMode worker khai.
 
+## Checklist trước khi bàn giao, luật trong code (11/11, sau EXP3I47A và YSKRYL4B)
+
+Thay cho việc thêm ghi chú theo từng trận: skill `backlog-references` có mục "Before handoff" (sáu câu hỏi chung cho mọi
+item), và phần nào máy kiểm được thì `worker_checkpoint candidate` kiểm. Mỗi luật từ chối một lần cho cùng một trạng
+thái, chỉ xét khi không còn lỗi nào khác.
+- Mục 2, NOT_RUN (`notRunGate`): `submit.json` còn kịch bản NOT_RUN mà còn ít nhất 5 phút tới return_by thì từ chối một
+  lần (`notRunAsked` = danh sách id), nhắc làm lại từ trạng thái sạch: browserProfile mới, khởi động lại app, seed lại,
+  không dùng chế độ demo. EXP3I47A BUG-09 (−65): ba lần chụp trên profile đã bị "Try Demo" làm hỏng, bàn giao khi còn 23
+  phút; YSKRYL4B đổi profile mới và chụp xong trong 9 s.
+- Mục 3, test phát hiện được lỗi (`mutantGate`, BUG/CR/TASK, còn ít nhất 6 phút): item sửa code có sẵn và thêm test mà
+  chưa có `run_checks {action: "mutants"}` trên source hiện tại thì từ chối một lần (`mutantsAsked` = source); có chỗ sửa
+  `survived` thì từ chối một lần nữa (`mutantsSurvivorsSeen`). PI không áp dụng (đua thời gian). EXP3I47A TASK-08 (−4).
+- Mục 5, phạm vi: file mới dưới `node_modules/` luôn bị từ chối (YSKRYL4B CR-07: vitest chạy từ thư mục trận ghi 32 file
+  cache vào `<folder>/node_modules/`, helper commit lên main).
+- `capture_evidence` lưu profile có hạn 8 s (trang kẹt làm `storageState` chờ mãi, lời gọi bị MCP cắt ở 120 s).
+- `capture_evidence` báo ngay ở bước hỏng (`profileHint`): profile vừa khôi phục mà app chuyển đường dẫn của `goto` sang
+  đường dẫn khác (không tính trang gốc) thì gợi ý thử một lần với browserProfile mới, không tính là lần sửa.
+- Judge (`tools/judge/rubric.md`): J5 lần theo dòng cũ của từng hunk với fixture của case (và đọc `mutants.log`), là H
+  cho TASK có sản phẩm là bộ test; thêm J11 (H) cho kịch bản không PASS; `fail` phải dựa trên điều đã thấy; cache tool
+  commit nhầm chỉ fail J3 khi đổi cách app/test chạy. Sau hai lần chấm lệch grader: EXP3I47A TASK-08, BUG-09 pass; YSKRYL4B
+  CR-07, TASK-07 fail.
+- Agent kiểm riêng cho item khó và làm lâu: người dùng duyệt, làm sau phần luật code.
+
 ## Đo và kiểm
 
 journal.metrics: prepare, code_test, evidence, handoff, blocked, publish; jobs: worktree_setup/publish_item/drop_databases.

@@ -749,6 +749,16 @@ pack/contracts/*.schema.json    # progress-event (của BTC), worker-result, che
 - Kết quả: mỗi bước `{name, command, state passed|failed|timeout|skipped, exitCode, ms, log, counts?, failing?, tail?}`;
   `ok`, `hint`. `worker_checkpoint candidate {result}` chép các bước thành dòng `verification` (typecheck, build, full
   test suite). Test: `checks.test.mjs`, `workflow.test.mjs`.
+- `action: mutants` (11/11, sau EXP3I47A TASK-08; `src/env/mutants.mjs`): lấy các hunk của `git diff -U0 HEAD` trong
+  file code có sẵn của item (ngoài test, config test, `answers/`, `challenge/`, `node_modules/`; file mới không tính),
+  tách hunk n dòng thay n dòng thành từng dòng, tối đa 12. Chạy các file test mới (untracked) của item một lần trên
+  source của item (phải xanh, không thì `baseline`), rồi với từng hunk: ghi bản gốc ra `items/<ID>/mutants.restore.json`
+  + bản sao trong `scratch/<ID>/mutants/`, đặt lại dòng cũ, chạy test mới, trả file. `caught` khi một test đỏ (hay hết
+  giờ), `survived` khi tất cả vẫn xanh. Runner: vitest/jest của gói gọi thẳng bằng node (`node_modules/vitest/vitest.mjs
+  run`, `jest/bin/jest.js --runTestsByPath`), pytest; mỗi lần chạy giữ một chỗ lệnh nặng. Ngân sách 5 phút, phần còn lại
+  `notRun`. Kết quả ở `items/<ID>/mutants.json` (`source` là tree lúc bắt đầu; source đổi trong lúc chạy thì `stale`),
+  tóm tắt ở `answers/<ID>/evidence/mutants.log`; cùng source thì trả lại (`cached`). Mọi lời gọi `run_checks` khôi phục
+  bản đột biến dở trước khi làm gì (`restorePending`); `run` khi mutants đang chạy trả `MUTANTS_RUNNING`.
 
 ### 5.19 `decide` (R, mới, D9)
 

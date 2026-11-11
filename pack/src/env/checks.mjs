@@ -16,6 +16,7 @@ import { forgetBuild, locate, readState as appState, rememberBuild, stopApp } fr
 import { detectProfile } from './environment.mjs';
 import { runTests } from './testreport.mjs';
 import { appPrefixOf, testScope } from './test-scope.mjs';
+import { mutantsRunning, restorePending, runMutants } from './mutants.mjs';
 
 export const CHECKS = ['typecheck', 'build', 'test'];
 const MAX_WAIT_SECONDS = 110;
@@ -209,11 +210,15 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   const where = locate(teamWorkspace, matchRoot);
   const teamWork = dirname(where.logDir);
+  if (action === 'mutants') return runMutants({ teamWorkspace, backlogItemKey: key, matchRoot, waitSeconds, force, maxHeavy });
+  // Bản đột biến bỏ dở (helper chết giữa lần mutants): trả lại file gốc trước khi chạy hay đọc gì.
+  restorePending(teamWork, key);
   if (action === 'status') {
     const record = readChecks(teamWork, key);
     return record?.state === 'running' ? waitFor(teamWork, key, record.runId, waitSeconds) : view(record);
   }
-  if (action !== 'run') fail('INVALID_ARGUMENT', 'action must be run or status');
+  if (action !== 'run') fail('INVALID_ARGUMENT', 'action must be run, status or mutants');
+  if (mutantsRunning(teamWork, key)) fail('MUTANTS_RUNNING', 'the mutation check is editing your product files one change at a time: call run_checks {action: "mutants"} until it finishes, then run');
   const names = [...new Set(Array.isArray(checks) && checks.length ? checks : CHECKS)];
   if (names.some(n => !CHECKS.includes(n))) fail('INVALID_ARGUMENT', `checks must be among ${CHECKS.join(', ')}`);
   let current = readChecks(teamWork, key);

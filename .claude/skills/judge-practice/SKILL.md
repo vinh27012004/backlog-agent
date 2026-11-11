@@ -13,7 +13,7 @@ context: fork
    and one line per item. Items with source `none` have no code to judge; judge them only on the answer and evidence.
 2. Read `tools/judge/rubric.md` once.
 3. For each item in `<bundle>/index.json`: read the files of `<bundle>/<ID>/` that the rubric lists (open the
-   screenshots in `evidence.json`), judge all ten criteria, and write `<bundle>/<ID>/judge.json`. Do not open
+   screenshots in `evidence.json`), judge all eleven criteria, and write `<bundle>/<ID>/judge.json`. Do not open
    `<bundle>/_verdicts/`, `<bundle>/_usage/` or the match's `.team-work/` before every item is judged.
    To keep this step cheap:
    - Answer-only items (diff is `(no code change found)` or only adds files under `answers/`): mark J2, J5 and J9

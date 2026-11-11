@@ -9,6 +9,7 @@ import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
 import { CHECK_LABEL, readChecks, verificationRows } from '../env/checks.mjs';
+import { mutantsRunning, mutationTargets, readMutants, restorePending } from '../env/mutants.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
 import { searchLogsHelp } from './logs.mjs';
@@ -63,6 +64,13 @@ const lastCallOf = row => row?.minutesLeft != null && row.minutesLeft <= lastCal
 const DEPENDENCY_REFRESH_MINUTES = 3;
 // candidate chờ lần tra log hàng loạt còn chạy (proxy của worker chờ tối đa 118 s).
 const LOOKUP_WAIT_MS = 90_000;
+// Luật trước khi bàn giao (checklist mục 2 và 3, backlog-references §Before handoff). Mỗi luật từ chối một lần cho cùng
+// một trạng thái, và chỉ khi còn đủ thời gian làm lại trước return_by.
+// EXP3I47A BUG-09 (−65): ba lần chụp trên cùng browser profile đã hỏng ("Try Demo"), worker bàn giao PARTIAL với cả ba
+// kịch bản NOT_RUN khi còn 23 phút; YSKRYL4B gặp đúng màn hình đó, đổi sang profile mới và chụp xong trong 9 s.
+const RETRY_MINUTES = 5;
+// EXP3I47A TASK-08 (−4): test mới không đỏ khi bỏ chỗ sửa `reportedPayee` (mutants.mjs).
+const MUTANT_MINUTES = 6;
 const ITEM_KEY = /\b(?:TASK|BUG|CR|PI)-\d{1,3}\b/g;
 export function itemDependencies(key, text) {
   const out = [];
@@ -469,6 +477,11 @@ export class Workflow {
       } else if (absolute.length) {
         warnings.push(`tests write to absolute paths (${absolute.slice(0, 5).join('; ')}); accepted as an in-memory file system on the second handoff`);
       }
+      // YSKRYL4B CR-07: vitest chạy từ thư mục trận (ngoài src/, nơi .gitignore không với tới) ghi cache vào
+      // <folder>/node_modules/.vite và .vitest-cache; helper commit cả 32 file đó lên main.
+      const caches = [...new Set(changed.filter(f => f.status === 'A' && f.path.startsWith(folder) && /(^|\/)node_modules\//.test(f.path))
+        .map(f => f.path.slice(0, f.path.indexOf('node_modules/') + 'node_modules'.length)))];
+      if (caches.length) problems.push(`files under node_modules/ would be committed: ${caches.slice(0, 5).join(', ')}. They are a tool cache, written when a test runner or build runs from a folder the project's .gitignore does not cover (the match folder instead of the app folder). Delete those folders (Remove-Item -Recurse -Force <path>), run tools from the app folder or through run_checks, then call candidate again`);
       const own = changed.filter(f => f.path.startsWith(folder) && f.status !== 'A').map(f => f.path.slice(folder.length));
       const config = own.filter(p => TEST_CONFIG.test(p));
       if (config.length) problems.push(`test configuration changed: ${config.join(', ')}; restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>) and make your test work with the existing config`);
@@ -717,6 +730,61 @@ export class Workflow {
       problems: [`your bulk log lookup ${job.id} has finished and you have not read its result: ${res.savedTo} (${res.entries} entries, complete: ${res.complete})`],
       hint: 'Not handed off: compute the answers from that file with your script, write them into submit.json (and the fix-result), then call worker_checkpoint candidate again. If your answers already come from this file, call candidate again as is.' };
   }
+  // Phút còn lại tới return_by của item (null khi không biết).
+  minutesToReturn(key) {
+    const ji = this.item(key);
+    const returnBy = ji.prepared?.timeBox?.returnBy ?? this.rt.itemRows?.().find(x => x.key === key)?.returnBy;
+    const at = Date.parse(returnBy ?? '');
+    return Number.isFinite(at) ? (at - Date.now()) / 60_000 : null;
+  }
+  // Checklist mục 2: kịch bản NOT_RUN mà còn thời gian thì từ chối một lần, nhắc dựng lại từ trạng thái sạch.
+  notRunGate(key) {
+    const ji = this.item(key);
+    if (ji.verificationKind === 'answer_only') return null;
+    const left = this.minutesToReturn(key);
+    if (left === null || left < RETRY_MINUTES) return null;
+    let submit;
+    try { submit = JSON.parse(readFileSync(join(this.paths(key).matchRoot, 'answers', key, 'submit.json'), 'utf8')); } catch { return null; }
+    const ids = (Array.isArray(submit?.testResults) ? submit.testResults : []).filter(t => String(t?.result ?? '').toUpperCase() === 'NOT_RUN').map(t => String(t.id));
+    if (!ids.length) return null;
+    const mark = ids.join('|');
+    if (ji.notRunAsked === mark) return null;
+    ji.notRunAsked = mark;
+    this.rt.journal.save();
+    return `${ids.join(', ')} ${ids.length === 1 ? 'is' : 'are'} NOT_RUN with ${Math.floor(left)} minutes left before return_by, and a NOT_RUN scenario scores nothing. `
+      + 'Retry from a clean state before giving up: a new browserProfile name (a profile that once landed on a first-run, setup or login screen, or kept loading, keeps that state), app stop then app start, app_data seed again, and the app\'s normal data path instead of a demo or sample mode (demo data does not survive a reload). '
+      + 'Then capture and update submit.json. If the scenario truly cannot run (the feature is absent, auto-review refused the action), call candidate again as is';
+  }
+  // Checklist mục 3: item sửa code có sẵn và thêm test thì mỗi chỗ sửa phải có test mới đỏ khi bỏ nó (mutants.mjs).
+  // Chưa chạy (hay đã cũ so với source) thì từ chối một lần; có chỗ sửa không test nào bắt thì từ chối một lần.
+  async mutantGate(key) {
+    const r = this.rt, ji = this.item(key);
+    if (!['BUG', 'CR', 'TASK'].includes(typeOf(key)) || ji.verificationKind === 'answer_only' || !r.liveWorktree(key)) return null;
+    const left = this.minutesToReturn(key);
+    if (left === null || left < MUTANT_MINUTES) return null;
+    const teamWork = r.session.paths.teamWork, paths = this.paths(key);
+    if (mutantsRunning(teamWork, key)) return { problem: 'the mutation check is still running: call run_checks {action: "mutants"} until it finishes, then candidate again' };
+    restorePending(teamWork, key);
+    const targets = await mutationTargets(paths.worktreeRoot, r.session.descriptor.matchId).catch(() => null);
+    if (!targets?.hunks.length || !targets.tests.length) return null;
+    const source = (await this.snapshot(key, paths).catch(() => null))?.source ?? null;
+    const rec = readMutants(teamWork, key);
+    if (!rec || rec.state !== 'done' || rec.source !== source) {
+      if (ji.mutantsAsked === source) return { warning: 'no mutation check on your final source (run_checks {action: "mutants"}): handed off without it' };
+      ji.mutantsAsked = source;
+      r.journal.save();
+      return { problem: `you changed existing product code (${targets.hunks.length} change${targets.hunks.length === 1 ? '' : 's'}) and added tests, but no mutation check ran on this source. Call run_checks {action: "mutants"}: it undoes each change in turn and runs your new tests, so you see which change no test catches (graders put the old behaviour back and expect your tests to fail). Then call candidate again` };
+    }
+    if (rec.skipped || rec.baseline) return { warning: `mutation check: ${rec.skipped ?? 'your new tests failed on your own source'}` };
+    const survived = (rec.hunks ?? []).filter(h => h.result === 'survived');
+    if (!survived.length) return null;
+    const list = survived.map(h => `${h.file}:${h.line} (${h.preview})`);
+    const mark = `${source}|${list.join('|')}`;
+    if (ji.mutantsSurvivorsSeen === mark) return { warning: `no new test fails when these changes are undone: ${list.slice(0, 5).join('; ')} (accepted on the second handoff)` };
+    ji.mutantsSurvivorsSeen = mark;
+    r.journal.save();
+    return { problem: `no new test fails when these changes are undone: ${list.slice(0, 6).join('; ')}. Change the case that covers each one so the old and the new code give different observable results, or add a case, then run_checks {action: "mutants"} again. A change with no behaviour (refactor, log line, type only) needs no case: say so in your result and call candidate again as is` };
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
     const lookup = await this.lookupBeforeHandoff(key);
@@ -761,6 +829,14 @@ export class Workflow {
     } else if (caught?.error) warnings.push(`could not sync ${owner}'s baseline fix into your worktree (${caught.error}); hand off as observed`);
     if (this.baselineWait(key) === 'owner') {
       warnings.push(`the baseline failures are not fixed on main yet: ${owner} lands that fix first. Hand off now as observed; publish waits for the fix, then the helper syncs your worktree and root asks you to rerun the full suite`);
+    }
+    // Checklist mục 2 và 3: chỉ xét khi không còn lỗi nào khác, để lần từ chối duy nhất không bị lẫn.
+    if (!problems.length) {
+      const notRun = this.notRunGate(key);
+      if (notRun) problems.push(notRun);
+      const mutant = await this.mutantGate(key).catch(() => null);
+      if (mutant?.problem) problems.push(mutant.problem);
+      else if (mutant?.warning) warnings.push(mutant.warning);
     }
     if (problems.length) {
       return { key: args.backlogItemKey, phase: 'candidate', handedOff: false, writesAllowed: true, problems, warnings,

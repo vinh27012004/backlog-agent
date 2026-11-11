@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
-import { captureEvidence, evidencePath, findBrowser } from '../../pack/src/env/browser.mjs';
+import { captureEvidence, evidencePath, findBrowser, profileHint } from '../../pack/src/env/browser.mjs';
 import { ensurePlaywright, install, McpClient, sh, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
@@ -627,4 +627,14 @@ test('runScript evaluates an issued script in the open page with data from the i
     await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js' }] }), /needs context/);
     await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js', argFile: 'company/01-get_test_data.json', argPath: 'data.rows' }] }), /argPath data.rows: no rows/);
   } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});
+
+// EXP3I47A BUG-09: profile hỏng sau "Try Demo", mỗi goto /schedules rơi về /bootstrap; ba lần thử trên cùng profile (−65).
+test('a step that fails after the app redirected a restored profile suggests a new browserProfile', () => {
+  const hint = profileHint({ profile: 'bug09-desktop', restored: true, gotoUrl: 'http://localhost:3100/schedules', url: 'http://localhost:3100/bootstrap' });
+  assert.match(hint, /restored browserProfile "bug09-desktop" and the app sent \/schedules to \/bootstrap.*new browserProfile name.*not one of your repair retries/);
+  assert.equal(profileHint({ profile: 'p', restored: false, gotoUrl: 'http://localhost:3100/schedules', url: 'http://localhost:3100/bootstrap' }), null, 'a fresh profile: nothing saved to blame');
+  assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100/schedules/', url: 'http://localhost:3100/schedules' }), null, 'no redirect');
+  assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100', url: 'http://localhost:3100/budget' }), null, 'the root page moving on is normal');
+  assert.equal(profileHint({ profile: null, restored: true, gotoUrl: 'http://localhost:3100/a', url: 'http://localhost:3100/b' }), null);
 });
