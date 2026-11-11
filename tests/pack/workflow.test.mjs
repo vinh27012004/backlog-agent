@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime } from '../../pack/src/tools.mjs';
-import { itemDependencies, itemSkills } from '../../pack/src/match/workflow.mjs';
+import { itemDependencies, itemSkills, pageScripts } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
 import { digest, resultArtifact } from '../../pack/src/core/candidates.mjs';
@@ -1396,4 +1396,20 @@ test('a deadline item that needs screenshots is told to capture them first, in t
   assert.match(res.hint, /Screenshots first: reconciliation\.png does not exist yet and the item closes in about 30 minutes/);
   writeFileSync(join(f.dir, 'evidence', 'reconciliation.png'), 'png');
   assert.equal(wf.missingScreens('CR-07'), null);
+});
+
+// QDO8W480 CR-05: seed BTC phát phải chạy trong trang của app; brief chỉ thẳng bước runScript của capture_evidence.
+test('the brief points to capture_evidence runScript for an issued script that runs in the app page', () => {
+  const f = fixture('CR-05'), dir = f.rt.itemDir('CR-05');
+  mkdirSync(join(dir, 'files', 'challenge'), { recursive: true });
+  writeFileSync(join(dir, 'files', 'challenge', 'CR-05-seed.js'), '// Evaluate this function in the app\'s page, for example: await page.evaluate(seed, data).\nasync data => window.$send("x", data);\n');
+  writeFileSync(join(dir, 'files', 'challenge', 'CR-05-mvs.test.js'), 'await page.evaluate(() => 1);\n');
+  writeFileSync(join(dir, 'files', 'challenge', 'CR-05-seed.ts'), 'export const seed = 1; // prisma seed, run with node\n');
+  const files = ['challenge/CR-05-seed.js', 'challenge/CR-05-mvs.test.js', 'challenge/CR-05-seed.ts', 'challenge/missing.js'];
+  assert.deepEqual(pageScripts(dir, files), ['challenge/CR-05-seed.js']);
+  const brief = readFileSync(f.rt.workflow.writeBrief('CR-05', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], files }), 'utf8');
+  assert.match(brief, /<page_scripts>\s*challenge\/CR-05-seed\.js: issued scripts that run inside the app's page/);
+  assert.match(brief, /\{action: "runScript", file: "challenge\/CR-05-seed\.js", argFile: "company\/01-get_test_data\.json", argPath: "data"\}/);
+  const plain = readFileSync(f.rt.workflow.writeBrief('CR-05', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], files: ['challenge/CR-05-seed.ts'] }), 'utf8');
+  assert.doesNotMatch(plain, /<page_scripts>/);
 });

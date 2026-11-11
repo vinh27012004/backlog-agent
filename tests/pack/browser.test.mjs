@@ -595,3 +595,36 @@ test('screenshot waits for pending requests and loading indicators; assertText w
     assert.ok(res.steps.filter(s => s.action === 'screenshot').every(s => !s.unsettled), JSON.stringify(res.steps));
   } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
 });
+
+// QDO8W480 CR-05: challenge/CR-05-seed.js phải chạy trong trang của app (page.evaluate(seed, data)); không có bước nào
+// làm được nên thợ tự viết script Playwright, hết giờ, TC-02..04 NOT_RUN.
+test('runScript evaluates an issued script in the open page with data from the item files', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-script-'), 'BUN'), checkout = join(tw, 'matches', 'M1'), matchRoot = join(checkout, 'M1');
+  const itemDir = join(checkout, '.team-work', 'items', 'CR-05');
+  mkdirSync(join(matchRoot, 'src'), { recursive: true }); mkdirSync(join(itemDir, 'files', 'challenge'), { recursive: true }); mkdirSync(join(itemDir, 'company'), { recursive: true });
+  writeFileSync(join(matchRoot, 'src', 'app.js'), 'x\n');
+  sh('git', ['init', '-q'], checkout); sh('git', ['add', '-A'], checkout);
+  sh('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'issued'], checkout);
+  writeFileSync(join(itemDir, 'files', 'challenge', 'CR-05-seed.js'),
+    '// Evaluate this function in the app\'s page with the fixture\'s `data` as its argument.\nasync data => {\n  for (const c of data.categories) await window.$send(\'category-create\', c);\n  return { created: data.categories.length };\n};\n');
+  writeFileSync(join(itemDir, 'files', 'challenge', 'broken.js'), 'async () => { throw new Error("no budget is open"); }');
+  writeFileSync(join(itemDir, 'company', '01-get_test_data.json'), JSON.stringify({ tool: 'get_test_data', content: [{ type: 'text', text: JSON.stringify({ data: { categories: [{ name: 'Rent' }, { name: 'Food' }] } }) }] }));
+  writeFileSync(join(matchRoot, 'src', 'mine.js'), '() => 1');
+  const server = createServer((req, res) => res.end('<!doctype html><ul id="list"></ul><script>window.$send = async (name, c) => { const li = document.createElement("li"); li.textContent = name + " " + c.name; list.append(li); };</script>'));
+  await new Promise(ok => server.listen(0, '127.0.0.1', ok)); const url = `http://127.0.0.1:${server.address().port}`;
+  const context = { backlogItemKey: 'CR-05', matchRoot, scenario: 'CR-05-TC-03', phase: 'final', appMode: 'production' };
+  try {
+    const r = await captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url },
+      { action: 'runScript', file: 'challenge/CR-05-seed.js', argFile: 'company/01-get_test_data.json', argPath: 'data' },
+      { action: 'assertText', text: 'category-create Food' }] });
+    const step = r.steps.find(s => s.action === 'runScript');
+    assert.deepEqual(step.result, { created: 2 });
+    assert.match(r.visibleText, /category-create Rent/);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/broken.js' }] }),
+      e => e.code === 'SCRIPT_FAILED' && /no budget is open/.test(e.message) && e.details.failedStep === 2);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: join(matchRoot, 'src', 'mine.js') }] }),
+      e => e.code === 'PATH_NOT_ALLOWED' && /files issued for CR-05/.test(e.message));
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js' }] }), /needs context/);
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, context, steps: [{ action: 'goto', url }, { action: 'runScript', file: 'challenge/CR-05-seed.js', argFile: 'company/01-get_test_data.json', argPath: 'data.rows' }] }), /argPath data.rows: no rows/);
+  } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+});

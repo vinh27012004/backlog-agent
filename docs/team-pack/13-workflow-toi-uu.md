@@ -495,6 +495,18 @@ mất 588 s; cả hai nộp trường báo cáo trống.
   tiến trình đã chết được lấy lại. Lệnh đang chờ ghi `queued[name]` vào `checks.json`, kết quả có `queuedMs`; timeout
   của lệnh tính từ lúc có chỗ. Chưa bọc: build của `app start` khi không dùng lại bản build của run_checks, cài
   dependency của worktree.
+- Script BTC phát chạy trong trang của app: `capture_evidence` có bước `runScript {file, arg | argFile, argPath}`
+  (`env/browser.mjs` `scriptStep`). QDO8W480 CR-05: `challenge/CR-05-seed.js` ("Evaluate this function in the app's
+  page ... page.evaluate(seed, data)") nạp dữ liệu chính thức vào budget đang mở; không có bước nào chạy được nên thợ
+  tự viết script Playwright, mất 5 phút rồi hết giờ, TC-02..04 NOT_RUN (17/45 điểm; CR-08 cùng kiểu). Chỉ nhận file
+  BTC phát cho item (`.team-work/items/<ID>/files/` hay `challenge/` trong matchRoot), không nhận script thợ viết;
+  `argFile` là file JSON của item (file kết quả Company Tools được mở lớp `content[0].text`), `argPath` chọn nhánh.
+  Kết quả của script nằm trong `steps[]`; lỗi là `SCRIPT_FAILED`, quá 40 s là `SCRIPT_TIMEOUT`. Brief có khối
+  `<page_scripts>` (`pageScripts`: file .js của item nhắc `page.evaluate`, "in the app's page" hay `window.$send`)
+  với đúng bước cần gọi.
+- Đã xem lại, không phải lỗi hạ tầng: lần build app đầu của CR-05 hỏng vì chính code của thợ import
+  `loot-core/platform/client/fetch` (không có trong `exports`; CR-07 mắc cùng lỗi và tự sửa ở phút 18,6), không phải
+  do node_modules liên kết.
 - Chưa làm: tải toàn bộ log một lần cho cả trận. Chia theo từ phút/giây bị trùng với tháng và ngày trong `dueDate`,
   chia theo giờ tốn 744 lời gọi mỗi service (4 service gần 25 phút ở 120 lời gọi/phút).
 
