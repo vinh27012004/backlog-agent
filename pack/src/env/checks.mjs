@@ -10,6 +10,7 @@ import { basename, dirname, join } from 'node:path';
 import { sourceSnapshot } from '../core/candidates.mjs';
 import { git } from '../core/git.mjs';
 import { runPwsh } from '../core/jobs.mjs';
+import { withHeavySlot } from './heavy.mjs';
 import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 import { forgetBuild, locate, readState as appState, rememberBuild, stopApp } from './app.mjs';
 import { detectProfile } from './environment.mjs';
@@ -203,7 +204,7 @@ async function waitFor(teamWork, key, runId, waitSeconds) {
 }
 
 export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey: key, matchRoot, checks = CHECKS,
-  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true }) {
+  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true, maxHeavy = null }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   const where = locate(teamWorkspace, matchRoot);
@@ -275,7 +276,12 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   const promise = (async () => {
     const t0 = Date.now();
     if (names.includes('build')) forgetBuild(teamWorkspace, profile.root);
-    const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal, typecheck })
+    // Mỗi lệnh giữ một chỗ "lệnh nặng" của cả máy (heavy.mjs); đang chờ chỗ thì checks.json ghi queued[name].
+    const queued = n => { record.queued = { ...record.queued, [n]: new Date().toISOString() }; if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2)); };
+    const one = name => withHeavySlot(teamWork, { max: maxHeavy, key, name, signal: ac.signal, onWait: () => queued(name) }, ({ waitedMs }) =>
+      runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal, typecheck })
+        .then(r => (waitedMs >= 1000 ? { ...r, queuedMs: waitedMs } : r)))
+      .then(r => r ?? { name, command: null, state: 'failed', tail: 'cancelled while waiting for a free heavy-command slot' })
       .catch(error => ({ name, command: null, state: 'failed', tail: String(error?.message ?? error).slice(0, 600) }))
       .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${LOG[name]}` }) }));
     // typecheck không chạy cùng lúc với build ở project Next.js: tsconfig include '.next/types/**/*.ts', next build xoá

@@ -1228,7 +1228,7 @@ export class Workflow {
     // TASK-07 (hạn 15 phút) ra ở phút 19,2 khi 5 slot đều bận, Start Work ở phút 28,3 và đóng ở phút 34,4 chưa nộp.
     const cfg = r.runtimeConfig();
     const over = Number.isInteger(cfg.deadlineOverflow) && cfg.deadlineOverflow >= 0 && cfg.deadlineOverflow <= 4 ? cfg.deadlineOverflow : 2;
-    let extra = Math.max(0, cfg.maxItemsInFlight + over - rows.filter(x => r.holdsSlot(x)).length) - free;
+    let extra = Number.isFinite(cfg.maxItemsInFlight) ? Math.max(0, cfg.maxItemsInFlight + over - rows.filter(x => r.holdsSlot(x)).length) - free : 0;
     const takeSlot = row => { if (free > 0) { free--; return true; } if (row.deadlineMinutes && extra > 0) { extra--; return true; } return false; };
     const held = new Set();
     for (const key of order) {
