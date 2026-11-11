@@ -1,5 +1,6 @@
 {
   "maxItemsInFlight": 5,
+  "deadlineOverflow": 2,
   "autoPrepare": true,
   "autoPublish": true,
   "bootOnConfigure": true,

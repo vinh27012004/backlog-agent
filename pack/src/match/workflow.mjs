@@ -1224,16 +1224,22 @@ export class Workflow {
     const fresh = r.newResults();
     const freshKeys = new Set(fresh.map(u => u.key));
     let free = r.freeSlots(rows);
+    // Item có hạn riêng không chờ slot: được vượt maxItemsInFlight tối đa deadlineOverflow item (mặc định 2). QDO8W480:
+    // TASK-07 (hạn 15 phút) ra ở phút 19,2 khi 5 slot đều bận, Start Work ở phút 28,3 và đóng ở phút 34,4 chưa nộp.
+    const cfg = r.runtimeConfig();
+    const over = Number.isInteger(cfg.deadlineOverflow) && cfg.deadlineOverflow >= 0 && cfg.deadlineOverflow <= 4 ? cfg.deadlineOverflow : 2;
+    let extra = Math.max(0, cfg.maxItemsInFlight + over - rows.filter(x => r.holdsSlot(x)).length) - free;
+    const takeSlot = row => { if (free > 0) { free--; return true; } if (row.deadlineMinutes && extra > 0) { extra--; return true; } return false; };
     const held = new Set();
     for (const key of order) {
       const row = rows.find(x => x.key === key), ji = items[key] ?? {}, c = ji.candidate;
       // Đang prepare (Start Work chưa xong nên item vẫn todo): vẫn giữ slot, kẻo lượt tự prepare sau nhận quá maxItemsInFlight.
       if (ji.prepareJobId && r.jobs.jobs.get(ji.prepareJobId)?.state === 'running') {
-        if (row.local === 'todo' && row.type !== 'PI' && !r.answerOnlyItem(key)) free--;
+        if (row.local === 'todo' && row.type !== 'PI' && !r.answerOnlyItem(key)) takeSlot(row);
         continue;
       }
-      if (row.local === 'todo' && (row.type === 'PI' || row.minutesLeft === null || row.minutesLeft >= 4) && (row.type === 'PI' || r.answerOnlyItem(key) || free > 0)) {
-        add(key, 'prepare_item'); if (row.type !== 'PI' && !r.answerOnlyItem(key)) free--; continue;
+      if (row.local === 'todo' && (row.type === 'PI' || row.minutesLeft === null || row.minutesLeft >= 4) && (row.type === 'PI' || r.answerOnlyItem(key) || takeSlot(row))) {
+        add(key, 'prepare_item'); continue;
       }
       if (ji.endedAt || ji.receipt) continue;
       // Đang publish (root hay helper): chờ job, không có gì để làm.
