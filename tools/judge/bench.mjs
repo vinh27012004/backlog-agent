@@ -23,17 +23,24 @@ const table = (head, rows) => [`| ${head.join(' | ')} |`, `|${head.map(() => '--
 const ORDER = ['BUG', 'CR', 'TASK', 'PI'];
 const byKey = (a, b) => (ORDER.indexOf(a.split('-')[0]) - ORDER.indexOf(b.split('-')[0])) || a.localeCompare(b, 'en', { numeric: true });
 
-// Nhóm trận theo bộ đề: trùng ≥ 60% mã item (Jaccard) với hợp các trận đã có trong nhóm. Trận dừng sớm (chưa thấy hết
-// item) vẫn vào đúng bộ; bộ 5 item và bộ 10 item chỉ chung BUG-01, BUG-02, CR-01 nên tách được.
-export function groupBySet(matches, threshold = 0.6) {
+// Nhóm trận theo bộ đề. Trận nhiều item nhất mở bộ; trận khác vào bộ khi mọi item của nó đều có trong bộ (cùng tiêu đề
+// khi cả hai biết tiêu đề), nên trận dừng sớm (chưa thấy hết item) vẫn vào đúng bộ. Trận có item bộ không có thì mở bộ
+// riêng: bộ 12 item (BUG-09…TASK-12) và bộ 14 item QDO8W480 chung 10 mã nhưng bộ 14 thêm BUG-12, CR-05, CR-08, PI-04 và
+// bỏ TASK-05, TASK-06 (bản cũ gộp theo Jaccard ≥ 60% nên gộp nhầm hai bộ này). Trận khớp nhiều bộ vào bộ nhỏ nhất.
+export function groupBySet(matches) {
   const groups = [];
-  for (const m of [...matches].sort((a, b) => (a.from ?? 0) - (b.from ?? 0))) {
-    const keys = new Set(m.items.map(r => r.key));
-    const jac = g => { const inter = [...keys].filter(k => g.keys.has(k)).length; return inter / new Set([...keys, ...g.keys]).size; };
-    const best = groups.map(g => [g, jac(g)]).sort((a, b) => b[1] - a[1])[0];
-    if (best && best[1] >= threshold) { best[0].matches.push(m); for (const k of keys) best[0].keys.add(k); } else groups.push({ keys, matches: [m] });
+  const time = (a, b) => (a.from ?? 0) - (b.from ?? 0);
+  for (const m of [...matches].sort((a, b) => (b.items.length - a.items.length) || time(a, b))) {
+    const fits = g => m.items.every(r => g.titles.has(r.key) && (!r.title || !g.titles.get(r.key) || r.title === g.titles.get(r.key)));
+    const best = groups.filter(fits).sort((a, b) => a.titles.size - b.titles.size)[0];
+    if (best) best.matches.push(m);
+    else groups.push({ titles: new Map(m.items.map(r => [r.key, r.title ?? null])), matches: [m] });
   }
-  for (const g of groups) g.name = `Bộ ${g.keys.size} item`;
+  for (const g of groups) {
+    g.keys = new Set(g.titles.keys());
+    g.matches.sort(time);
+    g.name = `Bộ ${g.keys.size} item`;
+  }
   return groups;
 }
 
@@ -168,7 +175,7 @@ export function buildBench(runsDir, { match = null, vs = null } = {}) {
   }
   const md = ['# Benchmark theo bộ đề', '',
     'Sinh bởi `node tools/judge/bench.mjs`; chạy lại sau mỗi `/judge-practice` (hoặc ngay sau `collect.mjs` + `usage.mjs` khi chưa chấm). '
-      + 'Trận được nhóm theo bộ item (trùng ≥ 60% mã item). Mỗi bộ so trận mới nhất với trận liền trước cùng bộ (`--match`, `--vs` để chọn khác) '
+      + 'Trận được nhóm theo bộ item (mọi item của trận đều có trong bộ, cùng tiêu đề; trận dừng sớm vẫn vào bộ của nó). Mỗi bộ so trận mới nhất với trận liền trước cùng bộ (`--match`, `--vs` để chọn khác) '
       + 'và với mốc tốt nhất của các trận trước (thời gian, credit, token: chỉ trận nộp ít nhất bằng trận mới). Δ: ✓ tốt hơn, ✗ tệ hơn (bỏ qua chênh dưới 5%). Thời gian item từ Start Work tới khi nộp '
       + 'hay đóng; code/test, evidence là tổng thời gian checkpoint (journal từ 31/10). Input, credit: các thread của item (fixer); '
       + 'credit trận gồm cả root, để trống khi có model ngoài price card. Lịch sử: ✓/✗ là judge, "·" là item không xuất hiện trong trận.', '',

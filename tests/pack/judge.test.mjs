@@ -220,8 +220,11 @@ test('the bench groups matches by item set and compares the newest with the prev
   match('B1', 2, big, 2, 10);                                  // dừng sớm: rẻ nhưng không so được
   match('B2', 3, big.slice(0, 4), 3, 90, ['gpt-x', 'codex-auto-review']);   // thiếu PI-01 vẫn cùng bộ; credit không tin được
   match('B3', 4, big, 5, 80);
+  // Chung 4/6 mã với bộ 5 item nhưng có item bộ đó không có: bộ khác (QDO8W480 bị gộp nhầm với bộ 12 item theo Jaccard).
+  match('C1', 5, [...big.slice(0, 4), 'CR-05', 'PI-04'], 6, 70);
   const { groups, pairs, md } = buildBench(runs);
-  assert.deepEqual(groups.map(g => [g.name, g.matches.map(m => m.id)]), [['Bộ 5 item', ['B1', 'B2', 'B3']], ['Bộ 3 item', ['S1']]]);
+  assert.deepEqual(groups.map(g => [g.name, g.matches.map(m => m.id)]),
+    [['Bộ 6 item', ['C1']], ['Bộ 5 item', ['B1', 'B2', 'B3']], ['Bộ 3 item', ['S1']]]);
   const p = pairs.find(x => x.cur === 'B3');
   assert.equal(p.prev, 'B2');
   const row = label => p.metricRows.find(r => r[0] === label);
