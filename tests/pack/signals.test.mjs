@@ -104,6 +104,11 @@ test('answer-only items: a question or answer format without criteria, or an out
   assert.equal(answerOnlyText('## Acceptance criteria\n1. Order kept after reload\n## Out of scope\nChanging the application source of other boards.'), false);
   assert.equal(answerOnlyText('## Expected outcome\nCards keep their order.\n## Out of scope\nDatabase migration.'), false);
   assert.equal(answerOnlyText('## Question\nWhich value?\n## Acceptance criteria\n1. pnpm audit passes'), false);
+  // QDO8W480 TASK-10/11/12: có tiêu chí nhưng chấm bằng so từng trường với đáp án; TASK-07, TASK-08 chấm bằng import/suite.
+  const graded = g => `## Requirements\n1. Report the values.\n## Acceptance criteria\n1. Every value follows the rules.\n## Grading\n${g}\n## Out of scope\nImporting the archive into the application.\n## Submission\nx`;
+  assert.equal(answerOnlyText(graded('Each field is compared exactly with the organizers\' answer and scored on its own; the two id lists are sets. Maximum score: 70 points.')), true);
+  assert.equal(answerOnlyText(graded('Otherwise each acceptance part is checked on its own by importing the pack with an unmodified copy of the issued source.')), false);
+  assert.equal(answerOnlyText(graded('Each field is compared exactly; the fix is checked by hidden tests.')), false);
 });
 
 // Index codegraph giả: chỉ những cột helper đọc (nodes, edges, files, project_metadata), cùng hướng cạnh như bản thật

@@ -334,6 +334,27 @@ test('publish accepts an integrated answer that differs from the handed-off one 
   assert.equal(done.state, 'done', JSON.stringify(done)); assert.equal(done.result.status, 'SUBMITTED');
 });
 
+// QDO8W480: TASK-07 (hạn 15 phút) ra ở phút 19,2 khi 5 slot đều bận, Start Work ở phút 28,3, đóng ở phút 34,4 chưa nộp.
+test('an item with its own deadline starts over the slot limit, up to deadlineOverflow; other items wait', () => {
+  const f = fixture(); const keys = ['BUG-02', 'CR-01', 'CR-02', 'BUG-04'];
+  const todo = (key, extra = {}) => ({ key, type: key.split('-')[0], status: 'OPEN', local: 'todo', minutesLeft: 20, ...extra });
+  let waiting = [todo('CR-03'), todo('TASK-07', { deadlineMinutes: 15, minutesLeft: 15 }), todo('CR-08', { deadlineMinutes: 15, minutesLeft: 15 }), todo('CR-09', { deadlineMinutes: 15, minutesLeft: 15 })];
+  f.rt.itemRows = () => [...keys.map(key => ({ key, type: key.split('-')[0], status: 'OPEN', local: 'started', minutesLeft: 20 })), ...waiting];
+  f.rt.gm.view.items = f.rt.itemRows().map(r => ({ key: r.key, title: r.key, raw: { descriptionMd: '## Acceptance criteria\n1. Works.' } }));
+  f.rt.matchState = () => ({ suggestedOrder: [...waiting].sort((a, b) => a.minutesLeft - b.minutesLeft).map(r => r.key) });
+  const prepares = () => f.rt.workflow.actions().nextActions.filter(a => a.action === 'prepare_item').map(a => a.key);
+  localRuntime(f.root, { maxItemsInFlight: 4 });
+  for (const key of keys) Object.assign(f.rt.journal.item(key), { startedAt: new Date().toISOString(), workerState: 'writing' });
+  assert.deepEqual(prepares(), ['TASK-07', 'CR-08'], 'two deadline items over the limit; the third and the item without a deadline wait');
+  localRuntime(f.root, { maxItemsInFlight: 4, deadlineOverflow: 0 });
+  assert.deepEqual(prepares(), []);
+  // Một slot thường trống: item có hạn (gần hạn hơn) lấy trước, hai item có hạn nữa vượt giới hạn.
+  localRuntime(f.root, { maxItemsInFlight: 5 });
+  assert.deepEqual(prepares(), ['TASK-07', 'CR-08', 'CR-09']);
+  waiting = [todo('CR-03')];
+  assert.deepEqual(prepares(), ['CR-03']);
+});
+
 test('a slot is held only while an item still needs its worker, so a new item starts when the others only wait', () => {
   const f = fixture(); const keys = ['BUG-02', 'CR-01', 'CR-02', 'BUG-04'];
   f.rt.itemRows = () => [...keys.map(key => ({ key, type: key.split('-')[0], status: 'OPEN', local: 'started', minutesLeft: 20 })),

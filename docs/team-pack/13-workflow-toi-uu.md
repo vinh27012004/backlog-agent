@@ -478,6 +478,14 @@ mất 588 s; cả hai nộp trường báo cáo trống.
   (truy vấn × giờ) cộng phần còn lại của các lần tra ngắn hơn đang chạy, chia cho `ratePerMinute()` (cửa sổ chặt nhất
   của `companyLimits`, mặc định 108/phút). Lỗi ghi số lời gọi còn vừa và cách thu hẹp. Lần tra từ 20 lời gọi trở xuống
   và item chưa có `returnBy` không bị chặn. Khối `<search_logs>` của brief nói rõ giá của khung giờ.
+- Slot (`maxItemsInFlight` = 5; PI và item chỉ trả lời không giữ slot; Codex cho 16 thread nên giới hạn là của helper):
+  - `answerOnlyText` (`decide/signals.mjs`) nhận thêm item có tiêu chí nghiệm thu nhưng mục Grading ghi "Each field is
+    compared exactly" và không nhắc test, suite, source, build, import, hidden. TASK-10, TASK-11, TASK-12 của bộ 12 và
+    14 item (23 lần nộp, không lần nào sửa code) trước đây giữ slot như item code: QDO8W480 TASK-11, TASK-12 chờ slot
+    7–9 phút. Giờ chúng bắt đầu ngay, không cài dependency, helper tự publish.
+  - Item có hạn riêng (`deadlineMinutes`) được vượt giới hạn tối đa `deadlineOverflow` item (runtime.json, mặc định 2,
+    0–4; 0 là tắt): QDO8W480 TASK-07 (hạn 15 phút) ra ở phút 19,2 khi 5 slot bận, Start Work ở phút 28,3, đóng ở
+    phút 34,4 chưa nộp. Thứ tự lấy slot vẫn là `suggestedOrder` (PI, rồi ít phút còn lại nhất).
 - Chưa làm: tải toàn bộ log một lần cho cả trận. Chia theo từ phút/giây bị trùng với tháng và ngày trong `dueDate`,
   chia theo giờ tốn 744 lời gọi mỗi service (4 service gần 25 phút ở 120 lời gọi/phút).
 

@@ -40,8 +40,17 @@ export function workText(text) {
 // Item chỉ cần nộp câu trả lời, không sửa code: không có tiêu chí nghiệm thu và có heading "Answer format" (TASK-01
 // HIET12OA) hoặc "Question(s)" (TASK-03/04 FMC0ZXFC), hoặc Out of scope cấm sửa source (PI-01 FMC0ZXFC: báo cáo từ log).
 // Đọc mô tả gốc vì workText bỏ mục Out of scope.
+// Có tiêu chí nghiệm thu nhưng mục Grading nói từng trường được so đúng với đáp án và không nhắc test, suite, source,
+// build hay import: vẫn là item chỉ trả lời. TASK-10, TASK-11, TASK-12 của bộ 12 và 14 item: 23 lần nộp không lần nào
+// sửa code, nhưng vì có "Acceptance criteria" nên giữ slot như item code; QDO8W480: TASK-11 và TASK-12 chờ slot 7–9
+// phút, TASK-07 (hạn 15 phút) chờ 9 phút sau chúng và đóng khi chưa nộp.
+const gradedByFields = text => {
+  const grading = /^\s*#{1,6}\s+grading\b[^\n]*\n([\s\S]*?)(?=^\s*#{1,6}\s|(?![\s\S]))/im.exec(text)?.[1] ?? '';
+  return /\beach field is compared exactly\b/i.test(grading) && !/\b(tests?|suite|source|build|import\w*|hidden)\b/i.test(grading);
+};
 export function answerOnlyText(description) {
   const text = String(description ?? '');
+  if (gradedByFields(text)) return true;
   if (countCriteria(text)) return false;
   if (/^\s*#{1,6}\s+(?:answer format|questions?)\b/im.test(workText(text))) return true;
   const lines = text.split(/\r?\n/);
