@@ -67,8 +67,10 @@ export function itemDependencies(key, text) {
   return out;
 }
 const dependencyFollowup = dep => `${dep} is now on main. Call worker_checkpoint ready_for_evidence: the helper syncs it into your worktree and resumes you. Then rerun your replay script (backlog-cr §4.3) and everything whose result depends on ${dep} (official figures, CSV, summary fields, the tests that assert them), update submit.json from the new output and call worker_checkpoint candidate again. Change nothing else; screenshots of the page stay valid.`;
-const dependencyBlock = (deps, items) => deps.map(d => `${d} (${items[d]?.integratedAt ? 'already on main' : 'not on main yet'})`).join(', ')
-  + ': this item\'s text names it. When this item\'s data or behaviour needs that item\'s fix, its figures come out right only once that fix is in your worktree.\n'
+const dependencyBlock = (deps, items, shared = null) => deps.map(d => `${d} (${items[d]?.integratedAt ? 'already on main' : shared?.from === d ? 'not on main yet; its product fix is ALREADY copied into your worktree' : 'not on main yet'})`).join(', ')
+  + ': this item\'s text names it. '
+  + (shared ? `The helper copied ${shared.from}'s product changes (no tests, no answers/) into your worktree before you started: ${shared.files.slice(0, 8).join(', ')}${shared.files.length > 8 ? ', …' : ''}. They show as uncommitted changes: build on them, never rewrite or revert them (restore one only when it breaks your build or tests: git checkout HEAD -- <file>, delete a file that is new, and say so). It may still change: then the helper copies it again and tells you as below. ` : '')
+  + 'When this item\'s data or behaviour needs that item\'s fix, its figures come out right only once that fix is in your worktree.\n'
   + 'Build everything that does not depend on it now: code, tests of your own logic, page screenshots, and the replay script of backlog-cr §4.3 that writes the official figures, CSV and summary. '
   + 'As soon as that item\'s product fix is ready (its worker reaches ready_for_evidence), the helper copies its product changes (no tests, no answers/) into your worktree and tells you: '
   + 'candidate refuses once, a resume hint or a root followup says so. Then rerun the replay, compare the figures with your independent calculation, restart your app before more screenshots, refresh submit.json and call candidate. '
@@ -232,6 +234,8 @@ export class Workflow {
         if (setup?.state === 'failed' || setup?.result?.ok === false) fail('SETUP_FAILED', setup.error?.message ?? setup.result?.failure ?? 'worktree setup failed');
         const template = r.itemTemplate(key);
         ji.dependsOn = itemDependencies(key, item.item?.descriptionMd ?? item.item?.description);
+        // Item được chờ đã qua ready_for_evidence trước khi worktree này có: lấy bản sửa của nó ngay, brief nói rõ.
+        if ((await this.pullFromDependencies(key).catch(() => [])).some(x => x.files)) ji.sharedFix.notified = true;
         ji.verificationKind = r.answerOnlyItem(key) && !Array.isArray(template?.testResults) ? 'answer_only'
           : r.itemMvs(key) ? 'mvs' : 'acceptance';
         ji.workerState = 'writing';
@@ -360,7 +364,7 @@ export class Workflow {
       ...(s.reportOnly ? [] : block('profile', s.profile ?? null)),
       ...block('materials', [`dir: ${s.materialsDir ?? r.itemDir(key)}`, ...['template.json', 'mvs.json', 'requirements.json', 'start.json'].map(files).filter(Boolean),
         ...(s.files ?? []).map(f => join(s.materialsDir ?? r.itemDir(key), 'files', f))].join('\n')),
-      ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}) : null),
+      ...block('depends_on', this.item(key).dependsOn?.length ? dependencyBlock(this.item(key).dependsOn, r.journal?.data.items ?? {}, this.item(key).sharedFix ?? null) : null),
       ...block('needed_by', (() => { const list = this.neededBy(key, { minutes: true }); return list.length ? neededByBlock(list) : null; })()),
       ...block('screens_first', (() => { const files = tb.deadline ? this.screenshotFiles(key) : []; return files.length ? screensFirstBlock(files, tb) : null; })()),
       ...block('requirements', s.requirements ?? null),
@@ -560,12 +564,13 @@ export class Workflow {
   }
   // Chép phần sửa product của `key` sang worktree của các item đang chờ nó (dependency.mjs). Gọi ở ready_for_evidence
   // và candidate của `key`; lần sau chỉ chép lại khi nội dung đổi. Trả [{key, files} | {key, skipped}].
-  async shareWithDependents(key) {
+  async shareWithDependents(key, { only = null } = {}) {
     const r = this.rt, ji = this.item(key), out = [];
     if (!r.liveWorktree(key) || !ji.worktreeBase || ji.integratedAt) return out;
     const folder = r.session.descriptor.matchId;
     for (const d of this.neededBy(key)) {
       const dj = this.item(d);
+      if (only && d !== only) continue;
       if (!r.liveWorktree(d) || !dj.worktreeBase || dj.endedAt || dj.integratedRevision || r.jobs.jobs.get(dj.publishJobId)?.state === 'running') continue;
       const prev = dj.sharedFix?.from === key ? dj.sharedFix : null;
       try {
@@ -581,6 +586,19 @@ export class Workflow {
       } catch (e) {
         out.push({ key: d, skipped: e.message });
       }
+    }
+    return out;
+  }
+  // Chiều ngược lại, gọi khi worktree của item chờ `key` vừa dựng xong (prepare). QDO8W480: CR-05 gọi ready_for_evidence
+  // ở phút 19,5, worktree của CR-08 (đề ra phút 19,2) tới phút 19,9 mới có nên lần chép đó bỏ qua CR-08; CR-05 handoff
+  // lại ở phút 38,4, sau khi CR-08 (hạn 15 phút) đã nộp không có handler của CR-05: 0/110. Chỉ lấy từ item đã qua
+  // ready_for_evidence (workerPhase có giá trị) và chưa lên main (lên main rồi thì worktree mới dựng đã có).
+  async pullFromDependencies(key) {
+    const out = [];
+    for (const d of this.item(key).dependsOn ?? []) {
+      const dj = this.rt.journal?.data.items?.[d];
+      if (!dj?.workerPhase || dj.integratedAt) continue;
+      out.push(...await this.shareWithDependents(d, { only: key }));
     }
     return out;
   }

@@ -1249,6 +1249,27 @@ test('the product fix of an item another item waits for is copied into the waiti
   assert.match(action.followup, /worker_checkpoint resume, rerun your replay script/);
 });
 
+// QDO8W480: CR-05 gọi ready_for_evidence ở phút 19,5, worktree của CR-08 tới phút 19,9 mới có: lần chép đó bỏ qua CR-08,
+// CR-05 handoff lại ở phút 38,4 và CR-08 (hạn 15 phút) nộp không có handler của CR-05, 0/110.
+test('a worktree created after the waited-for item reached ready_for_evidence takes that fix at prepare', async () => {
+  const f = dependencyFixture(), wf = f.rt.workflow;
+  assert.deepEqual(await wf.pullFromDependencies('CR-07'), [], 'BUG-11 is still coding: nothing to take yet');
+  assert.equal(f.read('src/fix.js'), null);
+  f.rt.journal.item('BUG-11').workerPhase = 'evidence';
+  assert.deepEqual(await wf.pullFromDependencies('CR-07'), [{ key: 'CR-07', files: ['M1/src/lib.js', 'M1/src/fix.js'] }]);
+  assert.equal(f.read('src/fix.js'), 'export const fixed = true;\n');
+  assert.equal(f.read('src/lib.test.js'), null, 'tests stay with BUG-11');
+  assert.equal(f.rt.journal.item('CR-07').sharedFix.from, 'BUG-11');
+  const brief = readFileSync(wf.writeBrief('CR-07', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [] }), 'utf8');
+  assert.match(brief, /BUG-11 \(not on main yet; its product fix is ALREADY copied into your worktree\)/);
+  assert.match(brief, /copied BUG-11's product changes \(no tests, no answers\/\) into your worktree before you started: M1\/src\/lib\.js, M1\/src\/fix\.js/);
+  assert.deepEqual(await wf.pullFromDependencies('CR-07'), [], 'same content: nothing to copy again');
+  // Đã lên main: worktree dựng từ main đã có, không chép.
+  delete f.rt.journal.item('CR-07').sharedFix;
+  f.rt.journal.item('BUG-11').integratedAt = new Date().toISOString();
+  assert.deepEqual(await wf.pullFromDependencies('CR-07'), []);
+});
+
 test('a copy equal to what reaches main needs no second refresh; a different one is removed before the sync', async () => {
   const f = dependencyFixture(), wf = f.rt.workflow;
   await wf.shareWithDependents('BUG-11');
