@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { readChecks, runChecks, verificationRows } from '../../pack/src/env/checks.mjs';
+import { readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
 import { namedTestPackages, testScope } from '../../pack/src/env/test-scope.mjs';
@@ -249,4 +249,41 @@ test('a check that fails while the suite still runs is reported at once with its
   assert.notEqual(second.runId, first.runId);
   assert.ok(Date.now() - t1 < 15000, 'the old suite was cancelled');
   assert.equal(readChecks(p.teamWork, 'BUG-06').runId, second.runId, 'the cancelled run does not overwrite the new record');
+});
+
+// QXUD1QAI CR-07: 3 lỗi strict trong test mới; worker sửa và chạy lại check, build làm lại, trang không kịp chụp (−19).
+// Grader của đề đó không chạy type check.
+function typecheckProject(text) {
+  const p = project({ typecheck: 'node -e "console.log(\'src/replay.test.ts(49,87): error TS7006: Parameter c implicitly has an any type.\'); process.exit(2)"',
+    test: ok('Tests  1 passed (1)') });
+  const checkout = join(p.tw, 'matches', 'M1');
+  sh('git', ['init', '-q'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'issued'], checkout);
+  writeFileSync(join(p.matchRoot, 'src', 'replay.test.ts'), 'it("replays", () => {});\n');
+  mkdirSync(join(p.teamWork, 'items', 'CR-07'), { recursive: true });
+  writeFileSync(join(p.teamWork, 'items', 'CR-07', 'page.json'), JSON.stringify({ title: 'CR', descriptionMd: text }));
+  return p;
+}
+
+test('type errors only in the item\'s new tests do not block when the item does not grade the type check', async () => {
+  assert.deepEqual(typeErrorFiles('src/a.test.ts(1,2): error TS7006: x\nlib/b.ts:3:4 - error TS2322: y'), ['src/a.test.ts', 'lib/b.ts']);
+  assert.equal(typecheckGraded('The grader runs the whole test suite and the type check itself.'), true);
+  assert.equal(typecheckGraded('The grader runs the loot-core tests itself.'), false);
+  const p = typecheckProject('The grader runs the loot-core tests itself on your submitted revision.');
+  const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'CR-07', matchRoot: p.matchRoot, checks: ['typecheck', 'test'], waitSeconds: 60 });
+  assert.equal(res.state, 'done', JSON.stringify(res));
+  assert.equal(res.ok, true, 'nothing blocking');
+  assert.deepEqual(res.advisory, ['typecheck']);
+  assert.deepEqual(res.results[0].advisory.files, ['src/replay.test.ts']);
+  assert.match(res.hint, /cost no points\. Capture your evidence first and do not rerun run_checks/);
+  assert.match(verificationRows(readChecks(p.teamWork, 'CR-07'))[0].note, /not graded: type errors only in the item's own new test files/);
+});
+
+test('type errors block when the item grades the type check', async () => {
+  const p = typecheckProject('The grader runs the whole test suite and the type check itself on your submitted revision.');
+  const res = await finished(p, 'CR-07', await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'CR-07', matchRoot: p.matchRoot, checks: ['typecheck', 'test'], waitSeconds: 60 }));
+  assert.equal(res.ok, false);
+  assert.equal(res.advisory, undefined);
+  assert.match(res.hint, /Failed: typecheck/);
 });

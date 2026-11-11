@@ -32,12 +32,38 @@ export const checksFile = (teamWork, key) => join(teamWork, 'items', key, 'check
 // ready_for_evidence) đọc file này mỗi giây rồi giết các lệnh con.
 const cancelFile = (teamWork, key) => join(teamWork, 'items', key, 'checks.cancel');
 const isBad = c => c?.state === 'failed' || c?.state === 'timeout';
-// Check đã xong và hỏng trong lúc lần chạy còn dở.
+// Lỗi typecheck chỉ nằm trong file test mới của item và đề không nói grader chạy type check: không làm mất điểm, nên
+// không chặn (advisory). QXUD1QAI CR-07: 3 lỗi strict trong cr-07-replay.test.ts, worker sửa rồi chạy lại check, build
+// bị làm lại, app lên muộn, trang không được chụp (−19); grader của bộ đề Actual chỉ chạy test loot-core.
+const blocking = c => isBad(c) && !c.advisory;
+// Check đã xong và hỏng (chặn) trong lúc lần chạy còn dở.
 const failedSoFar = record => {
   const finished = Object.values(record?.finished ?? {});
   // Mọi check đã xong thì bản ghi `done` sắp được ghi: chờ nó, không báo "còn chạy".
-  return finished.length < (record?.checks?.length ?? 0) ? finished.filter(isBad) : [];
+  return finished.length < (record?.checks?.length ?? 0) ? finished.filter(blocking) : [];
 };
+const advisoryOf = list => Object.values(list ?? {}).filter(c => isBad(c) && c.advisory);
+const ADVISORY_HINT = 'Type errors only in your own new test files, and this item\'s text does not say graders run the type check: they cost no points. Capture your evidence first and do not rerun run_checks for them now (a rerun cancels the build your app is waiting for); fix them afterwards if time allows, then run_checks again.';
+
+// Đề nói grader chạy type check (bộ Solova: "runs the whole test suite and the type check"): lỗi typecheck luôn chặn.
+// Có nhắc là tính, kể cả câu không rõ ràng: nội dung đề chỉ làm kiểm chặt hơn, không bao giờ nới ra.
+export const typecheckGraded = text => /\btype[\s-]?check|\btypecheck|\btype errors?\b|\btsc\b|--noEmit/i.test(String(text ?? ''));
+const TEST_PATH = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|tests?)\//;
+// File trong các dòng lỗi TypeScript ("path(12,3): error TS7006" hay "path:12:3 - error TS7006").
+export function typeErrorFiles(text) {
+  const files = new Set();
+  for (const m of String(text ?? '').matchAll(/^\s*([^\s(:][^\s(]*?\.[cm]?[jt]sx?)(?:\(\d+,\d+\)|:\d+:\d+)\s*[:-]\s*error\s+TS\d+/gm)) {
+    files.add(m[1].replaceAll('\\', '/'));
+  }
+  return [...files];
+}
+// Mọi lỗi nằm trong file test mới/sửa của chính item (so theo đuôi đường dẫn, vì lage in đường dẫn theo từng gói).
+export function typeErrorsInOwnTests(logText, ownTests) {
+  const files = typeErrorFiles(logText);
+  if (!files.length || !ownTests?.length) return null;
+  const own = f => TEST_PATH.test(f) && ownTests.some(t => t === f || t.endsWith(`/${f.replace(/^\.\//, '')}`));
+  return files.every(own) ? files : null;
+}
 export function readChecks(teamWork, key) {
   try { return JSON.parse(readFileSync(checksFile(teamWork, key), 'utf8')); } catch { return null; }
 }
@@ -77,7 +103,7 @@ function itemText(teamWork, key) {
   } catch { return ''; }
 }
 
-async function runOne(name, profile, { logFile, scratch, scope, signal }) {
+async function runOne(name, profile, { logFile, scratch, scope, signal, typecheck = null }) {
   const command = name === 'test' ? scope?.command ?? profile.commands.test_all : profile.commands[name];
   if (!command) return { name, command: null, state: 'skipped', reason: `the project profile has no ${name === 'test' ? 'test_all' : name} command` };
   if (name === 'test') {
@@ -94,8 +120,15 @@ async function runOne(name, profile, { logFile, scratch, scope, signal }) {
   }
   const res = await runPwsh(command, { cwd: profile.root, timeoutMs: TIMEOUT_MS[name], logFile, signal });
   const ok = !res.timedOut && res.code === 0;
+  let advisory = null;
+  if (name === 'typecheck' && !ok && !res.timedOut && typecheck && !typecheck.graded) {
+    let log = '';
+    try { log = readFileSync(logFile, 'utf8'); } catch { log = res.tail ?? ''; }
+    const files = typeErrorsInOwnTests(log, typecheck.ownTests);
+    if (files) advisory = { files, reason: 'type errors only in the item\'s own new test files; the item text does not say graders run the type check' };
+  }
   return { name, command, state: res.timedOut ? 'timeout' : ok ? 'passed' : 'failed', exitCode: res.code, ms: res.ms,
-    ...(ok ? {} : { tail: tailOf(res.tail, 1500) }) };
+    ...(ok ? {} : { tail: tailOf(res.tail, 1500) }), ...(advisory ? { advisory } : {}) };
 }
 
 // Một dòng verification cho mỗi check, đúng contract fix-result.
@@ -106,7 +139,8 @@ export function verificationRows(record) {
     const parts = [`run_checks ${c.state}`, c.log ? `log ${c.log}` : null,
       c.counts ? `${c.counts.passed ?? 0}/${c.counts.total ?? 0} passed, ${c.counts.failed ?? 0} failed` : null,
       c.failing?.length ? `failing: ${c.failing.slice(0, 8).join('; ')}` : null, c.reason ?? null,
-      c.scope ? `scoped to ${c.scope.packages.join(', ')} (${c.scope.reason})` : null];
+      c.scope ? `scoped to ${c.scope.packages.join(', ')} (${c.scope.reason})` : null,
+      c.advisory ? `not graded: ${c.advisory.reason} (${c.advisory.files.slice(0, 4).join(', ')})` : null];
     rows.push({ check: CHECK_LABEL[c.name] ?? c.name, command: c.command ?? null, result, note: parts.filter(Boolean).join('; ').slice(0, 1500) });
   }
   return rows;
@@ -127,18 +161,22 @@ function view(record, { waited = false } = {}) {
         seconds: Math.round((Date.now() - Date.parse(record.startedAt)) / 1000), failed: bad,
         hint: `${bad.map(c => c.name).join(', ')} already failed while the rest still runs: read the tail (full log under answers/${record.key}/evidence/) and fix the cause now, without waiting for the remaining checks. After your edit call run_checks {action: "run"}: it cancels this run and starts again on the changed source. A failure listed in <baseline_failures> is not yours unless youFix is true.` };
     }
+    const advisory = advisoryOf(record.finished);
     return { state: 'running', runId: record.runId, checks: record.checks, startedAt: record.startedAt,
       seconds: Math.round((Date.now() - Date.parse(record.startedAt)) / 1000), ...(record.build ? { build: record.build.state } : {}),
-      hint: built
+      ...(advisory.length ? { advisory } : {}),
+      hint: (advisory.length ? `${ADVISORY_HINT} ` : '') + (built
         ? 'The build passed and the rest is still running: app start now (it reuses that build) and capture your evidence; call run_checks {action: "status"} for the remaining checks before candidate. Do not run these commands yourself meanwhile.'
-        : `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}); it returns as soon as the checks finish. Meanwhile prepare submit.json and your candidate result, and change nothing that the checks cover: an edit makes this run stale. Do not run these commands yourself meanwhile.` };
+        : `Still running${waited ? ' after the wait' : ''}: call run_checks {action: "status", waitSeconds: ${MAX_WAIT_SECONDS}} (start that exec with // @exec: {"yield_time_ms": 120000}); it returns as soon as the checks finish. Meanwhile prepare submit.json and your candidate result, and change nothing that the checks cover: an edit makes this run stale. Do not run these commands yourself meanwhile.`) };
   }
-  const failed = (record.results ?? []).filter(isBad);
+  const failed = (record.results ?? []).filter(blocking);
+  const advisory = (record.results ?? []).filter(c => isBad(c) && c.advisory);
   return { state: record.state, runId: record.runId, ok: !failed.length, ms: record.ms, results: record.results,
+    ...(advisory.length ? { advisory: advisory.map(c => c.name) } : {}),
     ...(record.appStopped ? { appStopped: true } : {}), ...(record.buildRemembered ? { buildRemembered: true } : {}),
     hint: failed.length
       ? `Failed: ${failed.map(c => c.name).join(', ')}. Read the tail (full log under answers/${record.key}/evidence/), fix the cause, then run_checks again. Test failures listed in <baseline_failures> are not yours unless youFix is true.`
-      : `All checks passed. Logs are in answers/${record.key}/evidence/ and worker_checkpoint candidate copies these results into the fix-result verification.${record.buildRemembered ? ' app start reuses this production build while the source stays unchanged: call it with the default build.' : ''}` };
+      : `${advisory.length ? `${ADVISORY_HINT} Everything else passed.` : 'All checks passed.'} Logs are in answers/${record.key}/evidence/ and worker_checkpoint candidate copies these results into the fix-result verification.${record.buildRemembered ? ' app start reuses this production build while the source stays unchanged: call it with the default build.' : ''}` };
 }
 
 // Chờ dương nào cũng là chờ tối đa: trả về ngay khi xong, nên chờ dài không mất gì (app start tự chờ phần build).
@@ -212,9 +250,13 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   mkdirSync(scratch, { recursive: true });
   mkdirSync(dirname(checksFile(teamWork, key)), { recursive: true });
   // Bộ test chỉ gồm các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
+  const text = itemText(teamWork, key);
+  const changedNow = hasGit && (names.includes('test') || names.includes('typecheck')) ? await ownChanges(checkout) : null;
   const scoped = names.includes('test') && scopeTests && hasGit
-    ? testScope({ profile, text: itemText(teamWork, key), changed: await ownChanges(checkout), appPrefix: appPrefixOf(checkout, profile) })
+    ? testScope({ profile, text, changed: changedNow, appPrefix: appPrefixOf(checkout, profile) })
     : { scope: null };
+  // Lỗi typecheck chỉ trong test mới của item và đề không chấm type check: không chặn (advisory, ở trên).
+  const typecheck = { graded: typecheckGraded(text), ownTests: (changedNow ?? []).filter(p => TEST_PATH.test(p)) };
   const runId = `${Date.now().toString(36)}-${process.pid}`;
   const record = { runId, key, pid: process.pid, state: 'running', checks: names, parallel: Boolean(parallel),
     matchRoot: where.matchRoot, startedAt: new Date().toISOString(), ...(scoped.scope ? { testScope: scoped.scope.packages } : {}),
@@ -233,7 +275,7 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   const promise = (async () => {
     const t0 = Date.now();
     if (names.includes('build')) forgetBuild(teamWorkspace, profile.root);
-    const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal })
+    const one = name => runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal, typecheck })
       .catch(error => ({ name, command: null, state: 'failed', tail: String(error?.message ?? error).slice(0, 600) }))
       .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${LOG[name]}` }) }));
     // typecheck không chạy cùng lúc với build ở project Next.js: tsconfig include '.next/types/**/*.ts', next build xoá
@@ -259,8 +301,9 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
         if (ac.signal.aborted) return;
         byName[n] = await one(n);
         if (ac.signal.aborted) return;
-        const { name, state, exitCode, log, tail, failing } = byName[n];
-        record.finished = { ...record.finished, [n]: { name, state, exitCode, log, ...(isBad(byName[n]) ? { tail, ...(failing?.length ? { failing: failing.slice(0, 20) } : {}) } : {}) } };
+        const { name, state, exitCode, log, tail, failing, advisory } = byName[n];
+        record.finished = { ...record.finished, [n]: { name, state, exitCode, log, ...(isBad(byName[n]) ? { tail, ...(failing?.length ? { failing: failing.slice(0, 20) } : {}) } : {}),
+          ...(advisory ? { advisory } : {}) } };
         if (n === 'build') await buildFinished(byName[n]);
         if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
       }
