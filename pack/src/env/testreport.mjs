@@ -67,10 +67,10 @@ export function scriptEndsWithRunner(script, runner) {
 
 // Lệnh chạy test kèm reporter máy đọc. `kind`: test_all | test_one. Trả {command, format, file?, dir?} hoặc null
 // khi profile không có lệnh đó; format null = chỉ có log.
-export function testCommand(profile, kind, file, targets = null) {
+export function testCommand(profile, kind, file, targets = null, limit = 10) {
   const base = profile?.commands?.[kind];
   if (!base) return null;
-  const one = cmd => (kind === 'test_one' ? fillTargets(cmd, targets ?? [], profile.stack) : cmd);
+  const one = cmd => (kind === 'test_one' ? fillTargets(cmd, targets ?? [], profile.stack, limit) : cmd);
   const insert = flags => (kind === 'test_one' ? one(base.replace('{target}', `${flags} {target}`)) : `${base} ${flags}`);
   if (profile.stack === 'node' && ['vitest', 'jest'].includes(profile.testRunner)) {
     const flags = profile.testRunner === 'vitest'
@@ -155,9 +155,9 @@ export function readReport(plan, { root, stack, startedAt = 0 }) {
 }
 
 // Chạy test_all / test_one một lần: {res, report, counts, failing, source}. `report.tests` là Map id → trạng thái.
-export async function runTests(profile, kind, { targets = null, logFile, timeoutMs, tailBytes = 64 * 1024, signal = null }) {
+export async function runTests(profile, kind, { targets = null, limit = 10, logFile, timeoutMs, tailBytes = 64 * 1024, signal = null }) {
   const file = logFile.replace(/\.log$/, profile.stack === 'node' ? '.json' : '.xml');
-  const plan = testCommand(profile, kind, file, targets);
+  const plan = testCommand(profile, kind, file, targets, limit);
   if (!plan) return null;
   rmSync(file, { force: true });
   const startedAt = Date.now();

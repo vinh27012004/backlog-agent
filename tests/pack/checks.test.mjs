@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { cancelChecks, readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
+import { baselineRerunFiles, cancelChecks, readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
 import { namedTestPackages, testScope } from '../../pack/src/env/test-scope.mjs';
@@ -318,4 +318,94 @@ test('a PI never runs the mutation check: run_checks answers at once', async () 
   assert.deepEqual([res.state, res.skipped], ['skipped', 'PI']);
   assert.match(res.hint, /not run for a PI/);
   assert.ok(Date.now() - t0 < 2000, 'no wait');
+});
+
+// WQ7T6CEC BUG-09: sau khi bản sửa baseline vào worktree, chạy lại cả bộ test chờ 574 s dù chỉ vài file đổi.
+// testFiles chạy đúng các file đó bằng test_one của profile. Project yarn với release giả trong .yarn/releases: nó vừa là
+// `yarn test` (mọi file *.test.cjs) vừa là `yarn exec vitest run …` (chỉ các file được truyền, ghi báo cáo JSON).
+const FAKE_YARN = String.raw`const fs = require('fs'), path = require('path');
+const args = process.argv.slice(2);
+const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => (e.name === '.yarn' || e.name === 'node_modules' ? []
+  : e.isDirectory() ? walk(path.join(d, e.name)) : /\.test\.cjs$/.test(e.name) ? [path.relative('.', path.join(d, e.name)).split(path.sep).join('/')] : []));
+const unq = s => s.replace(/^'|'$/g, '');
+let files, out = null;
+if (args[0] === 'test') files = walk('.');
+else {
+  const rest = args.slice(3);
+  out = rest.find(a => a.startsWith('--outputFile.json='));
+  out = out && unq(out.split('=').slice(1).join('='));
+  files = rest.filter(a => !a.startsWith('--')).map(unq);
+}
+const results = files.map(f => { try { require(path.resolve(f)); return [f, 'passed']; } catch { return [f, 'failed']; } });
+for (const [f, s] of results) console.log((s === 'passed' ? 'ok ' : 'FAIL ') + f);
+const failed = results.filter(r => r[1] === 'failed').length;
+console.log('Tests  ' + (results.length - failed) + ' passed | ' + failed + ' failed (' + results.length + ')');
+if (out) fs.writeFileSync(out, JSON.stringify({ testResults: results.map(([f, s]) => ({ name: path.resolve(f), status: s,
+  assertionResults: [{ ancestorTitles: ['suite'], title: 'case', status: s }] })) }));
+process.exit(failed ? 1 : 0);
+`;
+function selectedProject() {
+  const tw = tempDir('mtm-selected-'), checkout = join(tw, 'matches', 'M1'), matchRoot = join(checkout, 'M1'), app = join(matchRoot, 'src');
+  mkdirSync(join(app, '.yarn', 'releases'), { recursive: true });
+  writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'app', private: true, packageManager: 'yarn@4.0.0',
+    workspaces: ['packages/*'], scripts: { test: 'vitest run' }, devDependencies: { vitest: '1.0.0' } }));
+  writeFileSync(join(app, '.yarn', 'releases', 'yarn-4.0.0.cjs'), FAKE_YARN);
+  const pkg = join(app, 'packages', 'core');
+  mkdirSync(join(pkg, 'src', 'import'), { recursive: true });
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@x/core', version: '1.0.0', scripts: { test: 'vitest run' } }));
+  writeFileSync(join(pkg, 'src', 'import', 'parse.test.cjs'), 'module.exports = 0;\n');
+  writeFileSync(join(pkg, 'src', 'slow.test.cjs'), 'module.exports = 1;\n');
+  writeFileSync(join(app, 'own.test.cjs'), 'module.exports = 2;\n');
+  sh('git', ['init', '-q'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'], checkout);
+  sh('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'issued'], checkout);
+  return { tw, checkout, matchRoot, app, teamWork: join(checkout, '.team-work') };
+}
+
+test('baselineRerunFiles finds the baseline failures in their workspace and adds the item\'s own new tests', () => {
+  const p = selectedProject();
+  const ids = ['handles windows-1252 charset', 'src/import/parse.test.cjs > suite > handles windows-1252 charset'];
+  assert.deepEqual(baselineRerunFiles(p.matchRoot, ids, [join(p.app, 'own.test.cjs'), join(p.tw, 'elsewhere.test.cjs')]),
+    ['packages/core/src/import/parse.test.cjs', 'own.test.cjs']);
+  assert.equal(baselineRerunFiles(p.matchRoot, ['handles windows-1252 charset']), null, 'no id names a file');
+  assert.equal(baselineRerunFiles(p.matchRoot, ['src/missing.test.cjs > x']), null, 'a file nowhere to be found');
+  assert.equal(baselineRerunFiles(p.matchRoot, ['../out.test.cjs > x']), null);
+});
+
+test('run_checks with testFiles runs only those files, records the partial run and never passes for the full suite', async () => {
+  const p = selectedProject();
+  const res = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot,
+    testFiles: ['packages/core/src/import/parse.test.cjs', './own.test.cjs'] });
+  assert.equal(res.state, 'done', JSON.stringify(res)); assert.equal(res.ok, true);
+  assert.deepEqual(res.results.map(r => [r.name, r.state, r.log]), [['test', 'passed', 'evidence/selected-tests.log']]);
+  assert.deepEqual(res.results[0].testFiles, ['packages/core/src/import/parse.test.cjs', 'own.test.cjs']);
+  assert.deepEqual(res.results[0].counts, { total: 2, passed: 2, failed: 0, skipped: 0 });
+  const log = readFileSync(join(p.matchRoot, 'answers', 'BUG-09', 'evidence', 'selected-tests.log'), 'utf8');
+  assert.match(log, /ok packages\/core\/src\/import\/parse\.test\.cjs/);
+  assert.doesNotMatch(log, /slow\.test/, 'a file not listed does not run');
+  const record = readChecks(p.teamWork, 'BUG-09');
+  assert.deepEqual(record.testFiles, ['packages/core/src/import/parse.test.cjs', 'own.test.cjs']);
+  const [row] = verificationRows(record);
+  assert.equal(row.check, 'tests (selected files only, not the full suite)');
+  assert.match(row.note, /not the full suite: ran only packages\/core\/src\/import\/parse\.test\.cjs, own\.test\.cjs/);
+  assert.match(row.command, /exec vitest run 'packages\/core\/src\/import\/parse\.test\.cjs' 'own\.test\.cjs'$/);
+  // Cùng source: lần chạy vài file không thay được cả bộ; cả bộ chạy thật và thay được lần chạy vài file sau đó.
+  const again = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, testFiles: ['own.test.cjs', 'packages/core/src/import/parse.test.cjs'] });
+  assert.equal(again.cached, true);
+  const full = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, checks: ['test'] });
+  assert.equal(full.cached, undefined, JSON.stringify(full));
+  assert.equal(full.results[0].testFiles, undefined);
+  assert.equal(full.results[0].counts.total, 3);
+  assert.equal(verificationRows(readChecks(p.teamWork, 'BUG-09'))[0].check, 'full test suite');
+  const partial = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, testFiles: ['own.test.cjs'] });
+  assert.equal(partial.cached, true, 'the full run already covers it');
+});
+
+test('run_checks refuses testFiles that are absolute, leave the app, look like flags or do not exist', async () => {
+  const p = selectedProject();
+  const call = testFiles => runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, testFiles });
+  for (const bad of [[join(p.app, 'own.test.cjs')], ['../M1/src/own.test.cjs'], ['--config=evil.js'], ['missing.test.cjs'], [], ['a;b.test.cjs']]) {
+    await assert.rejects(call(bad), /INVALID_ARGUMENT/, JSON.stringify(bad));
+  }
+  await assert.rejects(runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, checks: ['typecheck'], testFiles: ['own.test.cjs'] }), /needs the test check/);
 });

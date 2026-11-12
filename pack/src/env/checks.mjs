@@ -5,8 +5,8 @@
 // .team-work/items/<ID>/checks.json để worker_checkpoint candidate điền sẵn phần verification của fix-result.
 // Build xong mà source và môi trường không đổi thì ghi nhớ bản build như app start, để `app start` sau đó dùng lại
 // thay vì build lần nữa (~35–60 s).
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { sourceSnapshot } from '../core/candidates.mjs';
 import { git } from '../core/git.mjs';
 import { runPwsh } from '../core/jobs.mjs';
@@ -14,14 +14,18 @@ import { withHeavySlot } from './heavy.mjs';
 import { fail, sleep, writeFileAtomic } from '../core/util.mjs';
 import { forgetBuild, locate, readState as appState, rememberBuild, stopApp } from './app.mjs';
 import { detectProfile } from './environment.mjs';
-import { runTests } from './testreport.mjs';
-import { appPrefixOf, testScope } from './test-scope.mjs';
+import { SAFE_TARGET, fillTargets, runTests } from './testreport.mjs';
+import { appPrefixOf, listWorkspaces, testScope } from './test-scope.mjs';
 import { mutantsRunning, restorePending, runMutants } from './mutants.mjs';
 
 export const CHECKS = ['typecheck', 'build', 'test'];
 const MAX_WAIT_SECONDS = 110;
 const TIMEOUT_MS = { typecheck: 5 * 60_000, build: 10 * 60_000, test: 10 * 60_000 };
 const LOG = { typecheck: 'typecheck.log', build: 'build.log', test: 'full-suite.log' };
+// Lần test chỉ chạy các file được chỉ định (testFiles): log riêng, nhãn riêng, để fix-result không nhận là cả bộ test.
+const SELECTED_LOG = 'selected-tests.log';
+export const SELECTED_LABEL = 'tests (selected files only, not the full suite)';
+export const MAX_TEST_FILES = 40;
 // Tên check trong verification của fix-result.
 export const CHECK_LABEL = { typecheck: 'typecheck', build: 'build', test: 'full test suite' };
 const isKey = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(value);
@@ -122,7 +126,65 @@ function itemText(teamWork, key) {
   } catch { return ''; }
 }
 
-async function runOne(name, profile, { logFile, scratch, scope, signal, typecheck = null }) {
+// testFiles của run_checks: đường dẫn tương đối app root (posix), không tuyệt đối, không `..`, không bắt đầu bằng `-`
+// (runner hiểu thành cờ), chỉ ký tự an toàn cho lệnh, file có thật. Trả danh sách đã chuẩn hoá hay báo INVALID_ARGUMENT.
+const plainPath = raw => (typeof raw === 'string' ? raw.trim().replaceAll('\\', '/').replace(/^(\.\/)+/, '') : '');
+const unsafePath = f => !f || isAbsolute(f) || /^[A-Za-z]:/.test(f) || f.startsWith('/') || f.split('/').includes('..')
+  || f.startsWith('-') || !SAFE_TARGET.test(f);
+const isFileIn = (root, f) => { try { return statSync(join(root, f)).isFile(); } catch { return false; } };
+export function checkTestFiles(appRoot, files) {
+  if (!Array.isArray(files) || !files.length) fail('INVALID_ARGUMENT', 'testFiles must be a non-empty array of test file paths relative to the app root');
+  if (files.length > MAX_TEST_FILES) fail('INVALID_ARGUMENT', `testFiles takes at most ${MAX_TEST_FILES} files: run the whole suite instead`);
+  const out = [];
+  for (const raw of files) {
+    const f = plainPath(raw);
+    if (unsafePath(f)) fail('INVALID_ARGUMENT', `testFiles: ${JSON.stringify(raw)} is not a plain path relative to the app root`);
+    if (!isFileIn(appRoot, f)) fail('INVALID_ARGUMENT', `testFiles: ${f} does not exist under the app root ${appRoot}`);
+    if (!out.includes(f)) out.push(f);
+  }
+  return out;
+}
+
+// File test cần chạy lại khi bản sửa baseline (test fail sẵn ở bản phát) vừa vào worktree: file của các test fail sẵn
+// cộng test mới của item, tương đối app root. Id baseline đọc từ log của runner theo gói (lage) thì tương đối gói đó
+// (WQ7T6CEC: "src/server/transactions/import/parse-file.test.ts > …" nằm ở packages/loot-core/): tìm trong các
+// workspace, phải đúng một chỗ. Không tính chắc được (profile không có test_one, file của một id không tìm thấy hay
+// thấy ở hai gói, không có file nào, quá nhiều) thì null: người gọi giữ cách cũ (chạy cả bộ).
+export function baselineRerunFiles(matchRoot, failingIds, ownTests = []) {
+  const profile = detectProfile(matchRoot);
+  if (!profile.root || !profile.commands?.test_one) return null;
+  const root = profile.root;
+  const workspaces = profile.stack === 'node' ? listWorkspaces(root) : [];
+  const files = [];
+  for (const id of failingIds ?? []) {
+    const head = plainPath(String(id).split(' > ')[0].split('::')[0]);
+    // Dòng "× tên test" của log không có file: cùng test đó thường có thêm một id kèm file.
+    if (!/\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.py$/.test(head)) continue;
+    if (unsafePath(head)) return null;
+    const found = isFileIn(root, head) ? [head] : workspaces.map(w => `${w.dir}/${head}`).filter(f => isFileIn(root, f));
+    if (found.length !== 1) return null;
+    if (!files.includes(found[0])) files.push(found[0]);
+  }
+  if (!files.length) return null;
+  for (const t of ownTests ?? []) {
+    const rel = plainPath(relative(root, isAbsolute(t) ? t : join(matchRoot, t)));
+    if (unsafePath(rel) || !isFileIn(root, rel)) continue;
+    if (!files.includes(rel)) files.push(rel);
+  }
+  return files.length > MAX_TEST_FILES ? null : files;
+}
+
+async function runOne(name, profile, { logFile, scratch, scope, signal, typecheck = null, testFiles = null }) {
+  if (name === 'test' && testFiles) {
+    // Chỉ các file được chỉ định, bằng test_one của profile (cùng runner và config của project, kèm reporter máy đọc).
+    if (!profile.commands.test_one) return { name, command: null, state: 'skipped', reason: 'the project profile has no test_one command', testFiles };
+    const scratchLog = join(scratch, SELECTED_LOG);
+    const t = await runTests(profile, 'test_one', { targets: testFiles, limit: MAX_TEST_FILES, logFile: scratchLog, timeoutMs: TIMEOUT_MS.test, signal });
+    try { copyFileSync(scratchLog, logFile); } catch { /* không có log thì thôi */ }
+    const ok = !t.res.timedOut && t.res.code === 0;
+    return { name, command: fillTargets(profile.commands.test_one, testFiles, profile.stack, MAX_TEST_FILES), state: t.res.timedOut ? 'timeout' : ok ? 'passed' : 'failed', exitCode: t.res.code, ms: t.res.ms,
+      testFiles, counts: t.counts ?? null, failing: t.failing.slice(0, 40), ...(ok ? {} : { tail: tailOf(t.res.tail, 1500) }) };
+  }
   const command = name === 'test' ? scope?.command ?? profile.commands.test_all : profile.commands[name];
   if (!command) return { name, command: null, state: 'skipped', reason: `the project profile has no ${name === 'test' ? 'test_all' : name} command` };
   if (name === 'test') {
@@ -159,8 +221,9 @@ export function verificationRows(record) {
       c.counts ? `${c.counts.passed ?? 0}/${c.counts.total ?? 0} passed, ${c.counts.failed ?? 0} failed` : null,
       c.failing?.length ? `failing: ${c.failing.slice(0, 8).join('; ')}` : null, c.reason ?? null,
       c.scope ? `scoped to ${c.scope.packages.join(', ')} (${c.scope.reason})` : null,
-      c.advisory ? `not graded: ${c.advisory.reason} (${c.advisory.files.slice(0, 4).join(', ')})` : null];
-    rows.push({ check: CHECK_LABEL[c.name] ?? c.name, command: c.command ?? null, result, note: parts.filter(Boolean).join('; ').slice(0, 1500) });
+      c.advisory ? `not graded: ${c.advisory.reason} (${c.advisory.files.slice(0, 4).join(', ')})` : null,
+      c.testFiles ? `not the full suite: ran only ${c.testFiles.slice(0, 12).join(', ')}${c.testFiles.length > 12 ? ', …' : ''}` : null];
+    rows.push({ check: c.name === 'test' && c.testFiles ? SELECTED_LABEL : CHECK_LABEL[c.name] ?? c.name, command: c.command ?? null, result, note: parts.filter(Boolean).join('; ').slice(0, 1500) });
   }
   return rows;
 }
@@ -221,8 +284,8 @@ async function waitFor(teamWork, key, runId, waitSeconds) {
   }
 }
 
-export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey: key, matchRoot, checks = CHECKS,
-  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true, maxHeavy = null }) {
+export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey: key, matchRoot, checks = null,
+  parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true, maxHeavy = null, testFiles = null }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
   // PI: không chấm khả năng phát hiện lỗi và trần 10–12 phút không chừa chỗ (DVVFEPXF PI-03: worker tự chạy mutants 3 chỗ
@@ -241,14 +304,19 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   }
   if (action !== 'run') fail('INVALID_ARGUMENT', 'action must be run, status or mutants');
   if (mutantsRunning(teamWork, key)) fail('MUTANTS_RUNNING', 'the mutation check is editing your product files one change at a time: call run_checks {action: "mutants"} until it finishes, then run');
-  const names = [...new Set(Array.isArray(checks) && checks.length ? checks : CHECKS)];
+  // testFiles (vài file test, vd test fail sẵn ở bản phát và test mới của item): không kèm checks thì chỉ chạy test.
+  const selected = testFiles !== null && testFiles !== undefined;
+  const names = [...new Set(Array.isArray(checks) && checks.length ? checks : selected ? ['test'] : CHECKS)];
   if (names.some(n => !CHECKS.includes(n))) fail('INVALID_ARGUMENT', `checks must be among ${CHECKS.join(', ')}`);
+  if (selected && !names.includes('test')) fail('INVALID_ARGUMENT', 'testFiles needs the test check: checks ["test"]');
   let current = readChecks(teamWork, key);
   const failedRun = current?.state === 'running' && alive(current.pid) && failedSoFar(current).length > 0;
   if (current?.state === 'running' && alive(current.pid) && !failedRun) return waitFor(teamWork, key, current.runId, waitSeconds);
 
   const profile = detectProfile(where.matchRoot);
   if (!profile.root) fail('UNSUPPORTED_APP', 'no application found under matchRoot: run the checks by hand');
+  const files = selected ? checkTestFiles(profile.root, testFiles) : null;
+  if (files && !profile.commands.test_one) fail('UNSUPPORTED_APP', 'the project profile has no test_one command to run single test files: run without testFiles');
   const checkout = dirname(where.matchRoot), folder = basename(where.matchRoot);
   const hasGit = existsSync(join(checkout, '.git'));
   // 08OQBPW8: mỗi worker chạy run_checks 3–4 lần (trước sync, sau sync, sau khi chép script seed, trước candidate),
@@ -267,7 +335,9 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   if (!force && current?.state === 'done' && current.snapshot && before && JSON.stringify(current.snapshot) === JSON.stringify(before)
     && current.matchRoot === where.matchRoot) {
     const have = new Map((current.results ?? []).map(r => [r.name, r]));
-    if (names.every(n => have.has(n) && have.get(n).state !== 'timeout')) {
+    // Lần chạy cả bộ thay được lần chạy vài file; lần chạy vài file chỉ thay được lần chạy đúng các file đó.
+    const sameTests = t => !t?.testFiles || Boolean(files && [...t.testFiles].sort().join('|') === [...files].sort().join('|'));
+    if (names.every(n => have.has(n) && have.get(n).state !== 'timeout') && (!names.includes('test') || sameTests(have.get('test')))) {
       return { ...view({ ...current, results: current.results.filter(r => names.includes(r.name)) }), cached: true,
         hint: `Source and environment are unchanged since run ${current.runId}: these are its results, nothing was run again (force: true runs anyway).` };
     }
@@ -280,15 +350,16 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   // Bộ test chỉ gồm các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
   const text = itemText(teamWork, key);
   const changedNow = hasGit && (names.includes('test') || names.includes('typecheck')) ? await ownChanges(checkout) : null;
-  const scoped = names.includes('test') && scopeTests && hasGit
+  const scoped = names.includes('test') && scopeTests && hasGit && !files
     ? testScope({ profile, text, changed: changedNow, appPrefix: appPrefixOf(checkout, profile) })
     : { scope: null };
   // Lỗi typecheck chỉ trong test mới của item và đề không chấm type check: không chặn (advisory, ở trên).
   const typecheck = { graded: typecheckGraded(text), ownTests: (changedNow ?? []).filter(p => TEST_PATH.test(p)) };
+  const logOf = n => (n === 'test' && files ? SELECTED_LOG : LOG[n]);
   const runId = `${Date.now().toString(36)}-${process.pid}`;
   const record = { runId, key, pid: process.pid, state: 'running', checks: names, parallel: Boolean(parallel),
     matchRoot: where.matchRoot, startedAt: new Date().toISOString(), ...(scoped.scope ? { testScope: scoped.scope.packages } : {}),
-    ...(before ? { startSnapshot: before } : {}) };
+    ...(files ? { testFiles: files } : {}), ...(before ? { startSnapshot: before } : {}) };
   // Build ghi đè thư mục build mà app (dev hay production) của item đang chạy dùng.
   if (names.includes('build') && appState(teamWorkspace, key)) { stopApp(teamWorkspace, key); record.appStopped = true; }
   writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
@@ -306,11 +377,11 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
     // Mỗi lệnh giữ một chỗ "lệnh nặng" của cả máy (heavy.mjs); đang chờ chỗ thì checks.json ghi queued[name].
     const queued = n => { record.queued = { ...record.queued, [n]: new Date().toISOString() }; if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2)); };
     const one = name => withHeavySlot(teamWork, { max: maxHeavy, key, name, signal: ac.signal, onWait: () => queued(name) }, ({ waitedMs }) =>
-      runOne(name, profile, { logFile: join(evidenceDir, LOG[name]), scratch, scope: scoped.scope, signal: ac.signal, typecheck })
+      runOne(name, profile, { logFile: join(evidenceDir, logOf(name)), scratch, scope: scoped.scope, signal: ac.signal, typecheck, testFiles: files })
         .then(r => (waitedMs >= 1000 ? { ...r, queuedMs: waitedMs } : r)))
       .then(r => r ?? { name, command: null, state: 'failed', tail: 'cancelled while waiting for a free heavy-command slot' })
       .catch(error => ({ name, command: null, state: 'failed', tail: String(error?.message ?? error).slice(0, 600) }))
-      .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${LOG[name]}` }) }));
+      .then(r => ({ ...r, ...(r.state === 'skipped' ? {} : { log: `evidence/${logOf(name)}` }) }));
     // typecheck không chạy cùng lúc với build ở project Next.js: tsconfig include '.next/types/**/*.ts', next build xoá
     // rồi dựng lại thư mục đó, tsc đang đọc thì báo TS6053 dù code đúng (ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt vì
     // typecheck "hỏng" giả ngay trước giờ đóng); ở đó chạy typecheck trước (nhanh, hỏng sớm) rồi build. Project khác chạy

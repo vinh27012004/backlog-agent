@@ -30,6 +30,7 @@ import { Session } from './core/session.mjs';
 import { integrateCandidate, unpushable } from './core/integration.mjs';
 import { resultArtifact, digest } from './core/candidates.mjs';
 import { Workflow } from './match/workflow.mjs';
+import { profileFlags } from './match/profile.mjs';
 import { trustedTeamWorkspace } from './core/paths.mjs';
 import { HelperError, fail, isId, oneLine, sleep, writeFileAtomic } from './core/util.mjs';
 
@@ -159,6 +160,7 @@ export class Runtime {
     this.preGame = null;          // poll trước START_GAME (startPreGameWatch)
     this.prewarming = new Map();  // key → promise dựng sẵn worktree trước START_GAME
     this.worktreeCreating = new Map(); // gộp prewarm/create cùng item đang chạy
+    this.codegraphIndexing = new Map(); // matchRoot → index codegraph đang dựng nền (indexInBackground)
     this.closingWarned = new Set();
     this.resultWarned = new Set();
     this.configuredAt = 0;
@@ -297,6 +299,7 @@ export class Runtime {
         inputSchema: obj({ action: { type: 'string', enum: ['run', 'status', 'mutants'], description: 'run (default) starts the checks; status waits for the current run; mutants undoes each of your changes to existing product code in turn and runs your new test files, listing the changes no new test catches (worker_checkpoint candidate asks for it when you changed existing code and added tests).' },
           backlogItemKey: str('Item key.'), matchRoot: str('Absolute matchRoot of the worktree (from the brief).'),
           checks: { type: 'array', items: { type: 'string', enum: ['typecheck', 'build', 'test'] }, description: 'Default all three; e.g. ["typecheck"] for an early type check while coding.' },
+          testFiles: { type: 'array', items: { type: 'string' }, description: `Only when the helper gives you the list (worker_checkpoint candidate after a baseline fix landed): run the test check on just these test files (paths relative to the app root, at most 40) with the project's single-test command, logged to evidence/selected-tests.log. The fix-result row says it is not the full suite. Without checks it runs the test check only.` },
           force: bool('Run even when the source is unchanged since the last run (default false).'),
           waitSeconds: num('Seconds to wait for the result (max 110, default 110).') }, ['backlogItemKey', 'matchRoot']),
         handler: ({ parallel, ...a }) => this.runChecks(a) },
@@ -735,11 +738,39 @@ export class Runtime {
   // PI mặc định chỉ typecheck: bản sửa PI được chấm bằng hidden test, các trường đáp án đua theo thứ tự nộp; build và
   // full suite (QDYZMY1K: timeout 600 s ở PI-02 và PI-03) chỉ làm chậm. Worker chạy test của module bị sửa bằng test_one.
   // Bộ test thu hẹp về các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
-  runChecks(args) {
-    const pi = typeOf(args?.backlogItemKey) === 'PI' && !['status', 'mutants'].includes(args.action) && args.checks === undefined;
+  // mutants khi hồ sơ đề (team_analyst) khai luật chấm mà không luật nào chạy test của đội trên bản app hỏng: trả lời
+  // ngay, như mutantGate ở candidate (WQ7T6CEC: CR-07 tự chạy mutants 190 s, BUG-09 114 s, rồi mới biết ở
+  // ready_for_evidence là đề không chấm phần này).
+  async runChecks(args) {
+    if (args?.action === 'mutants' && this.mutantsNotGraded(args.backlogItemKey, args.matchRoot)) {
+      return { state: 'skipped', skipped: 'not graded',
+        hint: "The analyst's profile of this item has no rule that runs your tests against broken builds: the mutation check earns nothing here. Go on." };
+    }
+    const pi = typeOf(args?.backlogItemKey) === 'PI' && !['status', 'mutants'].includes(args.action) && args.checks === undefined
+      && args.testFiles === undefined;
     const cfg = this.runtimeConfig();
     return runChecks({ teamWorkspace: this.teamWorkspace, ...args, ...(pi ? { checks: ['typecheck'] } : {}),
       scopeTests: cfg.scopedTests !== false, maxHeavy: cfg.maxHeavyCommands ?? null });
+  }
+
+  // Hồ sơ đã nhận của item nói đề không chấm khả năng phát hiện lỗi (profileFlags: có luật chấm, không có detection).
+  // Helper của root đọc qua workflow.profileOf; helper của worker (chưa configure_session, không có journal) đọc
+  // profile.json cạnh trận của matchRoot: file đó chỉ được ghi khi hồ sơ được nhận.
+  mutantsNotGraded(key, matchRoot) {
+    if (!isKey(key)) return false;
+    let profile = null;
+    try {
+      if (this.session.paths) profile = this.workflow.profileOf(key);
+      else if (this.teamWorkspace && typeof matchRoot === 'string' && isAbsolute(matchRoot)) {
+        const rel = relative(join(this.teamWorkspace, 'matches'), resolve(matchRoot));
+        if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+          profile = JSON.parse(readFileSync(join(this.teamWorkspace, 'matches', rel.split(sep)[0], '.team-work', 'items', key, 'profile.json'), 'utf8'));
+        }
+      }
+    } catch { return false; }
+    if (!profile) return false;
+    const flags = profileFlags(profile);
+    return flags.gradingStated && !flags.detection;
   }
 
   runtimeConfig() {
@@ -1039,9 +1070,10 @@ export class Runtime {
     return existsSync(join(this.wtPaths(key).worktreeRoot, '.git'));
   }
 
-  // Tạo worktree của item (git), rồi cài dependency (job) chạy cùng lúc với index codegraph, như setup_environment của
-  // checkout chính (index chỉ đọc source, vài giây). Index vẫn xong trước khi trả về: fixer gọi codegraph lên worktree
-  // chưa index thì bị bảo thôi dùng cả phiên. Không đụng Game Master nên chạy được cả trước START_GAME (prewarmWorktree).
+  // Tạo worktree của item (git), rồi cài dependency (job) và dựng index codegraph, cả hai chạy nền: worker được spawn
+  // ngay (WQ7T6CEC: chờ index làm prepare 47–79 s, worker gần như không gọi codegraph). Worker gọi codegraph lúc index
+  // chưa xong thì server có thể bảo thôi dùng nó: worker vẫn còn rg. Không đụng Game Master nên chạy được cả trước
+  // START_GAME (prewarmWorktree).
   async createWorktree(key) {
     if (this.worktreeCreating.has(key)) return this.worktreeCreating.get(key);
     const promise = this.createWorktreeOnce(key).finally(() => this.worktreeCreating.delete(key));
@@ -1055,7 +1087,7 @@ export class Runtime {
     const ji = this.journal.item(key);
     const active = this.jobs.jobs.get(ji.worktreeSetupJob);
     if (this.liveWorktree(key) && active?.state === 'running') {
-      return { job: active, codegraph: await this.refreshCodegraph(key, wt.matchRoot) };
+      return { job: active, codegraph: this.indexInBackground(key, wt.matchRoot) };
     }
     if (!this.liveWorktree(key)) {
       if (existsSync(wt.worktreeRoot)) {
@@ -1088,12 +1120,10 @@ export class Runtime {
       return { job, codegraph: { skipped: 'report-only PI' } };
     }
     // TASK chỉ trả lời (Form A: không build, không test, không chạy app): bỏ install/generate/migrate/seed, vẫn index
-    // codegraph để fixer tra source. EIOR38SI: TASK-03/04 chờ setup 71–80 s mà không dùng tới bước nào.
+    // codegraph (nền) để fixer tra source. EIOR38SI: TASK-03/04 chờ setup 71–80 s mà không dùng tới bước nào.
     if (this.answerOnlyTask(key)) {
       const job = this.jobs.start('worktree_setup', async () => ({ ok: true, skipped: 'answer-only TASK', steps: [] }), { key });
-      const codegraph = await indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
-        logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
-      return { job, codegraph };
+      return { job, codegraph: this.indexInBackground(key, wt.matchRoot) };
     }
     // Cài lỗi (mạng, file bị khoá) thì job tự chạy lại một lần: từ khi fixer được spawn trước khi setup xong, không còn
     // prepare_item hỏng để root thử lại.
@@ -1108,16 +1138,20 @@ export class Runtime {
     }, { key });
     ji.worktreeSetupJob = job.id;
     this.journal.save();
-    const index = () => indexCodegraph({ teamWorkspace: this.teamWorkspace, matchRoot: wt.matchRoot, timeoutMs: 60_000,
-      logFile: join(teamWork, 'logs', `${key}-codegraph.log`) });
-    // PI: dựng index nền, không giữ spawn (OMZJW0S0: index ~45 s trong 58–64 s prepare của PI-02/PI-03, cả hai fixer
-    // không gọi codegraph lần nào). Item khác vẫn chờ index như trước.
-    if (typeOf(key) === 'PI') {
-      index().catch(() => null);
-      return { job, codegraph: { skipped: 'indexing in the background (PI)' } };
+    return { job, codegraph: this.indexInBackground(key, wt.matchRoot) };
+  }
+
+  // Index codegraph của worktree dựng nền, không giữ spawn của worker. OMZJW0S0: index ~45 s trong 58–64 s prepare của
+  // PI-02/PI-03 (từ đó PI dựng nền); WQ7T6CEC: prepare item khác 47–79 s, phần lớn chờ index, trong khi 12 worker cả
+  // trận chỉ gọi codegraph 3 lần. Mỗi thư mục một lần index một lúc: refreshCodegraph (sync) chờ lần đang chạy xong.
+  indexInBackground(key, matchRoot) {
+    if (!this.codegraphIndexing.has(matchRoot)) {
+      const run = ensureCodegraphIndex({ teamWorkspace: this.teamWorkspace, matchRoot, timeoutMs: 60_000,
+        logFile: join(this.session.paths.teamWork, 'logs', `${key}-codegraph.log`) })
+        .catch(() => null).finally(() => this.codegraphIndexing.delete(matchRoot));
+      this.codegraphIndexing.set(matchRoot, run);
     }
-    const codegraph = await index();
-    return { job, codegraph };
+    return { skipped: 'indexing in the background' };
   }
 
   async worktree({ action, backlogItemKey: key, message, prefer = null, fromPublish = false }) {
@@ -1665,6 +1699,7 @@ export class Runtime {
 
   // Đặc trưng khách quan cho Jev và luật difficulty (src/decide/signals.mjs); không có checkout thì bỏ phần grep code.
   async refreshCodegraph(key, matchRoot) {
+    await this.codegraphIndexing.get(matchRoot);   // index nền của worktree còn chạy: không chạy hai lần cùng thư mục
     return ensureCodegraphIndex({ teamWorkspace: this.teamWorkspace, matchRoot, timeoutMs: 30_000,
       logFile: join(this.session.paths.teamWork, 'logs', `${key}-codegraph-refresh.log`) });
   }

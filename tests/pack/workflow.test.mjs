@@ -1782,3 +1782,84 @@ test('the words of submit.json in the result part are mapped to the fix-result c
   const bad = await f.rt.workflow.composeResult(f.key, { status: 'maybe', summary: 'x' });
   assert.match(bad.problems[0], /\.status: must be one of "fixed", "partial", "cannot_fix"/, 'an unknown word is still refused');
 });
+
+// ---------------------------------------------------------------- WQ7T6CEC: tốc độ prepare, mutants, baseline
+// (a) Index codegraph của worktree dựng nền: không giữ prepare; sync (refreshCodegraph) chờ lần đang dựng, không chạy hai lần.
+test('the worktree codegraph index builds in the background and a refresh waits for it instead of indexing twice', async () => {
+  const f = fixture('CR-01');
+  const { CODEGRAPH } = await import('../../pack/src/env/codegraph.mjs');
+  const dir = join(f.root, 'team-sdlc-pack', 'codegraph', 'node_modules', ...CODEGRAPH.package.split('/'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: CODEGRAPH.package, version: CODEGRAPH.version }));
+  writeFileSync(join(dir, 'npm-shim.js'), ["const fs = require('fs'), path = require('path');",
+    'const [cmd, ...rest] = process.argv.slice(2); const target = rest[rest.length - 1];',
+    "fs.mkdirSync(path.join(target, '.codegraph'), { recursive: true });",
+    "fs.appendFileSync(path.join(target, '.codegraph', 'calls.log'), cmd + '\\n');",
+    "setTimeout(() => fs.writeFileSync(path.join(target, '.codegraph', 'codegraph.db'), 'fake index'), 1500);"].join('\n'));
+  const t0 = Date.now();
+  assert.deepEqual(f.rt.indexInBackground(f.key, f.wt.matchRoot), { skipped: 'indexing in the background' });
+  assert.deepEqual(f.rt.indexInBackground(f.key, f.wt.matchRoot), { skipped: 'indexing in the background' }, 'joins the running index');
+  assert.ok(Date.now() - t0 < 500, 'returns at once');
+  const refreshed = await f.rt.refreshCodegraph(f.key, f.wt.matchRoot);
+  assert.ok(Date.now() - t0 >= 1400, 'the refresh waited for the background index');
+  assert.equal(refreshed.freshness, 'fresh', JSON.stringify(refreshed));
+  assert.deepEqual(readFileSync(join(f.wt.matchRoot, '.codegraph', 'calls.log'), 'utf8').trim().split(/\r?\n/), ['init'], 'indexed once');
+  assert.equal(f.rt.codegraphIndexing.size, 0);
+});
+
+// (b) WQ7T6CEC: CR-07 tự chạy mutants 190 s, BUG-09 114 s, đề không chấm khả năng phát hiện lỗi.
+test('run_checks mutants answers at once when the accepted profile grades no detection, in the root and in a worker helper', async () => {
+  const f = fixture('CR-01');
+  const call = rt => rt.runChecks({ action: 'mutants', backlogItemKey: f.key, matchRoot: f.wt.matchRoot, waitSeconds: 0 }).catch(e => ({ error: e.code }));
+  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'no profile: the check is not skipped');
+  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(PROFILE()));
+  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'a profile not accepted yet does not count');
+  f.ji.analysis = { state: 'done' };
+  const t0 = Date.now();
+  const skipped = await call(f.rt);
+  assert.deepEqual([skipped.state, skipped.skipped], ['skipped', 'not graded']);
+  assert.match(skipped.hint, /no rule that runs your tests against broken builds/);
+  assert.ok(Date.now() - t0 < 1000);
+  const detection = PROFILE(); detection.grading.push({ aspect: 'detection', quote: 'x' });
+  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(detection));
+  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'detection graded: the check runs');
+  const none = PROFILE(); none.grading = [];
+  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(none));
+  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'no grading rule stated: the check runs');
+  // Helper của worker (chưa configure_session): đọc profile.json cạnh trận của matchRoot.
+  const tw = tempDir('mtm-worker-mutants-'), items = join(tw, 'matches', 'M1', '.team-work', 'items', 'CR-01');
+  mkdirSync(items, { recursive: true });
+  writeFileSync(join(items, 'profile.json'), JSON.stringify(PROFILE()));
+  const worker = new Runtime({ teamWorkspace: tw });
+  assert.equal(worker.session.paths, null);
+  const res = await worker.runChecks({ action: 'mutants', backlogItemKey: 'CR-01', matchRoot: join(tw, 'matches', 'M1', '.team-work', 'wt', 'CR-01', 'M1') });
+  assert.deepEqual([res.state, res.skipped], ['skipped', 'not graded']);
+});
+
+// (c) WQ7T6CEC BUG-09: sau khi bản sửa baseline vào worktree, worker chạy lại cả bộ test và chờ 574 s. Candidate chỉ
+// đòi chạy lại file của các test fail sẵn cộng test mới của item; không tính được danh sách thì vẫn cả bộ.
+test('after the baseline fix lands, candidate asks for run_checks on the baseline test files and the own new tests only', async () => {
+  const landed = async withProfile => {
+    const f = baselineFixture();
+    if (withProfile) {
+      writeFileSync(join(f.wt.matchRoot, 'src', 'package.json'), JSON.stringify({ name: 'app', packageManager: 'npm@10.0.0', scripts: { test: 'vitest run' }, devDependencies: { vitest: '1.0.0' } }));
+      writeFileSync(join(f.wt.matchRoot, 'src', 'tests', 'export.test.js'), 'expect(1).toBe(1);\n');
+    }
+    f.ji.workerState = 'writing';
+    f.result(1);
+    f.ownerFix();
+    await f.checkpoint({ backlogItemKey: 'BUG-01', phase: 'baseline_fixed', files: ['src/status.js'] });
+    await f.rt.workflow.landBaseline();
+    const res = await f.checkpoint({ backlogItemKey: 'BUG-02', phase: 'candidate' });
+    assert.equal(res.handedOff, false, JSON.stringify(res));
+    return res.problems[0];
+  };
+  const selected = await landed(true);
+  assert.match(selected, /BUG-01's fix for the baseline failures just landed on main/);
+  assert.ok(selected.includes('run_checks {"checks":["test"],"testFiles":["tests/status.test.js","tests/export.test.js"]}'), selected);
+  assert.match(selected, /Do not run the full suite again/);
+  assert.match(selected, /Scenarios and screenshots you already verified stay PASS: do not recapture them/);
+  const full = await landed(false);
+  assert.match(full, /run the full suite once more/, 'no project profile: the full suite as before');
+  assert.doesNotMatch(full, /testFiles/);
+});
