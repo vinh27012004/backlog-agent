@@ -70,6 +70,23 @@ export function readChecks(teamWork, key) {
   try { return JSON.parse(readFileSync(checksFile(teamWork, key), 'utf8')); } catch { return null; }
 }
 
+// Huỷ lần run_checks còn chạy của item và chờ nó dừng (tối đa waitMs). Gọi khi worker đã bàn giao: kết quả của lần
+// chạy dở không còn ai đọc, còn log của nó vẫn ghi vào answers/<ID>/evidence/ và làm cây answer đổi sau handoff
+// (BI7A5ACV CR-08: build.log, typecheck.log ghi tới 13:40:01 sau handoff 13:37:17, 5 lần publish CANDIDATE_STALE).
+// Trả về runId đã huỷ, hay null khi không có gì chạy.
+export async function cancelChecks(teamWork, key, waitMs = 20_000) {
+  const current = readChecks(teamWork, key);
+  if (current?.state !== 'running' || !alive(current.pid)) return null;
+  writeFileAtomic(cancelFile(teamWork, key), current.runId);
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    const now = readChecks(teamWork, key);
+    if (now?.runId !== current.runId || now.state !== 'running' || !alive(now.pid)) break;
+    await sleep(250);
+  }
+  return current.runId;
+}
+
 function alive(pid) {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }

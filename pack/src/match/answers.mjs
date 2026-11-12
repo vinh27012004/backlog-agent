@@ -1,9 +1,68 @@
 // Kiểm tất định answers/<ID>/submit.json, evidence bắt buộc và yêu cầu của đề (tách từ gate cũ). Kết quả chỉ báo lại
 // (warnings của publish_item), không chặn nộp.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '../core/git.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
+
+// Mọi chuỗi trong một giá trị JSON (kể cả trong mảng, object lồng nhau).
+function strings(value, out = []) {
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const v of value) strings(v, out);
+  else if (value && typeof value === 'object') for (const v of Object.values(value)) strings(v, out);
+  return out;
+}
+
+// Ký tự Windows-1252 ở 0x80–0x9F (Latin-1 trùng Unicode ở 0xA0–0xFF; 0x81, 0x8D, 0x8F, 0x90, 0x9D không có).
+const CP1252 = new Map([...'€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ'].map((c, i) => [c, 0x80 + i]));
+// Chuỗi UTF-8 bị đọc thành Windows-1252/Latin-1 (BI7A5ACV CR-07: Python read_text() không encoding ghi
+// "Váº­n chuyá»ƒn" vào auditSummary, mất 10 điểm): mã hoá lại theo cp1252 rồi giải UTF-8 chặt mà ra được chuỗi khác
+// thì đó là mojibake. Chữ Việt đúng có ký tự ngoài cp1252 (ậ, ể) nên không khớp; "café" đúng giải UTF-8 hỏng nên không khớp.
+export function mojibake(text) {
+  if (!/[\u0080-ÿ]/.test(text)) return null;
+  const bytes = [];
+  for (const c of text) {
+    const code = c.codePointAt(0);
+    if (code < 0x80 || (code >= 0xa0 && code <= 0xff)) bytes.push(code);
+    else if (CP1252.has(c)) bytes.push(CP1252.get(c));
+    else return null;
+  }
+  try {
+    const fixed = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+    return fixed !== text ? fixed : null;
+  } catch { return null; }
+}
+
+const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+const EVIDENCE_TEXT_MAX = 32 * 1024 * 1024;
+// Văn bản các file evidence của item (bỏ ảnh, file quá lớn).
+function evidenceText(dir) {
+  let names = [];
+  try { names = readdirSync(dir); } catch { return ''; }
+  const parts = [];
+  for (const name of names) {
+    if (/\.(png|jpe?g|gif|webp|zip|pdf)$/i.test(name)) continue;
+    const file = join(dir, name);
+    try { if (!statSync(file).isFile() || statSync(file).size > EVIDENCE_TEXT_MAX) continue; parts.push(readFileSync(file, 'utf8')); } catch { /* bỏ qua */ }
+  }
+  return parts.join('\n');
+}
+// Timestamp trả lời không có nguyên văn trong evidence nhưng evidence có cùng thời điểm viết khác (BI7A5ACV PI-04:
+// PowerShell ConvertFrom-Json đổi "2025-12-08T15:56:23.000Z" thành DateTime, ConvertTo-Json ghi lại "…23Z"; field so
+// khớp chính xác nên mất 12 điểm). Trả về [{ value, found }].
+export function reshapedTimestamps(answer, evidence) {
+  const out = [];
+  if (!evidence) return out;
+  for (const value of new Set(strings(answer).filter(s => ISO_TS.test(s)))) {
+    if (evidence.includes(value)) continue;
+    const at = Date.parse(value);
+    if (!Number.isFinite(at)) continue;
+    const re = new RegExp(`${value.slice(0, 16)}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})`, 'g');
+    const found = [...new Set(evidence.match(re) ?? [])].filter(s => s !== value && Date.parse(s) === at);
+    if (found.length) out.push({ value, found: found[0] });
+  }
+  return out;
+}
 
 // Danh sách file đổi so với base (tracked + untracked, không tính file bị ignore).
 export async function changedFiles(checkoutRoot, base) {
@@ -187,6 +246,15 @@ export function answerCheck(matchRoot, key, template, schema = null, mvs = null,
     if (!existsSync(evidenceFile)) problems.push(`missing ${ref}`);
   }
   if (/DRAFT/.test(JSON.stringify(answer.status ?? ''))) problems.push('submit.json status is still DRAFT');
+  const garbled = [...new Set(strings(answer))].map(s => [s, mojibake(s)]).filter(([, fixed]) => fixed);
+  if (garbled.length) {
+    const [bad, good] = garbled[0];
+    problems.push(`submit.json text is UTF-8 read as Windows-1252: ${JSON.stringify(bad.slice(0, 40))} should be ${JSON.stringify(good.slice(0, 40))}${garbled.length > 1 ? ` (${garbled.length} strings)` : ''}. Graders compare it exactly. A script read a file without an encoding (Python read_text()/open() without encoding='utf-8', Windows PowerShell Get-Content without -Encoding utf8): write submit.json again with node (JSON.parse(readFileSync(f, 'utf8'))), then candidate again`);
+  }
+  const reshaped = reshapedTimestamps(answer, evidenceText(join(matchRoot, 'answers', key, 'evidence')));
+  if (reshaped.length) {
+    problems.push(`submit.json timestamp not as found: ${reshaped.slice(0, 3).map(t => `${JSON.stringify(t.value)} where your evidence has ${JSON.stringify(t.found)}`).join('; ')}. Fields are compared exactly, so copy the string as it appears in the logs. PowerShell ConvertFrom-Json turns ISO strings into dates and ConvertTo-Json writes them back in another form: write submit.json with node, then candidate again`);
+  }
   const missingEvidence = [];
   for (const { file: name, beforeFix } of required) {
     if (!existsSync(join(matchRoot, 'answers', key, 'evidence', name))) {

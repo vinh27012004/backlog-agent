@@ -89,12 +89,19 @@ or the item's wording; a new kind of failure is a case of one of them.
 3. Tests that detect: does each change you made to existing product code have a new test that fails with only that
    change undone? Graders put the old behaviour back and expect your tests to fail. A case whose expected result the
    old code gives too detects nothing. run_checks {action: "mutants"} undoes each change in turn and lists those no
-   test catches; candidate asks for it once when you changed existing code and added tests.
+   test catches; candidate asks for it once when you changed existing code and added tests. When the brief's
+   <item_profile> says "mutation check: not graded for this item", do not run it: it costs minutes and earns nothing there.
 4. Expectations: does each expected value in your tests come from a sentence of the item or its specification, for
    that very operation, and not from what your code returns?
 5. Scope: does your diff hold only this item's files? No cache folders (node_modules/, .vite, coverage), no test
    configuration, no other item's answers. Candidate refuses node_modules/ content.
+   The brief's <checklist> (written from the analyst's profile of the item) lists every evidence file, answer field
+   and named source file of this item: go through it line by line before candidate, which checks the same lines.
 6. Freshness: were the figures in submit.json computed again after your last sync and your last source change?
+   Are they byte for byte what your script printed? Write submit.json with node (readFileSync(f, 'utf8'),
+   JSON.stringify). PowerShell ConvertFrom-Json turns ISO timestamps into dates ("…23.000Z" comes back "…23Z"), and
+   Python read_text() without encoding='utf-8' garbles Vietnamese ("Vận" becomes "Váº­n"); graders compare exactly.
+   Candidate refuses both, and refuses while run_checks {action: "mutants"} is still running.
 
 # Read only the relevant reference
 - BUG investigation: bug-patterns.md.

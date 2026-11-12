@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
+import { cancelChecks, readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
 import { namedTestPackages, testScope } from '../../pack/src/env/test-scope.mjs';
@@ -286,4 +286,26 @@ test('type errors block when the item grades the type check', async () => {
   assert.equal(res.ok, false);
   assert.equal(res.advisory, undefined);
   assert.match(res.hint, /Failed: typecheck/);
+});
+
+// BI7A5ACV CR-08: run_checks do ready_for_evidence khởi động ghi build.log, typecheck.log vào evidence tới 13:40:01, sau
+// handoff 13:37:17; cây answer đổi, 5 lần publish CANDIDATE_STALE. Handoff và preflight huỷ lần chạy còn dở.
+test('cancelChecks asks the running run to stop and waits for it; nothing running is a no-op', async () => {
+  const teamWork = tempDir('mtm-cancel-');
+  mkdirSync(join(teamWork, 'items', 'CR-08'), { recursive: true });
+  const file = join(teamWork, 'items', 'CR-08', 'checks.json');
+  assert.equal(await cancelChecks(teamWork, 'CR-08', 100), null, 'no checks.json');
+  writeFileSync(file, JSON.stringify({ runId: 'r-1', state: 'done', pid: process.pid }));
+  assert.equal(await cancelChecks(teamWork, 'CR-08', 100), null, 'finished run');
+  writeFileSync(file, JSON.stringify({ runId: 'r-2', state: 'running', pid: process.pid }));
+  // Tiến trình đang chạy lần đó thấy file huỷ thì ghi cancelled.
+  const watcher = setInterval(() => {
+    const cancel = join(teamWork, 'items', 'CR-08', 'checks.cancel');
+    if (existsSync(cancel) && readFileSync(cancel, 'utf8').trim() === 'r-2') writeFileSync(file, JSON.stringify({ runId: 'r-2', state: 'cancelled', pid: process.pid }));
+  }, 50);
+  const t0 = Date.now();
+  assert.equal(await cancelChecks(teamWork, 'CR-08', 5000), 'r-2');
+  clearInterval(watcher);
+  assert.ok(Date.now() - t0 < 2000, 'returns once the run stopped');
+  assert.equal(readChecks(teamWork, 'CR-08').state, 'cancelled');
 });

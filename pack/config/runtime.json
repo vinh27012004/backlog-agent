@@ -12,5 +12,11 @@
   "releasePollMs": 250,
   "autoChecks": true,
   "linkedModules": true,
-  "scopedTests": true
+  "scopedTests": true,
+  "analyst": true,
+  "analystTimeoutSeconds": 150,
+  "analystSkip": [
+    "PI"
+  ],
+  "autoPublishAll": true
 }

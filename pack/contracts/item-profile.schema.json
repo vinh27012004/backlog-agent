@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "item-profile",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "form": {
+      "type": "string",
+      "enum": [
+        "code_fix",
+        "feature",
+        "test_suite",
+        "fix_and_report",
+        "answer_only",
+        "report_only"
+      ],
+      "description": "code_fix: repair existing behaviour; feature: new behaviour or page; test_suite: the deliverable is a test suite; fix_and_report: investigate, report fields and fix source; answer_only: only submit.json fields, no source change; report_only: incident report, source changes out of scope"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 400,
+      "description": "one or two sentences: what has to be delivered"
+    },
+    "grading": {
+      "type": "array",
+      "description": "every scoring rule the item or MVS states, one entry per rule",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "type": "string",
+            "enum": [
+              "mvs_replay",
+              "hidden_tests",
+              "browser_replay",
+              "team_tests_pass",
+              "detection",
+              "typecheck",
+              "exact_fields",
+              "completion_order",
+              "existing_tests",
+              "other"
+            ],
+            "description": "mvs_replay: organizers rerun the issued MVS test; hidden_tests: organizer tests on the submitted source; browser_replay: a scenario is replayed in a browser on the built app; team_tests_pass: the team's own tests are run and must pass; detection: the team's tests are run against broken builds and must fail there; typecheck: the type check is graded; exact_fields: reported fields are compared exactly; completion_order: points depend on finishing order or time; existing_tests: issued tests must keep passing; other: any other scoring rule"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 8,
+            "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+          }
+        },
+        "required": [
+          "aspect",
+          "quote"
+        ]
+      }
+    },
+    "deliverables": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sourceFiles": {
+          "type": "array",
+          "description": "source files the item names explicitly; [] when it names none",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "path the item names, as written"
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 8,
+                "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+              }
+            },
+            "required": [
+              "path",
+              "quote"
+            ]
+          }
+        },
+        "testLocation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "directory or file pattern the item requires for new tests, or null"
+        },
+        "answerFields": {
+          "type": "array",
+          "description": "fields of submit.json the team must fill, besides status, evidenceFiles, testResults and the engineering/incident record",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean",
+                  "array",
+                  "object"
+                ]
+              },
+              "exact": {
+                "type": "boolean",
+                "description": "true when the item says the field is compared exactly"
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 8,
+                "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "exact",
+              "quote"
+            ]
+          }
+        }
+      },
+      "required": [
+        "sourceFiles",
+        "testLocation",
+        "answerFields"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "description": "every evidence file the item or its MVS requires by name",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scenario": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "the testResults id this file proves (e.g. CR-07-TC-03), or null when the item requires it outside a scenario"
+          },
+          "file": {
+            "type": "string",
+            "description": "file name under answers/<ID>/evidence/, exactly as required"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "screenshot",
+              "log",
+              "csv",
+              "json",
+              "other"
+            ]
+          },
+          "beforeFix": {
+            "type": "boolean",
+            "description": "true when it must be captured on the unfixed code"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 8,
+            "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+          }
+        },
+        "required": [
+          "scenario",
+          "file",
+          "kind",
+          "beforeFix",
+          "quote"
+        ]
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "description": "every testResults id of the template, [] when the template has none",
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "things the item forbids or fixes (keep handler names, tests in new files, out of scope...)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rule": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 8,
+            "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+          }
+        },
+        "required": [
+          "rule",
+          "quote"
+        ]
+      }
+    },
+    "dependsOn": {
+      "type": "array",
+      "description": "other backlog items whose fix this item needs",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "type": "string",
+            "pattern": "^[A-Z]+-\\d+$"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 8,
+            "description": "verbatim sentence or phrase copied from the item or its MVS that says this"
+          }
+        },
+        "required": [
+          "item",
+          "quote"
+        ]
+      }
+    },
+    "deadlineMinutes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "the item's own deadline in minutes when it states one, else null"
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "investigation": {
+          "type": "string",
+          "enum": [
+            "none",
+            "code",
+            "kb",
+            "logs",
+            "data"
+          ],
+          "description": "main source the cause or the figures must be found in"
+        },
+        "crossModule": {
+          "type": "boolean"
+        },
+        "uiChange": {
+          "type": "boolean"
+        },
+        "needsRunningApp": {
+          "type": "boolean",
+          "description": "evidence or a scenario needs the built app running"
+        },
+        "officialData": {
+          "type": "boolean",
+          "description": "figures must come from the official test data replayed on the fixed source"
+        }
+      },
+      "required": [
+        "investigation",
+        "crossModule",
+        "uiChange",
+        "needsRunningApp",
+        "officialData"
+      ]
+    }
+  },
+  "required": [
+    "form",
+    "summary",
+    "grading",
+    "deliverables",
+    "evidence",
+    "scenarios",
+    "constraints",
+    "dependsOn",
+    "deadlineMinutes",
+    "workload"
+  ]
+}

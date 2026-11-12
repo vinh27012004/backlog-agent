@@ -33,6 +33,12 @@ the company standard it names) and writes the worker brief to .team-work/items/<
 prepare_item, company tools or read skills for this. Only when nextActions still offers prepare_item (the automatic
 attempt failed) call prepare_item yourself, one per exec.
 
+When nextActions offers spawn_analyst, call spawn_agent with exactly its `spawn` object (agent_type team_analyst, a
+cheap model): the analyst reads the item and hands the helper a profile of it, which the helper checks, adds to the
+worker brief and uses to choose the worker's model. Spawn it at once, with the other spawns of the same turn, and do
+nothing else for that item: spawn_worker for it appears when the profile is accepted, or after its deadline with the
+default brief. The analyst ends by itself; never message it, wait for it or read its reply.
+
 When nextActions offers spawn_worker, call spawn_agent with exactly its `spawn` object (task_name, agent_type
 team_fixer, fork_turns "none", model, reasoning_effort, message pointing to the brief). Spawn every spawn_worker in
 the same turn using parallel tool calls, PI first; do not call worker_checkpoint resume after spawning. The helper

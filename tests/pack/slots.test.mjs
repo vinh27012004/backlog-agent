@@ -76,6 +76,9 @@ test('the newest fix-result not yet a candidate is reported once as FIX_RESULT a
   const rt = runtime([row('CR-01', 'started'), row('BUG-01', 'started'), row('TASK-02', 'started'), row('BUG-02', 'submitted')]);
   const teamWork = tempDir('mtm-results-');
   rt.session.paths = { teamWork };
+  // Thông báo fix-result cho root chỉ còn khi helper không tự publish loại item đó.
+  const baseCfg = rt.runtimeConfig.bind(rt);
+  rt.runtimeConfig = () => ({ ...baseCfg(), autoPublishAll: false });
   rt.session.descriptor = { matchId: 'M1' };
   const results = join(teamWork, 'results');
   mkdirSync(results);

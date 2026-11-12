@@ -95,6 +95,16 @@ const ROUTE_QUESTIONS = {
     strong: 'needs investigation or design, high impact radius or cross-module changes, or a high-risk domain (kb_insights.risk_factors)' })
 };
 
+const PLAN_QUESTIONS = {
+  model: ROUTE_QUESTIONS.model,
+  effort: choice('How much reasoning effort does this work need?', {
+    medium: 'little to investigate: fields derived from given data, or one clear change in one module, no hidden tests',
+    high: 'investigation or design, several modules, hidden tests, or exact figures from replayed data' }),
+  order: choice('What should the worker do first?', {
+    evidence_first: 'the item has its own deadline and needs page screenshots or a browser replay: get the page running and captured before polishing',
+    code_first: 'no deadline pressure on evidence: change and test first, capture afterwards' })
+};
+
 export class Decider {
   constructor(jev, { logFile = null } = {}) {
     this.jev = jev;
@@ -222,6 +232,29 @@ export class Decider {
     const route = this.routeFrom(type, triage.difficulty.value, answers ?? {}, err, signals);
     for (const d of [...Object.values(triage), ...Object.values(route)]) this.record(key, d, ms);
     return { triage, route };
+  }
+
+  // 2b. Kế hoạch từ hồ sơ đề của team_analyst (match/profile.mjs profileForJev): Jev đọc JSON gọn thay cho đầu/cuối
+  // của đề, chọn tier model, effort và việc làm trước. Sàn ở code: BUG/CR/PI và item hard luôn strong (routeFrom); đề có
+  // hidden tests hoặc chấm khả năng phát hiện lỗi luôn effort high; item có hạn cần ảnh trang luôn evidence_first.
+  async plan(key, profile, { difficulty = 'medium', signals = null } = {}) {
+    const type = typeOf(key);
+    const { answers, err, ms } = await this.ask(PLAN_QUESTIONS, this.fit({ item_type: type, difficulty, profile }, undefined));
+    const a = answers ?? {};
+    const { model } = this.routeFrom(type, difficulty, a, err, signals);
+    const grading = new Set(profile?.grading ?? []);
+    const light = ['answer_only', 'report_only'].includes(profile?.form);
+    let effort = this.pickChoice('effort', a.effort, err, () => (light ? 'medium' : 'high'), new Set(['medium', 'high']));
+    if (effort.value === 'medium' && (grading.has('hidden_tests') || grading.has('detection'))) {
+      effort = { ...effort, value: 'high', source: 'rule', reason: 'hidden tests or detection grading always get high effort' };
+    }
+    const pages = (profile?.evidence ?? []).includes('screenshot') || grading.has('browser_replay');
+    const urgent = Number.isFinite(profile?.deadlineMinutes) && pages;
+    let order = this.pickChoice('order', a.order, err, () => (urgent ? 'evidence_first' : 'code_first'), new Set(['evidence_first', 'code_first']));
+    if (urgent && order.value !== 'evidence_first') order = { ...order, value: 'evidence_first', source: 'rule', reason: 'a deadline item that needs page evidence captures it first' };
+    const out = { model, effort, order };
+    for (const d of Object.values(out)) this.record(key, d, ms);
+    return out;
   }
 
   // 3. PI: nguyên nhân gốc đã được chứng minh chưa. Điều kiện code là bắt buộc; Jev chỉ có quyền phủ quyết, "có" của

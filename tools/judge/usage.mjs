@@ -103,7 +103,7 @@ const roleOf = m => m.agent_role ?? (m.thread_source === 'guardian_review' || m.
 export function parseTranscript(file, keys = []) {
   const t = { file, id: null, sessionId: null, parent: null, role: null, agentPath: null, item: null, model: null, effort: null, serviceTier: null,
     start: null, end: null, busyMs: 0, tokens: zero(), calls: 0, maxContext: 0, quota: { first: null, last: null, plan: null },
-    limitErrors: 0, limitAt: null, triggers: {}, warnings: 0 };
+    limitErrors: 0, limitAt: null, matchEnd: null, triggers: {}, warnings: 0 };
   // Thread không có khoá item trong agent_path (NBDB5U0O: /root/pi_worker, /root/review01): lấy item được nhắc nhiều
   // nhất trong lời gọi tool và tin nhắn giao việc (backlogItemKey, results/<ID>-…, items/<ID>/, answers/<ID>/).
   const votes = new Map();
@@ -141,6 +141,12 @@ export function parseTranscript(file, keys = []) {
         bump(label).calls++;
       } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
         trigger = callLabel.get(p.call_id) ?? 'tool';
+        // Giờ hết trận theo state của helper (wait_for_update/next_actions: "status":"IN_PROGRESS","minutesLeft":7):
+        // transcript có thể dừng sớm hơn (BI7A5ACV: hết hạn mức Codex khi trận còn 7 phút).
+        if (t.role === 'root' && Number.isFinite(ts)) {
+          const left = [...JSON.stringify(p.output ?? '').matchAll(/status\\*"\s*:\s*\\*"[A-Z_]+\\*"\s*,\s*\\*"minutesLeft\\*"\s*:\s*([\d.]+)/g)].pop()?.[1];
+          if (left !== undefined) t.matchEnd = new Date(ts + Number(left) * 60_000).toISOString();
+        }
       } else if (p.type === 'message' && p.role === 'user') {
         const text = contentText(p.content);
         if (t.role === 'guardian') {
@@ -334,6 +340,8 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
   const limitErrors = threads.reduce((a, t) => a + t.limitErrors, 0);
   const from = Math.min(...threads.map(t => t.start ?? Infinity));
   const to = Math.max(...threads.map(t => t.end ?? 0));
+  const matchEnd = threads.filter(t => t.role === 'root' && t.matchEnd).map(t => t.matchEnd).sort().pop() ?? null;
+  const cutShort = matchEnd && Date.parse(matchEnd) - to > 60_000;
 
   const target = join(out ?? join(REPO, 'runs', 'judge', matchId), '_usage');
   mkdirSync(target, { recursive: true });
@@ -359,7 +367,8 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
     tok(t.tokens.input_tokens), tok(t.tokens.output_tokens), tok(t.maxContext)]);
   const md = [
     `# Token và thời gian: ${matchId}`, '',
-    `${rootThreads.length} phiên root, ${threads.length} transcript, ${hhmm(from)} → ${hhmm(to)} (${dur(to - from)}).`,
+    `${rootThreads.length} phiên root, ${threads.length} transcript, ${hhmm(from)} → ${hhmm(to)} (${dur(to - from)}).` +
+      (cutShort ? ` **Transcript dừng trước khi hết trận**: theo helper trận hết khoảng ${hhmm(Date.parse(matchEnd))} (${dur(Date.parse(matchEnd) - from)} từ đầu), còn ${dur(Date.parse(matchEnd) - to)}.` : ''),
     `Tổng: **${tok(total.input_tokens)} input** (${pct(total.cached_input_tokens, total.input_tokens)} cache), ` +
       `${tok(total.output_tokens)} output (reasoning ${tok(total.reasoning_output_tokens)}), ≈ ${cr(totalCredits)} credit ` +
       `theo price card \`${codexStandardPriceCard.id}\`${unpriced.length ? ` (không tính model ngoài price card: ${unpriced.join(', ')})` : ''}.`,
@@ -391,7 +400,7 @@ export function usageMatch(checkoutRoot, { sessionsDir = null, rootId = null, ou
   const report = join(target, 'usage.md');
   writeFileSync(report, md);
   const summary = { matchId, sessionsDir: dir, roots: rootThreads.map(t => t.id), transcripts: threads.length, window: { from, to },
-    total, credits: totalCredits, unpriced, quota: { ...quota, limitAt, limitErrors }, byRole, items, release: { skewMs: release.skewMs, polled: release.polled }, rootTriggers, guardian: guardianBy,
+    total, credits: totalCredits, unpriced, quota: { ...quota, limitAt, limitErrors }, matchEnd, byRole, items, release: { skewMs: release.skewMs, polled: release.polled }, rootTriggers, guardian: guardianBy,
     threads: threads.map(({ file, triggers, ...t }) => ({ ...t, file: basename(file) })) };
   writeFileSync(join(target, 'usage.json'), `${JSON.stringify(summary, null, 2)}\n`);
   return { out: target, report, ...summary };

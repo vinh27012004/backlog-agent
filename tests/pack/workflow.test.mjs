@@ -26,6 +26,8 @@ function fixture(key = 'BUG-01', answerOnly = false, files = {}) {
   sh('git', ['add', 'M1'], checkout); sh('git', ['commit', '-q', '-m', 'seed'], checkout); sh('git', ['push', '-q', 'origin', 'HEAD:main'], checkout);
   localRuntime(root, {});
   const rt = new Runtime({ teamWorkspace: root }), teamWork = join(checkout, '.team-work'); mkdirSync(teamWork);
+  // Các test ở đây đi đường root publish (đường dự phòng); helper tự publish mọi loại item có test riêng ở cuối file.
+  const cfg0 = rt.runtimeConfig.bind(rt); rt.runtimeConfig = () => ({ ...cfg0(), autoPublishAll: false });
   rt.session.paths = { checkoutRoot: checkout, matchRoot: join(checkout, 'M1'), teamWork }; rt.session.phase = 'GAME'; rt.session.require = () => {};
   rt.session.descriptor = { matchId: 'M1', repository: { branch: 'main' } }; rt.journalObj = new Journal(teamWork);
   rt.writer = { state: { backlogs: { [key]: { status: 'IN_PROGRESS' } }, blockers: {}, bytes: 0 }, events: [], write(e) { this.events.push(e); if (e.type === 'BACKLOG_STATUS') this.state.backlogs[key].status = e.status; } };
@@ -135,6 +137,8 @@ test('prepare is idempotent and returns worker brief inputs without repeating St
 // và đưa sẵn đối số spawn_agent vào nextActions.
 test('the helper prepares a new item itself once, prefetches company facts, writes the brief and hands root the spawn arguments', async () => {
   const f = fixture('CR-01');
+  const base = f.rt.runtimeConfig.bind(f.rt);
+  f.rt.runtimeConfig = () => ({ ...base(), analyst: false });   // luồng analyst có test riêng ở cuối file
   Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
   f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: f.ji.prepared ? 'started' : 'todo', minutesLeft: 30 }];
   f.rt.gm.view.items[0].raw = { title: 'Export the filtered invoice list as CSV', points: 140,
@@ -1485,4 +1489,109 @@ test('candidate refuses tool caches under node_modules/', async () => {
   writeFileSync(join(f.wt.matchRoot, 'node_modules', '.vite', 'vitest', 'results.json'), '{}');
   const { problems } = await f.rt.workflow.handoffCheck('BUG-01');
   assert.ok(problems.some(p => /^files under node_modules\/ would be committed: M1\/node_modules\. They are a tool cache/.test(p)), JSON.stringify(problems));
+});
+
+// BI7A5ACV TASK-08: bàn giao khi mutants còn hoàn tác một chỗ sửa trong worktree; root cho làm lại, bản sau xong khi
+// đã hết credit. Từ chối mọi lúc, kể cả sát return_by.
+test('candidate refuses while the mutation check is running, whatever the time left', async () => {
+  const f = fixture('BUG-01');
+  f.result(1);
+  f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 60_000).toISOString() } };
+  const file = join(f.rt.session.paths.teamWork, 'items', 'BUG-01', 'mutants.json');
+  writeFileSync(file, JSON.stringify({ state: 'running', pid: process.pid, runId: 'r-1', hunks: [] }));
+  const { problems } = await f.rt.workflow.handoffCheck('BUG-01');
+  assert.ok(problems.some(p => /^the mutation check is still running and has one of your changes undone/.test(p)), JSON.stringify(problems));
+  writeFileSync(file, JSON.stringify({ state: 'done', pid: process.pid, runId: 'r-1', hunks: [] }));
+  assert.ok(!(await f.rt.workflow.handoffCheck('BUG-01')).problems.some(p => /mutation check/.test(p)));
+});
+
+// Hồ sơ đề: team_analyst đọc đề trước, helper kiểm rồi mới spawn fixer (BI7A5ACV: mutants chạy trên 8 item trong khi
+// chỉ TASK-08 chấm khả năng phát hiện lỗi; phân tích đề bằng regex không đủ tin).
+function analystFixture() {
+  const f = fixture('CR-01');
+  f.base = f.ji.worktreeBase;
+  Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
+  f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: f.ji.prepared ? 'started' : 'todo', minutesLeft: 30 }];
+  f.rt.gm.view.items[0].raw = { title: 'Export the filtered invoice list as CSV', points: 140,
+    descriptionMd: '## Requirements\nAdd `src/export.js` and report the row count in `rowCount`.\n## Grading\nHidden tests check the export in many more cases. The grader runs the tests itself on your submitted revision.\n' };
+  f.rt.startWork = async () => ({ type: 'CR', triage: { models: { fixer: [{ model: 'gpt-6.1-sol', reasoning_effort: 'high' }] } },
+    materialsDir: join(f.rt.session.paths.teamWork, 'items', f.key), files: [], timeBox: { returnBy: '2099-11-04T05:00:00.000Z' }, requirements: [], baselineFailures: null });
+  f.rt.worktree = async () => ({ ...f.wt, issuedRevision: 'abc123', setupJobId: f.rt.jobs.start('worktree_setup', async () => ({ ok: true })).id });
+  f.rt.company.list = async () => [];
+  f.rt.company.invoke = async () => ({ content: [{ type: 'text', text: 'x' }] });
+  return f;
+}
+const PROFILE = () => ({
+  form: 'feature', summary: 'Export module and the row count of the export.',
+  grading: [{ aspect: 'hidden_tests', quote: 'Hidden tests check the export in many more cases' },
+    { aspect: 'team_tests_pass', quote: 'The grader runs the tests itself on your submitted revision' }],
+  deliverables: { sourceFiles: [{ path: 'src/export.js', quote: 'Add src/export.js' }], testLocation: null,
+    answerFields: [{ name: 'rowCount', type: 'integer', exact: false, quote: 'report the row count in rowCount' }] },
+  evidence: [], scenarios: ['TC-1'], constraints: [], dependsOn: [], deadlineMinutes: null,
+  workload: { investigation: 'code', crossModule: false, uiChange: false, needsRunningApp: false, officialData: false } });
+
+test('the analyst is spawned first; its accepted profile goes into the brief and only then the fixer is offered', async () => {
+  const f = analystFixture(), wf = f.rt.workflow;
+  wf.autoPrepare();
+  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
+  assert.equal(f.ji.analysis.state, 'pending');
+  const input = readFileSync(f.ji.analysis.file, 'utf8');
+  for (const re of [/<item>[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /phase: "profile"/]) assert.match(input, re);
+  const first = wf.offered(wf.actions()).nextActions;
+  assert.deepEqual(first.map(a => a.action), ['spawn_analyst']);
+  assert.deepEqual([first[0].spawn.task_name, first[0].spawn.agent_type], ['cr01_analyst', 'team_analyst']);
+  assert.deepEqual(wf.actions().nextActions, [], 'offered once: root is not woken again while the analyst reads');
+  // Trích dẫn bịa bị từ chối, fixer chưa được spawn.
+  const bad = PROFILE(); bad.grading.push({ aspect: 'detection', quote: 'Your tests are run against broken builds' });
+  const refused = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: bad });
+  assert.equal(refused.accepted, false); assert.match(refused.problems.join('\n'), /quotes not found word for word/);
+  assert.equal(f.ji.workerThread, undefined, 'the analyst is never registered as the worker of the item');
+  const ok = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: PROFILE() });
+  assert.equal(ok.accepted, true); assert.equal(f.ji.analysis.state, 'done');
+  const brief = readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8');
+  assert.match(brief, /<item_profile>[\s\S]*form: feature[\s\S]*hidden_tests: "Hidden tests check[\s\S]*mutation check: not graded for this item[\s\S]*<\/item_profile>/);
+  assert.match(brief, /<checklist>[\s\S]*submit\.json rowCount: integer, filled[\s\S]*src\/export\.js exists in your change[\s\S]*<\/checklist>\n\n<item>/);
+  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker']);
+  assert.equal(JSON.stringify(wf.profileOf(f.key)), JSON.stringify(PROFILE()));
+  // Hồ sơ nói đề không chấm khả năng phát hiện lỗi: không đòi mutants dù item sửa code có sẵn và thêm test.
+  Object.assign(f.ji, { worktreeBase: f.base, prepared: { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } } });
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
+  assert.equal(await wf.mutantGate(f.key), null);
+  // Checklist: trường trả lời trống và file đề nêu tên chưa có thì từ chối một lần, lần sau chỉ cảnh báo.
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', rowCount: null }));
+  const gate = await wf.checklistGate(f.key);
+  assert.match(gate.problem, /submit\.json rowCount is empty.*src\/export\.js is not in your change/);
+  assert.match((await wf.checklistGate(f.key)).warning, /accepted on the second handoff/);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'export.js'), 'export const rows = 1;\n');
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', rowCount: 3 }));
+  assert.equal(await wf.checklistGate(f.key), null);
+});
+
+test('no profile by the deadline: the fixer starts with the default brief and a late profile is dropped', async () => {
+  const f = analystFixture(), wf = f.rt.workflow;
+  wf.autoPrepare();
+  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
+  wf.offered(wf.actions());
+  f.ji.analysis.deadline = new Date(Date.now() - 1000).toISOString();
+  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker']);
+  assert.equal(f.ji.analysis.state, 'timeout');
+  const late = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: PROFILE() });
+  assert.equal(late.accepted, false); assert.equal(late.late, true);
+  assert.equal(wf.profileOf(f.key), null);
+  assert.doesNotMatch(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /^<item_profile>$/m);
+  // PI và item chỉ trả lời không qua analyst.
+  assert.equal(fixture('PI-03').rt.workflow.analystFor('PI-03'), false);
+});
+
+// BI7A5ACV: root publish mất một lượt model và một lượt guardian cho mỗi item (17 lần), CR-08 chờ root 3 phút.
+test('the helper publishes every item type itself; with autoPublishAll off only PI and answer-only items', async () => {
+  const f = fixture('BUG-01'), wf = f.rt.workflow;
+  const act = { key: 'BUG-01', action: 'publish_item', arguments: { fixResultFile: f.result(1) } };
+  assert.equal(wf.helperPublishes(act), false, 'fixture default: the root path');
+  const base = f.rt.runtimeConfig.bind(f.rt);
+  f.rt.runtimeConfig = () => ({ ...base(), autoPublishAll: true });
+  assert.equal(wf.helperPublishes(act), true, 'a BUG handoff is published by the helper');
+  assert.equal(wf.helperPublishes({ ...act, action: 'spawn_worker' }), false);
+  f.ji.autoPublished = wf.publishMark(act);
+  assert.equal(wf.helperPublishes(act), false, 'once per handoff: a failed publish goes back to root');
 });

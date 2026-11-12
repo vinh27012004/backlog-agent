@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { answerCheck, itemEvidence, itemRequirements, mvsEvidence, requirementsCheck, scenarioCounts } from '../../pack/src/match/answers.mjs';
+import { answerCheck, itemEvidence, itemRequirements, mojibake, mvsEvidence, requirementsCheck, reshapedTimestamps, scenarioCounts } from '../../pack/src/match/answers.mjs';
 import { validateSchema } from '../../pack/src/core/jsonschema.mjs';
 import { tempDir } from './support.mjs';
 
@@ -179,4 +179,35 @@ test('a file the item text requires must be captured and listed in evidenceFiles
   assert.match(unlisted.problems.join('\n'), /evidenceFiles lacks evidence\/dashboard_before_fixing\.png/);
   writeAnswer(r, { ...GOOD, evidenceFiles: [...GOOD.evidenceFiles, 'evidence/dashboard_before_fixing.png'] });
   assert.deepEqual(answerCheck(join(r.root, 'M1'), 'BUG-09', TEMPLATE, SCHEMA, null, required).problems, []);
+});
+
+// BI7A5ACV CR-07 (Python read_text() không encoding: auditSummary "Váº­n chuyá»ƒn", −10) và PI-04 (PowerShell
+// ConvertFrom-Json: firstDuplicateTs "…23.000Z" thành "…23Z", −12): field so khớp chính xác.
+test('mojibake: UTF-8 read as Windows-1252 is found, real text is not', () => {
+  assert.equal(mojibake('Váº­n chuyá»ƒn'), 'Vận chuyển');
+  assert.equal(mojibake('Quá»¹ dá»± phÃ²ng'), 'Quỹ dự phòng');
+  assert.equal(mojibake('NguyÃªn liá»‡u'), 'Nguyên liệu');
+  for (const ok of ['Vận chuyển', 'Nguyên liệu', 'café', 'naïve résumé', 'Thuế phí', 'plain ascii', '−12,00', '']) assert.equal(mojibake(ok), null, ok);
+});
+
+test('a timestamp written in another form than the evidence has is found', () => {
+  const evidence = '{"ts":"2025-12-08T15:56:23.000Z","message":"schedule.posted"}\n{"ts":"2025-12-08T15:58:01.000Z"}';
+  assert.deepEqual(reshapedTimestamps({ firstDuplicateTs: '2025-12-08T15:56:23Z' }, evidence), [{ value: '2025-12-08T15:56:23Z', found: '2025-12-08T15:56:23.000Z' }]);
+  assert.deepEqual(reshapedTimestamps({ firstDuplicateTs: '2025-12-08T15:56:23.000Z' }, evidence), [], 'as found');
+  assert.deepEqual(reshapedTimestamps({ firstDuplicateTs: '2025-12-08T15:57:00Z' }, evidence), [], 'no same-instant form: not ours to judge');
+  assert.deepEqual(reshapedTimestamps({ timeline: ['2025-12-08T15:56:23Z first duplicate'] }, evidence), [], 'free text is not a timestamp field');
+  assert.deepEqual(reshapedTimestamps({ firstDuplicateTs: '2025-12-08T15:56:23Z' }, ''), []);
+});
+
+test('answerCheck refuses garbled text and reshaped timestamps in submit.json', () => {
+  const r = repo();
+  const dir = join(r.root, 'M1', 'answers', 'BUG-09');
+  writeFileSync(join(dir, 'evidence', 'tc-01.png'), 'png');
+  writeFileSync(join(dir, 'evidence', 'derive.log'), '{"firstDuplicateTs":"2025-12-08T15:56:23.000Z"}');
+  writeAnswer(r, { ...GOOD, firstTs: '2025-12-08T15:56:23Z', summary: { categories: [{ name: 'Váº­n chuyá»ƒn' }] } });
+  const problems = answerCheck(join(r.root, 'M1'), 'BUG-09', TEMPLATE, null).problems.join('\n');
+  assert.match(problems, /^submit\.json text is UTF-8 read as Windows-1252: "Váº­n chuyá»ƒn" should be "Vận chuyển"/m);
+  assert.match(problems, /^submit\.json timestamp not as found: "2025-12-08T15:56:23Z" where your evidence has "2025-12-08T15:56:23\.000Z"/m);
+  writeAnswer(r, { ...GOOD, firstTs: '2025-12-08T15:56:23.000Z', summary: { categories: [{ name: 'Vận chuyển' }] } });
+  assert.deepEqual(answerCheck(join(r.root, 'M1'), 'BUG-09', TEMPLATE, null).problems, []);
 });
