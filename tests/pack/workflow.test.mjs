@@ -1601,6 +1601,91 @@ test('the wave report adds dependencies and shared files; a waiting item holds i
   assert.equal(wf.dependencyHold(f.key, { minutesLeft: 30 }), null, 'the waited-for item is on main');
 });
 
+// WQ7T6CEC: PI prepare xong sau 15 s, các đề code cùng phút sau 50 s; trần gom 20 s tách release-7 thành hai đợt.
+test('items released in the same minute make one wave while one still prepares; after 90 s a late one opens a follow-up wave', async () => {
+  const f = analystFixture(), wf = f.rt.workflow;
+  f.rt.gm.view.items[0].revealedElapsedSec = 425;
+  const add = (key, sec) => f.rt.gm.view.items.push({ key, status: 'OPEN', revealedElapsedSec: sec, raw: { descriptionMd: `Fix ${key}.` } });
+  const slowPrepare = key => {
+    let finish;
+    const job = f.rt.jobs.start('prepare_item', () => new Promise(res => { finish = res; }), { key });
+    f.rt.journal.item(key).prepareJobId = job.id;
+    return () => { finish({}); return job.promise; };
+  };
+  add('BUG-02', 440);
+  const done02 = slowPrepare('BUG-02');
+  wf.autoPrepare();
+  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
+  const w = f.rt.journal.data.waves[f.ji.analysis.wave];
+  assert.equal(w.id, 'release-7');
+  w.firstReadyAt = new Date(Date.now() - 60_000).toISOString();
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'a minute after the first item the wave still waits for BUG-02');
+  wf.joinWave('BUG-02');
+  await done02();
+  const first = wf.offered(wf.actions()).nextActions.find(a => a.action === 'spawn_analyst');
+  assert.deepEqual([first.wave, first.items], ['release-7', ['CR-01', 'BUG-02']]);
+  // Đợt đã đưa cho analyst: đề cùng phút prepare xong sau đó vào đợt nối; đợt nối chờ đề còn prepare tối đa 90 s.
+  add('CR-03', 450); add('CR-04', 455);
+  const done03 = slowPrepare('CR-03');
+  const next = wf.joinWave('CR-04');
+  assert.equal(next.id, 'release-7+2');
+  next.firstReadyAt = new Date(Date.now() - 60_000).toISOString();
+  assert.ok(!wf.actions().nextActions.some(a => a.wave === 'release-7+2'));
+  next.firstReadyAt = new Date(Date.now() - 91_000).toISOString();
+  const capped = wf.actions().nextActions.find(a => a.wave === 'release-7+2');
+  assert.deepEqual(capped.items, ['CR-04'], 'after 90 s the wave goes without the item still preparing');
+  assert.equal(wf.joinWave('CR-03').id, 'release-7+3');
+  await done03();
+});
+
+// WQ7T6CEC: file dùng chung là phần dùng được của báo cáo đợt, mà helper biết chắc từ các worktree đang làm.
+test('items in work that change the same file hear it at ready_for_evidence, again only when the overlap changes', async () => {
+  const f = fixture('CR-01'), wf = f.rt.workflow;
+  f.ji.workerThread = '/root/cr01';
+  f.rt.runChecks = async () => ({ state: 'running', runId: 'r-1' });
+  const other = f.rt.wtPaths('BUG-02');
+  sh('git', ['worktree', 'add', '-q', '--detach', other.worktreeRoot, 'HEAD'], f.checkout);
+  const bug = f.rt.journal.item('BUG-02');
+  Object.assign(bug, { startedAt: new Date().toISOString(), worktreeBase: f.ji.worktreeBase });
+  writeFileSync(join(other.matchRoot, 'src', 'lib.js'), 'export const value=1;\nexport const extra=1;\n');
+  mkdirSync(join(other.matchRoot, 'answers', 'BUG-02'), { recursive: true });
+  writeFileSync(join(other.matchRoot, 'answers', 'BUG-02', 'submit.json'), '{}');
+  assert.deepEqual(await wf.inFlightOverlap(f.key), [{ file: 'src/lib.js', items: ['BUG-02'] }], 'answers/ is not a shared file');
+  const ready = () => f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  const res = await ready();
+  assert.match(res.analysis, /Files other items are changing right now too: src\/lib\.js \(BUG-02\); in those files only add new lines, never edit or reorder an existing line/);
+  assert.equal((await ready()).analysis, undefined, 'the same overlap is not repeated');
+  writeFileSync(join(f.wt.matchRoot, 'src', 'routes.js'), 'export const a = 1;\n');
+  writeFileSync(join(other.matchRoot, 'src', 'routes.js'), 'export const b = 1;\n');
+  assert.match((await ready()).analysis, /right now too: src\/lib\.js \(BUG-02\), src\/routes\.js \(BUG-02\);/);
+  // Bàn giao: chỉ cảnh báo, không từ chối.
+  f.result(1);
+  const handoff = await f.rt.workflow.candidateCheckpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.ok(handoff.warnings.some(w => /other items in work change the same files right now: src\/lib\.js \(BUG-02\), src\/routes\.js \(BUG-02\)/.test(w)), JSON.stringify(handoff));
+  assert.ok(!(handoff.problems ?? []).some(p => /same files/.test(p)));
+  // Bản sửa helper chép từ CR-01 sang BUG-02 không phải chỗ trùng; đề đã nộp thì không còn tính.
+  bug.sharedFix = { from: 'CR-01', files: ['M1/src/routes.js'] };
+  assert.deepEqual(await wf.inFlightOverlap(f.key), [{ file: 'src/lib.js', items: ['BUG-02'] }]);
+  bug.receipt = { id: 'r-2' };
+  assert.deepEqual(await wf.inFlightOverlap(f.key), []);
+});
+
+test('the analysis input lists the files triage points to and what earlier items in work changed so far', async () => {
+  const f = analystFixture(), wf = f.rt.workflow;
+  f.ji.signals = { code: { terms: ['rowCount'], files: 2, modules: 1, test_files: 0, sample: ['src/export.js', 'src/lib.js'] } };
+  const other = f.rt.wtPaths('BUG-02');
+  sh('git', ['worktree', 'add', '-q', '--detach', other.worktreeRoot, 'HEAD'], f.checkout);
+  Object.assign(f.rt.journal.item('BUG-02'), { startedAt: new Date().toISOString(), worktreeBase: f.base });
+  writeFileSync(join(other.matchRoot, 'src', 'totals.js'), 'export const total = 0;\n');
+  wf.autoPrepare();
+  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
+  await wf.liveRefresh;
+  wf.actions();
+  const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
+  assert.match(input, /<item_input id="CR-01"[\s\S]*<likely_files>\nsrc\/export\.js\nsrc\/lib\.js\n<\/likely_files>\n<\/item_input>/);
+  assert.match(input, /<earlier_items>\nBUG-02: in work; changed so far src\/totals\.js\n<\/earlier_items>/);
+});
+
 test('an item whose files reached main through an item that waited for it keeps its own version at sync', async () => {
   const f = fixture('CR-05'), file = join('M1', 'src', 'lib.js'), added = join('M1', 'src', 'month-close.js');
   const land = (rel, text, message) => { writeFileSync(join(f.checkout, rel), text); sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', message], f.checkout); };
