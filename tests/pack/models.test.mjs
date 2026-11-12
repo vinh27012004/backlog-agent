@@ -60,3 +60,21 @@ test('every pick is allowed; unknown models give null and no policy gives no pla
   }
   assert.equal(modelPlan({ type: 'BUG', modelTier: 'small', deadline: false, allowed: undefined }), null);
 });
+
+// 12/11: thử model, mọi item luna, chỉ PI 6.1-sol, bằng team-sdlc-pack/local/models.json.
+test('fixerTiers in local/models.json gives every attempt of a type one tier; without it the ladder is unchanged', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const local = mkdtempSync(join(tmpdir(), 'mtm-models-'));
+  assert.equal(loadModelsConfig(local).fixerTiers, undefined, 'no local file: pack default');
+  writeFileSync(join(local, 'models.json'), JSON.stringify({ fixerTiers: { PI: 'strong', default: 'cheap' } }));
+  const cfg = loadModelsConfig(local);
+  for (const type of ['BUG', 'CR', 'TASK']) {
+    assert.deepEqual(names(modelPlan({ type, modelTier: 'strong', deadline: true, allowed: ENTERPRISE, cfg })), Array(3).fill('gpt-6-luna/medium'), type);
+  }
+  assert.deepEqual(names(modelPlan({ type: 'PI', modelTier: 'cheap', deadline: true, allowed: ENTERPRISE, cfg })), Array(4).fill('gpt-6.1-sol/high'));
+  assert.deepEqual(names(modelPlan({ type: 'PI', modelTier: 'cheap', deadline: false, allowed: FREE, cfg })), Array(4).fill('gpt-6-luna/medium'), 'a tier missing from allowedModels falls back as before');
+  writeFileSync(join(local, 'models.json'), '{ broken');
+  assert.equal(loadModelsConfig(local).fixerTiers, undefined, 'a broken local file is ignored');
+});

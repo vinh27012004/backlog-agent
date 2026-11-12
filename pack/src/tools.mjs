@@ -14,7 +14,7 @@ import { dedicatedAppDatabase, detectProfile, dropWorktreeDatabases, prepareWork
 import { unlinkNodeModules } from './env/linked-modules.mjs';
 import { bulkSearch, planSize, searchLogsHelp } from './match/logs.mjs';
 import { setupInputFile } from './env/setup-cache.mjs';
-import { modelPlan } from './decide/models.mjs';
+import { loadModelsConfig, modelPlan } from './decide/models.mjs';
 import { answerOnlyText, itemSignals } from './decide/signals.mjs';
 import { EventQueue } from './core/events.mjs';
 import { GameMaster } from './match/game.mjs';
@@ -1737,7 +1737,8 @@ export class Runtime {
   // không gửi MTM_MODEL_POLICY_V1.
   spawnModels(key, modelTier) {
     const item = this.gm.view?.items.find(i => i.key === key);
-    return modelPlan({ type: typeOf(key), modelTier, deadline: Boolean(item?.deadlineMinutes), allowed: this.session.models?.allowedModels });
+    return modelPlan({ type: typeOf(key), modelTier, deadline: Boolean(item?.deadlineMinutes), allowed: this.session.models?.allowedModels,
+      cfg: loadModelsConfig(this.session.paths?.local ?? null) });
   }
 
   async decide({ point, backlogItemKey: key, context = {} }) {
