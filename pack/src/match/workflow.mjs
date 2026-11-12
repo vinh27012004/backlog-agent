@@ -48,9 +48,19 @@ export function normalizeResultPart(part) {
   return out;
 }
 const WAVE_SCHEMA_FILE = fileURLToPath(new URL('../../contracts/wave-report.schema.json', import.meta.url));
-// Gom các đề cùng đợt cho một analyst: chờ tối đa chừng này từ lúc đề đầu tiên của đợt prepare xong.
-const WAVE_GATHER_MS = 20_000;
+// Gom các đề cùng đợt cho một analyst: chờ mọi đề ra cùng phút prepare xong, tối đa chừng này từ lúc đề đầu tiên của
+// đợt prepare xong (WQ7T6CEC: PI prepare 15 s, các đề code cùng phút 50 s; trần cũ 20 s tách thành release-7 và
+// release-7+2). Thợ không chờ analyst nên chờ lâu hơn chỉ làm hồ sơ đến muộn hơn.
+const WAVE_GATHER_MAX_MS = 90_000;
+// Số đường dẫn tối đa mỗi đề trong file đầu vào của analyst (<likely_files>, file đề đợt trước đã đổi).
+const WAVE_FILES_MAX = 15;
 const FIX_RESULT_SCHEMA = JSON.parse(readFileSync(FIX_RESULT_SCHEMA_FILE, 'utf8'));
+// Chỗ trùng giữa các worktree đang làm: chữ cho thợ, và dấu để chỉ báo lại khi tập trùng đổi.
+const overlapText = list => list.slice(0, 10).map(o => `${o.file} (${o.items.join(', ')})`).join(', ') + (list.length > 10 ? ', …' : '');
+const overlapMark = list => list.map(o => `${o.file}:${o.items.join(',')}`).join('|');
+// File mà tín hiệu triage chỉ tới (git grep từ khoá của đề trên checkout chính, decide/signals.mjs), tương đối thư mục trận.
+const likelyFiles = signals => [...new Set((Array.isArray(signals?.code?.sample) ? signals.code.sample : [])
+  .filter(p => typeof p === 'string' && p && !isAbsolute(p) && !p.split(/[\\/]/).includes('..')))].slice(0, WAVE_FILES_MAX);
 const samePath = (a, b) => Boolean(a && b) && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
 const textDigest = file => {
   try {
@@ -419,15 +429,70 @@ export class Workflow {
     const w = waves[id] ??= { id, n: Object.keys(waves).length + 1, items: [], state: 'open', firstReadyAt: new Date().toISOString() };
     if (!w.items.includes(key)) w.items.push(key);
     this.item(key).analysis = { wave: id, state: 'pending', since: new Date().toISOString(), attempts: 0 };
+    // File các đề đang làm đã đổi, cho <earlier_items> của file đầu vào (writeWaveFile đồng bộ, đọc ji.liveFiles).
+    this.refreshLiveFiles();
     return w;
   }
-  // Đợt sẵn sàng cho analyst: mọi đề cùng đợt đã prepare xong, hoặc đã 20 s từ đề đầu tiên (đề còn lại vào đợt nối).
+  // Đợt sẵn sàng cho analyst: không còn đề nào ra cùng phút đang prepare, hoặc đã WAVE_GATHER_MAX_MS từ đề đầu tiên
+  // (đề còn lại vào đợt nối).
   waveReady(w) {
     const r = this.rt, items = r.journal.data.items ?? {};
     const base = w.id.split('+')[0];
     const waiting = (r.gm.view?.items ?? []).some(i => i.status !== 'CLOSED' && this.waveOf(i.key) === base && !items[i.key]?.analysis
       && !items[i.key]?.endedAt && r.jobs.jobs.get(items[i.key]?.prepareJobId)?.state === 'running');
-    return !waiting || Date.now() - Date.parse(w.firstReadyAt) >= WAVE_GATHER_MS;
+    return !waiting || Date.now() - Date.parse(w.firstReadyAt) >= WAVE_GATHER_MAX_MS;
+  }
+  // ---------------------------------------------------------------- file các đề đang làm cùng đổi
+  // WQ7T6CEC: báo cáo đợt tìm được ít phụ thuộc; phần dùng được là file dùng chung, mà analyst chỉ đoán được từ chữ đề.
+  // Helper biết chắc mỗi worktree đang đổi file nào: so từng cặp đề đang làm, báo thợ ở ready_for_evidence và candidate.
+  // Đề đang làm: đã Start Work, chưa kết thúc, chưa nộp, chưa lên main, còn worktree.
+  inWork(key) {
+    const x = this.rt.journal.data.items?.[key];
+    return Boolean(x?.startedAt && x.worktreeBase && !x.endedAt && !x.receipt && !x.integratedAt) && this.rt.liveWorktree(key);
+  }
+  // File worktree của đề đã đổi so với base, trong thư mục trận và ngoài answers/, tương đối thư mục trận. Lưu vào
+  // ji.liveFiles cho file đầu vào của analyst (writeWaveFile viết đồng bộ).
+  async liveChanges(key) {
+    const r = this.rt, ji = r.journal.data.items?.[key];
+    if (!ji?.worktreeBase || !r.liveWorktree(key)) return [];
+    const folder = `${r.session.descriptor.matchId}/`;
+    const list = await changedFiles(r.wtPaths(key).worktreeRoot, ji.worktreeBase);
+    const files = [...new Set(list.filter(f => f.path.startsWith(folder)).map(f => f.path.slice(folder.length)).filter(p => !p.startsWith('answers/')))].sort();
+    ji.liveFiles = { files: files.slice(0, 200), at: new Date().toISOString() };
+    return files;
+  }
+  // Làm mới ji.liveFiles của mọi đề đang làm (mỗi lúc một lượt, không ai chờ).
+  refreshLiveFiles() {
+    const keys = Object.keys(this.rt.journal.data.items ?? {}).filter(k => this.inWork(k));
+    if (!keys.length) return null;
+    this.liveRefresh ??= Promise.all(keys.map(k => this.liveChanges(k).catch(() => [])))
+      .then(() => this.rt.journal.save()).catch(() => {}).finally(() => { this.liveRefresh = null; });
+    return this.liveRefresh;
+  }
+  // File mà đề này và các đề đang làm khác cùng đổi lúc này: [{file, items}]. Bỏ file của bản sửa helper chép giữa
+  // hai đề (sharedFix): đó là cùng một thay đổi, không phải hai.
+  async inFlightOverlap(key) {
+    const r = this.rt, items = r.journal.data.items ?? {};
+    if (!this.inWork(key)) return [];
+    const others = Object.keys(items).filter(k => k !== key && this.inWork(k));
+    if (!others.length) return [];
+    const [mine, ...theirs] = await Promise.all([key, ...others].map(k => this.liveChanges(k).catch(() => [])));
+    if (!mine.length) return [];
+    const folder = `${r.session.descriptor.matchId}/`;
+    const copied = (a, b) => (items[a]?.sharedFix?.from === b ? (items[a].sharedFix.files ?? []).map(p => (p.startsWith(folder) ? p.slice(folder.length) : p)) : []);
+    const sets = others.map((k, i) => {
+      const skip = new Set([...copied(k, key), ...copied(key, k)]);
+      return [k, new Set(theirs[i].filter(p => !skip.has(p)))];
+    });
+    return mine.map(file => ({ file, items: sets.filter(([, set]) => set.has(file)).map(([k]) => k).sort() })).filter(o => o.items.length);
+  }
+  // Tính lại chỗ trùng ở ready_for_evidence và lưu lên item để analysisNote (đồng bộ) báo thợ.
+  async refreshOverlap(key) {
+    const list = await this.inFlightOverlap(key).catch(() => null);
+    if (!list) return null;
+    this.item(key).overlap = { list: list.slice(0, 20), at: new Date().toISOString() };
+    this.rt.journal.save();
+    return list;
   }
   analystSpawnArgs(w, file) {
     const m = pickModel('strong', this.rt.session.models?.allowedModels ?? []);
@@ -466,11 +531,18 @@ export class Workflow {
       return [`<item_input id="${key}" type="${typeOf(key)}"${raw.points ? ` points="${raw.points}"` : ''}${deadline ? ` deadline_minutes="${deadline}"` : ''}>`,
         ...block('item', raw.descriptionMd ?? raw.description ?? ''), ...block('mvs', rest.join('\n\n---\n\n')),
         ...block('template', r.itemTemplate(key)), ...block('schema', r.itemSchema(key)),
-        ...block('scenario_ids', this.scenarioIds(key).join('\n') || 'none: scenarios must be []'), '</item_input>', ''];
+        ...block('scenario_ids', this.scenarioIds(key).join('\n') || 'none: scenarios must be []'),
+        ...block('likely_files', likelyFiles(items[key]?.signals).join('\n')), '</item_input>', ''];
     };
-    const earlier = Object.entries(items).filter(([k, x]) => !w.items.includes(k) && x.analysis?.state === 'done').map(([k]) => {
-      const p = this.profileOf(k);
-      return p ? `${k}: ${p.form}; ${p.summary}${p.deliverables.sourceFiles.length ? `; files ${p.deliverables.sourceFiles.map(f => f.path).join(', ')}` : ''}${p.dependsOn.length ? `; needs ${p.dependsOn.map(d => d.item).join(', ')}` : ''}` : null;
+    // Đề đợt trước: hồ sơ tóm tắt, và file worktree của đề đang làm đã đổi tới giờ (ji.liveFiles).
+    const changedSoFar = k => {
+      const files = this.inWork(k) ? items[k]?.liveFiles?.files ?? [] : [];
+      return files.length ? `changed so far ${files.slice(0, WAVE_FILES_MAX).join(', ')}${files.length > WAVE_FILES_MAX ? ', …' : ''}` : '';
+    };
+    const earlier = Object.entries(items).filter(([k, x]) => !w.items.includes(k) && (x.analysis?.state === 'done' || this.inWork(k))).map(([k]) => {
+      const p = this.profileOf(k), changed = changedSoFar(k);
+      const head = p ? `${k}: ${p.form}; ${p.summary}${p.deliverables.sourceFiles.length ? `; files ${p.deliverables.sourceFiles.map(f => f.path).join(', ')}` : ''}${p.dependsOn.length ? `; needs ${p.dependsOn.map(d => d.item).join(', ')}` : ''}` : changed ? `${k}: in work` : null;
+      return head && changed ? `${head}; ${changed}` : head;
     }).filter(Boolean);
     const others = (r.gm.view?.items ?? []).map(i => i.key).filter(k => !w.items.includes(k));
     const lines = [
@@ -610,6 +682,13 @@ export class Workflow {
     if (ji.sharedAreas?.length && !ji.sharedAreasDelivered) {
       ji.sharedAreasDelivered = new Date().toISOString();
       parts.push(`Files other items of this wave change too: ${ji.sharedAreas.map(a => `${a.files.join(', ')} (with ${a.with.join(', ')}: ${a.kind}${a.note ? `, ${a.note}` : ''})`).join('; ')}. In those files only add new lines, never edit or reorder an existing line: the helper merges additions from both sides at sync.`);
+    }
+    // File các worktree khác đang đổi thật (refreshOverlap ở ready_for_evidence): báo lại chỉ khi tập trùng đổi.
+    const overlap = ji.overlap?.list ?? [];
+    const mark = overlapMark(overlap);
+    if (overlap.length && ji.overlapDelivered !== mark) {
+      ji.overlapDelivered = mark;
+      parts.push(`Files other items are changing right now too: ${overlapText(overlap)}; in those files only add new lines, never edit or reorder an existing line: the helper merges additions from both sides at sync.`);
     }
     if (!parts.length) return null;
     this.rt.journal.save();
@@ -1122,6 +1201,8 @@ export class Workflow {
         hint: 'Not handed off: correct the result argument and call worker_checkpoint candidate again (nothing was written).' };
     }
     const { problems, warnings } = await this.handoffCheck(key);
+    const overlap = await this.inFlightOverlap(key).catch(() => []);
+    if (overlap.length) warnings.push(`other items in work change the same files right now: ${overlapText(overlap)}. Whichever reaches main second merges only added lines by itself; an edited or reordered existing line there stops its publish at a sync conflict`);
     if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
     if (parked.length) {
       warnings.unshift(`no product change came with your new tests (${parked.join(', ')}): they reproduce a defect this handoff does not fix, so they would fail every later commit's suite. The helper moved them to answers/${key}/evidence/unshipped-tests/; say in the engineering record that the fix is not in this revision`);
@@ -1249,6 +1330,8 @@ export class Workflow {
           ? 'Helper could not sync although nothing conflicts: stop every test, build or server you started in this worktree (kill the sessions you opened; app stop for the app), then call worker_checkpoint ready_for_evidence again. If it fails once more, end your turn with this error as your reply.'
           : 'Helper could not sync: stay yielded and end your turn with this error as your reply; root gets sync_before_evidence from the helper and sends a followup to resume.' };
     }
+    // File các đề đang làm khác cũng đổi, trên source vừa sync (analysisNote đưa cho thợ trong phản hồi này).
+    await this.refreshOverlap(key);
     // Sync vừa mang bản sửa baseline về: kết quả cả bộ test chạy trước đó không còn đúng với commit sẽ nộp.
     const baseline = !hadBaseline && ji.baselineFixIn && this.baselineApplies(key)
       ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
@@ -1751,7 +1834,7 @@ export class Workflow {
     const now = Date.now();
     const wake = [now + 55_000, Date.parse(r.releases()?.next?.at) + 1000,
       // Đợt đang gom đề cho analyst: thức dậy khi hết thời gian gom.
-      ...Object.values(r.journal.data.waves ?? {}).filter(w => w.state === 'open').map(w => Date.parse(w.firstReadyAt) + WAVE_GATHER_MS + 200),
+      ...Object.values(r.journal.data.waves ?? {}).filter(w => w.state === 'open').map(w => Date.parse(w.firstReadyAt) + WAVE_GATHER_MAX_MS + 200),
       ...rows.filter(x => items[x.key]?.startedAt && !items[x.key]?.endedAt && !items[x.key]?.receipt && x.minutesLeft !== null)
         .map(x => now + (x.minutesLeft - LAST_CALL_MINUTES) * 60_000 + 1000),
       ...rows.filter(x => !items[x.key]?.endedAt).map(x => Date.parse(items[x.key]?.prepared?.timeBox?.returnBy ?? x.returnBy)),

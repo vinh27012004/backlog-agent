@@ -57,6 +57,8 @@ Wave report (this is what one reader of all the items can see and a single worke
   mentions: an item that extends a page, handler or data set another item introduces depends on it.
 - sharedAreas: files or registration points two or more items will change (route tables, sidebar entries, handler
   registrations, the same function or data file). Name the files as far as the items let you tell; no quote needed.
+  <likely_files> in an <item_input> lists the files the helper's code search expects that item to touch (and
+  <earlier_items> the files earlier items have changed so far): use them to find the shared areas.
 - landingOrder: the items of this wave in the order their changes should reach main; an item others need comes first.
 Use [] where there is nothing; never invent a dependency to fill the report.
 '''
