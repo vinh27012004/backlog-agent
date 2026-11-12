@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { Runtime } from '../../pack/src/tools.mjs';
+import { Runtime, additiveMerge } from '../../pack/src/tools.mjs';
 import { itemDependencies, itemSkills, pageScripts } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
@@ -607,9 +607,12 @@ test('after code, tests and evidence the fix-result is published as is, with no 
   f.ji.workerThread = '/root/bug01'; f.ji.workerState = 'writing';
   const res = await checkpoint({ backlogItemKey: f.key, phase: 'ready_for_evidence', testsAdded: [] });
   assert.equal(res.writesAllowed, true, JSON.stringify(res)); assert.equal(res.preGateJobId, undefined, 'no pre-gate');
-  // Thiếu evidence bắt buộc: chỉ báo lại, vẫn nộp.
+  // Thiếu evidence bắt buộc: checklist của luật code từ chối đúng một lần, lần sau vẫn nộp.
   f.rt.itemEvidence = () => [{ file: 'shot.png', beforeFix: false }];
   const file = f.result(1);
+  const once = await checkpoint({ backlogItemKey: f.key, phase: 'candidate' });
+  assert.equal(once.handedOff, false);
+  assert.match(once.problems.join('\n'), /checklist of this item \(brief <checklist>\): evidence\/shot\.png is missing: the item requires it/);
   assert.equal((await checkpoint({ backlogItemKey: f.key, phase: 'candidate' })).handedOff, true);
   const next = f.rt.workflow.actions().nextActions.find(a => a.key === f.key);
   assert.deepEqual([next.action, next.arguments.fixResultFile], ['publish_item', file]);
@@ -1452,6 +1455,59 @@ test('sync keeps both additions when main and the item only added lines to the s
   assert.equal(mine(), before);
 });
 
+// 33R91I3Q CR-05, CR-08: hai đề thêm một import và một dòng trong `export type BudgetHandlers = {`, hai chỗ thêm cách nhau
+// hai dòng gốc; git merge-file --union chép hai dòng gốc đó hai lần và file hết biên dịch được (TS1131).
+test('additions around an unchanged line keep that line once', () => {
+  const base = "import * as notes from './template-notes';\n\nexport type BudgetHandlers = {\n  'budget/budget-amount': typeof setBudget;\n};\n\napp.method('get-categories', getCategories);\n";
+  const own = base.replace("\n\nexport", "\nimport { buildMonthClose } from './month-close';\n\nexport").replace("{\n", "{\n  'budget/month-close': typeof buildMonthClose;\n")
+    .replace("getCategories);\n", "getCategories);\napp.method('budget/month-close', buildMonthClose);\n");
+  const main = base.replace("\n\nexport", "\nimport { buildReconciliationAudit } from './reconciliation-audit';\n\nexport").replace("{\n", "{\n  'budget/reconciliation-audit': typeof buildReconciliationAudit;\n");
+  const merged = additiveMerge(base, own, main);
+  assert.equal(merged.match(/export type BudgetHandlers = \{/g).length, 1);
+  assert.equal(merged, "import * as notes from './template-notes';\nimport { buildReconciliationAudit } from './reconciliation-audit';\nimport { buildMonthClose } from './month-close';\n\nexport type BudgetHandlers = {\n"
+    + "  'budget/reconciliation-audit': typeof buildReconciliationAudit;\n  'budget/month-close': typeof buildMonthClose;\n  'budget/budget-amount': typeof setBudget;\n};\n\napp.method('get-categories', getCategories);\napp.method('budget/month-close', buildMonthClose);\n");
+  // Đề đã nhận bản sửa của đề kia (helper chép) rồi thêm tiếp vào cùng chỗ: phần chung chỉ có một lần.
+  assert.equal(additiveMerge(base, additiveMerge(base, own, main), main), merged);
+  assert.equal(additiveMerge(base, main, main), main);
+  // Một bên sửa hay bỏ dòng gốc: không gộp.
+  assert.equal(additiveMerge(base, own.replace('typeof setBudget', 'typeof other'), main), null);
+});
+
+// 33R91I3Q: CR-07 không chạy run_checks lần nào và đưa TS7053 ở reconciliation-audit.ts lên main; bốn đề sau bàn giao với
+// typecheck đỏ vì file đó.
+test('candidate keeps type errors of the item\'s own files off main and asks once for a type check on the final source', async () => {
+  const pkg = { 'src/package.json': JSON.stringify({ name: 'a', scripts: { typecheck: 'tsc --noEmit' } }), 'src/audit.ts': 'export const a = 1;\n', 'src/other.ts': 'export const o = 1;\n' };
+  const f = fixture('CR-07', false, pkg), wf = f.rt.workflow, teamWork = f.rt.session.paths.teamWork;
+  const far = () => ({ timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } });
+  f.ji.prepared = far();
+  writeFileSync(join(f.wt.matchRoot, 'src', 'audit.ts'), 'export const a: number = rows[status];\n');
+  const ask = await wf.typecheckGate('CR-07');
+  assert.match(ask.problem, /^no type check ran on your current source, and you changed 1 TypeScript file\..*run_checks \{checks: \["typecheck"\]\}/);
+  assert.match((await wf.typecheckGate('CR-07')).warning, /handed off without it/, 'asked once per source');
+  const source = (await wf.snapshot('CR-07')).source;
+  const record = state => writeFileSync(join(teamWork, 'items', 'CR-07', 'checks.json'), JSON.stringify({ state: 'done', matchRoot: f.wt.matchRoot, source,
+    results: [{ name: 'typecheck', state, log: 'evidence/typecheck.log' }] }));
+  writeFileSync(join(f.dir, 'evidence', 'typecheck.log'), "src/audit.ts(1,27): error TS7053: Element implicitly has an 'any' type.\nsrc/other.ts(3,1): error TS2322: from main\n");
+  record('failed');
+  const red = await wf.typecheckGate('CR-07');
+  assert.match(red.problem, /^the type check fails in files you changed: src\/audit\.ts\(1,27\): error TS7053/);
+  assert.doesNotMatch(red.problem, /other\.ts/);
+  assert.match((await wf.typecheckGate('CR-07')).warning, /type errors in your files stay in this handoff/, 'the same errors are refused once');
+  // Lỗi chỉ ở file item không đổi (từ main): cảnh báo, không chặn.
+  writeFileSync(join(f.dir, 'evidence', 'typecheck.log'), 'src/other.ts(3,1): error TS2322: from main\n');
+  assert.match((await wf.typecheckGate('CR-07')).warning, /only in files you did not change \(src\/other\.ts\)/);
+  record('passed');
+  assert.equal(await wf.typecheckGate('CR-07'), null);
+  // Sát giờ: không đòi chạy; đề không đổi file TypeScript: không xét.
+  const late = fixture('CR-07', false, pkg);
+  late.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 2 * 60_000).toISOString() } };
+  writeFileSync(join(late.wt.matchRoot, 'src', 'audit.ts'), 'export const a = 2;\n');
+  assert.match((await late.rt.workflow.typecheckGate('CR-07')).warning, /no type check ran/);
+  const plain = fixture('BUG-01', false, pkg);
+  plain.ji.prepared = far();
+  assert.equal(await plain.rt.workflow.typecheckGate('BUG-01'), null);
+});
+
 // Checklist "Before handoff" mục 2 (EXP3I47A BUG-09: cả ba kịch bản NOT_RUN khi còn 23 phút, −65).
 test('candidate refuses once while a scenario is NOT_RUN and time is left, and never near return_by', async () => {
   const f = fixture('BUG-01'), wf = f.rt.workflow;
@@ -1542,6 +1598,9 @@ test('workers start at once; one analyst per wave profiles the items and the wor
   wf.autoPrepare();
   await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
   assert.equal(f.ji.analysis.state, 'pending');
+  // Checklist của luật code có trong brief ngay lúc prepare, trước khi analyst nộp hồ sơ.
+  assert.match(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /<checklist>\nEvery line must hold[^\n]*\n1\. TC-1 reported PASS, FAIL or NOT_RUN[^\n]*\n<\/checklist>\n\n<item>/);
+  assert.doesNotMatch(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /<item_profile>/);
   const first = wf.offered(wf.actions()).nextActions;
   assert.deepEqual(first.map(a => a.action).sort(), ['spawn_analyst', 'spawn_worker'], 'the worker does not wait for the analyst');
   const analyst = first.find(a => a.action === 'spawn_analyst');
@@ -1558,10 +1617,12 @@ test('workers start at once; one analyst per wave profiles the items and the wor
   assert.equal(ok.accepted, true); assert.equal(f.ji.analysis.state, 'done');
   const brief = readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8');
   assert.match(brief, /^<item_profile>$[\s\S]*form: feature[\s\S]*mutation check: not graded for this item[\s\S]*<\/item_profile>/m);
-  assert.match(brief, /<checklist>[\s\S]*submit\.json rowCount: integer, filled[\s\S]*src\/export\.js exists in your change[\s\S]*<\/checklist>\n\n<item>/);
-  // Thợ đang làm nhận checklist một lần, ở ready_for_evidence.
-  const note = wf.analysisNote(f.key);
-  assert.match(note, /Checklist:[\s\S]*submit\.json rowCount: integer, filled/);
+  assert.match(brief, /<checklist>[\s\S]*submit\.json rowCount: integer, filled[\s\S]*src\/export\.js exists \(the item names this file\)[\s\S]*<\/checklist>\n\n<item>/);
+  // Thợ đang làm nhận phần analyst thêm một lần, trong lời gọi helper kế tiếp của nó (33R91I3Q: chỉ đưa ở
+  // ready_for_evidence, 6/14 đề không bao giờ nhận); dòng kịch bản đã có trong brief từ prepare thì không lặp lại.
+  const resumed = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'resume' });
+  assert.match(resumed.analysis, /Checklist: lines the analyst added to the brief's <checklist>:\n- submit\.json rowCount: integer, filled\n- src\/export\.js exists/);
+  assert.doesNotMatch(resumed.analysis, /TC-1 reported PASS/);
   assert.equal(wf.analysisNote(f.key), null, 'delivered once');
   // Hồ sơ nói đề không chấm khả năng phát hiện lỗi: không đòi mutants dù item sửa code có sẵn và thêm test.
   Object.assign(f.ji, { worktreeBase: f.base, prepared: { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } } });
@@ -1570,7 +1631,7 @@ test('workers start at once; one analyst per wave profiles the items and the wor
   // Checklist: trường trả lời trống và file đề nêu tên chưa có thì từ chối một lần, lần sau chỉ cảnh báo.
   writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', rowCount: null }));
   const gate = await wf.checklistGate(f.key);
-  assert.match(gate.problem, /submit\.json rowCount is empty.*src\/export\.js is not in your change/);
+  assert.match(gate.problem, /submit\.json rowCount is empty.*src\/export\.js does not exist: the item names this file/);
   assert.match((await wf.checklistGate(f.key)).warning, /accepted on the second handoff/);
   writeFileSync(join(f.wt.matchRoot, 'src', 'export.js'), 'export const rows = 1;\n');
   writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', rowCount: 3 }));

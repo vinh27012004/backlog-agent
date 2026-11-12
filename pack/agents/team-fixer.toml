@@ -124,9 +124,11 @@ first-run or login screen it should have passed means the saved state is broken:
 name, app restart, fresh seed), which is not a retry. Before candidate go through "Before handoff" in
 backlog-references: when you changed existing product code and added tests, run_checks {action: "mutants"} once the
 tests are green and give every change it lists as survived a case that fails without it (skip it when the
-analyst's profile says the mutation check is not graded for this item). An analyst reads the item while you work: its
-profile and checklist come in the `analysis` field of the answer of worker_checkpoint ready_for_evidence (and in the
-brief as <item_profile> and <checklist> if you are started later); meet every checklist line before candidate. Hold app_data lock from seed
+analyst's profile says the mutation check is not graded for this item). The brief's <checklist> lists what the helper
+read from the item (evidence file per scenario, answer fields, scenario rows): work to it from the start and meet every
+line before candidate. An analyst reads the item while you work: what it adds (scoring rules, named source files, more
+checklist lines) comes once in the `analysis` field of your next helper answer (worker_checkpoint, job_status,
+company_lookup, worktree status) and into the brief. Hold app_data lock from seed
 through final capture (instant when your worktree has its own database); do not run scenarios on damaged data. Seed/auth/browser mechanics belong
 in the evidence playbook. Write a scratch script only for a capability the helper lacks.
 

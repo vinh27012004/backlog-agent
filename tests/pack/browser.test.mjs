@@ -669,8 +669,11 @@ ok.onclick = async () => { if (a.value !== b.value || !a.value) return; await fe
       return html(page(`<p>Sign in to this Actual instance</p><input type="password" placeholder="Password" id="p"><button id="go">Sign in</button><p id="msg"></p>
 <script>go.onclick = async () => { const r = await fetch('/api/login', {method:'POST', body: JSON.stringify({p: p.value})}); if (r.ok) location.href = '/'; else msg.textContent = 'Invalid password'; };</script>`));
     }
-    if (!state.password) return go('/bootstrap');
-    if (!authed) return go('/login');
+    // 33R91I3Q: app thật tải xong khi còn hiện "Initializing…" rồi mới tự chuyển trang; enterApp nhận diện ngay lúc load
+    // thấy không có màn nào và coi như đã vào app.
+    const later = to => html(page(`<p>Initializing the connection to the local database...</p><script>setTimeout(() => { location.href = '${to}'; }, 700);</script>`));
+    if (!state.password) return later('/bootstrap');
+    if (!authed) return later('/login');
     if (!state.budget) {
       return html(page(`<h1>Welcome to Actual</h1><button id="d">Try the demo</button><button id="s">Start budgeting</button>
 <script>d.onclick = async () => { await fetch('/api/demo', {method:'POST'}); location.href = '/budget'; };

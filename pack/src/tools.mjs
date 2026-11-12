@@ -82,10 +82,36 @@ export function loadRuntimeConfig(localDir = null) {
   const max = Number(cfg.maxItemsInFlight);
   return { ...cfg, maxItemsInFlight: Number.isInteger(max) && max >= 1 && max <= 32 ? max : Infinity };
 }
+// Gộp hai bản chỉ thêm dòng vào cùng một bản gốc: mỗi bên là bản gốc cộng các đoạn chèn vào từng khe giữa hai dòng gốc.
+// Kết quả = bản gốc, mỗi khe nhận đoạn chèn của main rồi của item; hai đoạn giống nhau, hay đoạn này chứa đủ đoạn kia
+// theo thứ tự (item đã nhận bản sửa của đề kia rồi thêm tiếp), thì chỉ lấy đoạn dài. null khi một bên không phải bản gốc
+// cộng dòng thêm. 33R91I3Q: `git merge-file --union` gộp hai đoạn chèn cách nhau một dòng gốc thành một khối xung đột
+// và chép cả dòng gốc ở giữa hai lần (`export type BudgetHandlers = {` hai lần trong budget/app.ts của CR-05 và CR-08).
+export function additiveMerge(base, own, main) {
+  const split = text => text.split('\n');
+  const b = split(base);
+  const gaps = side => {
+    const out = Array.from({ length: b.length + 1 }, () => []);
+    let j = 0;
+    for (const line of split(side)) {
+      if (j < b.length && line === b[j]) j++; else out[j].push(line);
+    }
+    return j === b.length ? out : null;
+  };
+  const mine = gaps(own), theirs = gaps(main);
+  if (!mine || !theirs) return null;
+  const within = (small, big) => { let i = 0; for (const line of big) if (i < small.length && line === small[i]) i++; return i === small.length; };
+  const lines = [];
+  for (let j = 0; j <= b.length; j++) {
+    const m = mine[j], t = theirs[j];
+    lines.push(...(within(t, m) ? m : within(m, t) ? t : [...t, ...m]));
+    if (j < b.length) lines.push(b[j]);
+  }
+  return lines.join('\n');
+}
 // Gộp kiểu "giữ cả hai" cho các file xung đột sau `git apply --3way`. Chỉ khi cả hai bên không xoá dòng nào của file
-// (thuần thêm dòng) và kết quả không còn dấu xung đột; ghi kết quả vào worktree. Trả false khi có file không đủ điều
-// kiện (không ghi gì).
-export async function unionMerge({ cwd, files, mine, oldBase, mainHead, scratch }) {
+// (thuần thêm dòng); ghi kết quả vào worktree. Trả false khi có file không đủ điều kiện (không ghi gì).
+export async function unionMerge({ cwd, files, mine, oldBase, mainHead }) {
   const out = [];
   for (const [i, file] of files.entries()) {
     const m = mine.get(file);
@@ -93,18 +119,17 @@ export async function unionMerge({ cwd, files, mine, oldBase, mainHead, scratch 
     const theirs = (await git(['diff', '--numstat', '--no-renames', oldBase, mainHead, '--', file], { cwd })).out.trim().split('\t');
     if (theirs.length < 3 || theirs[1] !== '0') return false;
     // Blob trong git là LF; bản trong worktree có thể là CRLF (core.autocrlf): gộp trên LF, ghi lại theo kiểu của item.
-    const base = join(scratch, `base-${i}`), main = join(scratch, `main-${i}`), own = join(scratch, `own-${i}`);
     const original = readFileSync(m.copy, 'utf8');
     if (original.includes('\u0000')) return false;
-    writeFileSync(own, original.replace(/\r\n/g, '\n'));
-    for (const [rev, to] of [[oldBase, base], [mainHead, main]]) {
+    const sides = [];
+    for (const rev of [oldBase, mainHead]) {
       const shown = await git(['show', `${rev}:${file}`], { cwd, allowFail: true });
       if (shown.code !== 0) return false;
-      writeFileSync(to, shown.stdout.replace(/\r\n/g, '\n'));
+      sides.push(shown.stdout.replace(/\r\n/g, '\n'));
     }
-    const res = await git(['merge-file', '-p', '--union', own, base, main], { cwd, allowFail: true });
-    if (res.code !== 0 || /^(<{7}|={7}|>{7})( |$)/m.test(res.stdout)) return false;
-    out.push([file, original.includes('\r\n') ? res.stdout.replace(/\r?\n/g, '\r\n') : res.stdout]);
+    const merged = additiveMerge(sides[0], original.replace(/\r\n/g, '\n'), sides[1]);
+    if (merged === null) return false;
+    out.push([file, original.includes('\r\n') ? merged.replace(/\r?\n/g, '\r\n') : merged]);
   }
   for (const [file, text] of out) writeFileSync(join(cwd, file), text);
   return true;
@@ -404,14 +429,24 @@ export class Runtime {
     if (['read_item', 'worker_checkpoint', 'company_lookup'].includes(name) || (name === 'worktree' && args.action === 'status')) {
       this.workflow.registerWorker(args.backlogItemKey);
     } else if (name === 'job_status') this.workflow.registerWorker(this.jobs.jobs.get(args.jobId)?.key);
+    // Hồ sơ của analyst về khi thợ đang làm: đưa trong lời gọi helper kế tiếp của thợ, không chờ ready_for_evidence
+    // (33R91I3Q: 6/14 đề đi thẳng tới candidate và không bao giờ nhận). Ở candidate thì gate checklist tự nói.
+    const key = name === 'job_status' ? this.jobs.jobs.get(args.jobId)?.key : args.backlogItemKey;
+    const carry = out => (!key || (name === 'worker_checkpoint' && ['ready_for_evidence', 'candidate'].includes(args.phase)) ? out
+      : Promise.resolve(out).then(res => {
+        if (!res || typeof res !== 'object' || Array.isArray(res) || res.analysis) return res;
+        let note = null;
+        try { note = this.workflow.analysisNote(key); } catch { note = null; }
+        return note ? { ...res, analysis: note } : res;
+      }));
     switch (name) {
-      case 'read_item': return this.readItem(args);
-      case 'worker_checkpoint': return this.workerCheckpoint(args);
-      case 'job_status': return this.jobStatus(args, { pi: false });
-      case 'company_lookup': return this.companyLookup(args);
+      case 'read_item': return carry(this.readItem(args));
+      case 'worker_checkpoint': return carry(this.workerCheckpoint(args));
+      case 'job_status': return carry(this.jobStatus(args, { pi: false }));
+      case 'company_lookup': return carry(this.companyLookup(args));
       case 'worktree':
         if (args.action !== 'status') fail('PROXY_DENIED', 'subagents may only call worktree status');
-        return this.worktree(args);
+        return carry(this.worktree(args));
       default: fail('PROXY_DENIED', `${name} is for the orchestrator only`);
     }
   }
@@ -1298,7 +1333,7 @@ export class Runtime {
       // Hai item cùng CHỈ THÊM dòng vào một file (đăng ký route, mục sidebar, handler, import) ở cùng chỗ: git báo xung
       // đột dù hai phần thêm không đụng nhau. QDO8W480: CR-05, CR-07, CR-08 cùng thêm vào FinancesApp.tsx,
       // PrimaryButtons.tsx, budget/app.ts; CR-05 dừng ở WORKTREE_CONFLICT, thợ gỡ tay 3 phút, publish hỏng 3 lần và
-      // không còn giờ chụp trang (CR-07 hỏng 2 lần). Giữ cả hai phần thêm (git merge-file --union) khi mỗi bên không xoá
+      // không còn giờ chụp trang (CR-07 hỏng 2 lần). Giữ cả hai phần thêm (additiveMerge) khi mỗi bên không xoá
       // hay sửa dòng nào của file đó; bên nào có sửa dòng thì vẫn là xung đột thật, trả worker như trước.
       let autoMerged = [];
       const preferred = kept.map(k => k.file);
@@ -1308,7 +1343,7 @@ export class Runtime {
         if (!conflicts.length) conflicts = null;
       }
       if (conflicts?.length) {
-        const merged = await unionMerge({ cwd, files: conflicts, mine, oldBase, mainHead, scratch: join(teamWork, 'scratch', `${key}-sync-mine`) }).catch(() => null);
+        const merged = await unionMerge({ cwd, files: conflicts, mine, oldBase, mainHead }).catch(() => null);
         if (merged) { autoMerged = conflicts; conflicts = null; }
       }
       if (conflicts) {

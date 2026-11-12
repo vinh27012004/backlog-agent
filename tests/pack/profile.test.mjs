@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { checklistBlock, checklistProblems, profileBlock, profileChecklist, profileFlags, validateProfile, validateWave } from '../../pack/src/match/profile.mjs';
+import { checklistBlock, checklistProblems, mergeChecklist, profileBlock, profileChecklist, profileFlags, ruleChecklist, validateProfile, validateWave } from '../../pack/src/match/profile.mjs';
 import { tempDir } from './support.mjs';
 
 // Trích đề CR-07 và TASK-08 của bộ 14 item (BI7A5ACV, EXP3I47A).
@@ -101,7 +101,7 @@ test('checklist at handoff: required evidence of a PASS scenario, answer fields 
   assert.match(first, /CR-07-TC-02 is PASS but its evidence does not cite evidence\/reconciliation-2025-10\.csv/);
   assert.match(first, /CR-07-TC-03 is PASS but evidence\/reconciliation\.png does not exist/);
   assert.match(first, /submit\.json auditSummary is empty/);
-  assert.match(first, /reconciliation-audit\.ts is not in your change/);
+  assert.match(first, /reconciliation-audit\.ts does not exist: the item names this file/);
   writeFileSync(join(dir, 'evidence', 'reconciliation.png'), 'png');
   write({ status: 'PARTIAL', auditSummary: { month: '2025-10' }, testResults: [row(1, 'PASS', ['evidence/mvs.log']), row(2, 'PASS', ['evidence/reconciliation-2025-10.csv']), row(3, 'PASS', ['evidence/reconciliation.png']), row(4, 'NOT_RUN')] });
   assert.deepEqual(checklistProblems(cr07(), { answerDir: dir, changed: ['src/packages/loot-core/src/server/budget/reconciliation-audit.ts'] }), []);
@@ -119,6 +119,30 @@ const png = (width, height) => {
 };
 
 // WQ7T6CEC BUG-09: tc-01-schedules.png khai hai lần cho cùng kịch bản.
+// 33R91I3Q: hồ sơ của analyst về sau khi thợ đã đọc brief, 6/14 đề không bao giờ nhận checklist. Phần lấy được từ MVS,
+// template và schema thì luật code lập ngay lúc prepare; analyst chỉ thêm dòng.
+test('the rule checklist comes from the MVS, the item text and the template; analyst lines are added, the same id once', () => {
+  const rule = ruleChecklist({ key: 'CR-07', scenarioIds: ['CR-07-TC-01', 'CR-07-TC-03'],
+    mvsEvidence: new Map([['CR-07-TC-03', ['reconciliation.png']]]), required: [{ file: 'before.png', beforeFix: true }] });
+  assert.deepEqual(rule.map(l => l.id), ['evidence:CR-07-TC-03:reconciliation.png', 'evidence:-:before.png', 'scenario:CR-07-TC-01', 'scenario:CR-07-TC-03']);
+  assert.match(rule[1].text, /evidence\/before\.png, captured on the unfixed code — a real page/);
+  const merged = mergeChecklist(rule, profileChecklist(cr07(), 'CR-07'));
+  const shot = merged.filter(l => l.id === 'evidence:CR-07-TC-03:reconciliation.png');
+  assert.equal(shot.length, 1);
+  assert.equal(shot[0].minViewport, '1280x720', 'the analyst line carries what the rules cannot read');
+  assert.ok(merged.some(l => l.kind === 'source') && merged.some(l => l.id === 'evidence:-:before.png'));
+  assert.deepEqual(merged.slice(-merged.filter(l => l.kind === 'scenario').length).map(l => l.kind).filter(k => k !== 'scenario'), [], 'scenario rows last');
+  // Đề chỉ trả lời: trường của template ngoài các trường khung; mảng và boolean không đoán (rỗng có thể là đáp án).
+  const fields = ruleChecklist({ answerOnly: true, template: { status: 'NOT_STARTED', backlogId: 'TASK-10', total: '', count: 0, rows: [], ok: false },
+    schema: { properties: { count: { type: 'integer' } } } });
+  assert.deepEqual(fields.map(l => [l.id, l.type]), [['field:total', 'string'], ['field:count', 'integer']]);
+  assert.deepEqual(ruleChecklist({ answerOnly: false, template: { total: '' } }), [], 'code items: answer fields only from the analyst');
+  // Gate nhận thẳng danh sách dòng đã gộp.
+  const dir = tempDir('mtm-profile-');
+  writeFileSync(join(dir, 'submit.json'), JSON.stringify({ status: 'DONE', total: '', count: 3 }));
+  assert.deepEqual(checklistProblems(fields, { answerDir: dir }).map(p => p.problem), ['submit.json total is empty: the item scores it']);
+});
+
 test('evidence declared twice for the same scenario gives one checklist line; the same file for another scenario stays', () => {
   const p = cr07();
   p.evidence.push({ ...p.evidence[1], beforeFix: true }, { ...p.evidence[1], scenario: 'CR-07-TC-04', minViewport: null });

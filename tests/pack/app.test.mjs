@@ -229,6 +229,21 @@ test('custom commands from the README build in their folder, serve with {port}/{
   assert.equal(await body(first.url), `web build on ${first.port}`);
   assert.ok(existsSync(join(tw, 'matches', 'M1', '.team-work', 'app-data', 'BUG-09', 'server-files')), 'the data folder an env value names is created outside the worktree');
 
+  // 33R91I3Q: đề khác trên cùng app (cùng package.json) start không gửi custom thì dùng lệnh BUG-09 đã chạy được, với
+  // thư mục và {matchRoot} của worktree mình; bốn đề từng tự tìm lại lệnh này, mỗi lần thử 83–121 s.
+  const other = appFolder(tw, 'CR-07');
+  for (const dir of ['web', 'server']) mkdirSync(join(other, 'src', 'packages', dir), { recursive: true });
+  writeFileSync(join(other, 'src', 'packages', 'web', 'build.cjs'), "require('fs').mkdirSync('build', { recursive: true }); require('fs').writeFileSync('build/index.html', 'CR-07 web');\n");
+  writeFileSync(join(other, 'src', 'packages', 'server', 'app.cjs'), readFileSync(join(server, 'app.cjs'), 'utf8'));
+  t.after(() => stopApp(tw, 'CR-07'));
+  const shared = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'CR-07', matchRoot: other });
+  assert.equal(shared.state, 'ready', JSON.stringify(shared));
+  assert.equal(shared.mode, 'custom');
+  assert.equal(shared.commandsFrom, 'BUG-09');
+  assert.match(shared.hint, /project commands BUG-09 already ran successfully/);
+  assert.equal(await body(shared.url), `CR-07 web on ${shared.port}`);
+  stopApp(tw, 'CR-07');
+
   // Start lại không gửi custom: dùng lệnh đã nhớ; build:false bỏ bước build.
   writeFileSync(join(web, 'build', 'index.html'), 'kept build');
   const again = await app({ teamWorkspace: tw, action: 'start', backlogItemKey: 'BUG-09', matchRoot, build: false });

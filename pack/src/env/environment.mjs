@@ -299,7 +299,9 @@ export function dedicatedAppDatabase(wtMatchRoot, mainMatchRoot) {
 }
 
 // Job setup_environment. `report(stage, status, summary)` ghi PREPARATION_STATUS.
-export async function setupEnvironment(job, { matchRoot, localDir, logDir, report, deadlineAt, baselineMs = 240_000, cacheDir = join(localDir, 'package-cache') }) {
+// baselineMs 480 s (vẫn bị chặn bởi hạn chuẩn bị trừ 60 s): bộ test của app Actual chạy 235 s; với 240 s, 33R91I3Q hết
+// giờ sát nút (TIMEOUT), không đề nào biết hai test đỏ sẵn và không ai được giao sửa.
+export async function setupEnvironment(job, { matchRoot, localDir, logDir, report, deadlineAt, baselineMs = 480_000, cacheDir = join(localDir, 'package-cache') }) {
   const profile = detectProfile(matchRoot);
   const out = { profile: { stack: profile.stack, root: profile.relRoot, packageManager: profile.packageManager ?? null,
     testRunner: profile.testRunner ?? null, commands: profile.commands }, steps: [], build: 'FAIL', baseline: null, doctor: null };

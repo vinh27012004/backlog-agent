@@ -96,10 +96,11 @@ or the item's wording; a new kind of failure is a case of one of them.
    that very operation, and not from what your code returns?
 5. Scope: does your diff hold only this item's files? No cache folders (node_modules/, .vite, coverage), no test
    configuration, no other item's answers. Candidate refuses node_modules/ content.
-   An analyst reads the item while you work. Its profile of the item arrives in the answer of worker_checkpoint
-   ready_for_evidence (field `analysis`): a checklist of every evidence file, answer field and named source file, the
-   files other items change too, and whether the mutation check is graded. Go through that checklist line by line
-   before candidate, which checks the same lines. No `analysis` field means it has not arrived: work from the item.
+   The brief's `<checklist>` is the one list for this item: the helper wrote it from the scenarios, the evidence
+   they require and the answer template. An analyst reads the item while you work; what it adds (named source files,
+   more evidence or answer fields, the files other items change too, whether the mutation check is graded) arrives
+   once in the `analysis` field of your next helper answer. Go through the checklist line by line before candidate,
+   which checks the same lines and refuses once for each set that fails.
 6. Freshness: were the figures in submit.json computed again after your last sync and your last source change?
    Are they byte for byte what your script printed? Write submit.json with node (readFileSync(f, 'utf8'),
    JSON.stringify). PowerShell ConvertFrom-Json turns ISO timestamps into dates ("…23.000Z" comes back "…23Z"), and

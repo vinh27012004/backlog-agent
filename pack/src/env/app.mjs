@@ -174,9 +174,16 @@ async function settle(teamWorkspace, key, deadline) {
     if (!s) return { state: 'stopped', hint: 'No app is running for this item: call app start.' };
     if (alive(s.pid) && await responds(s.port) && alive(s.pid)) {
       if (s.built && !s.recorded) await noteBuild(teamWorkspace, key, s);
+      if (s.custom && !s.custom.sharedFrom && !s.shared) {
+        try { rememberShared(teamWorkspace, key, s.matchRoot, s.custom); } catch { /* không nhớ được thì thôi */ }
+        const current = readState(teamWorkspace, key);
+        if (current?.pid === s.pid) writeFileAtomic(stateFile(teamWorkspace, key), JSON.stringify({ ...current, shared: true }));
+      }
       return { state: 'ready', url: `http://localhost:${s.port}`, port: s.port, pid: s.pid, mode: s.mode, log: s.log,
         ...(s.reusedBuild ? { reusedBuild: s.reusedBuild } : {}), ...(s.authEnv ? { authEnv: s.authEnv } : {}),
-        hint: `Use this url in capture_evidence. Call app stop once your evidence is written.${s.authEnv
+        ...(s.custom?.sharedFrom ? { commandsFrom: s.custom.sharedFrom } : {}),
+        hint: `Use this url in capture_evidence. Call app stop once your evidence is written.${s.custom?.sharedFrom
+          ? ` Started with the project commands ${s.custom.sharedFrom} already ran successfully on this app (mode custom): send your own custom only when this start fails.` : ''}${s.authEnv
           ? ` ${Object.keys(s.authEnv).join('/')} already point at this port for this app: do not edit .env for it.` : ''}` };
     }
     if (!alive(s.pid)) {
@@ -189,8 +196,12 @@ async function settle(teamWorkspace, key, deadline) {
       rmSync(stateFile(teamWorkspace, key), { force: true });
       // Bản build dùng lại không start được (thư mục build hỏng, build tay dở dang): lần start sau phải build lại.
       if (s.reusedBuild) forgetBuild(teamWorkspace, s.appRoot);
+      // Lệnh riêng của item hỏng mà đã có lệnh chạy được của item khác: bỏ lệnh hỏng, lần start sau dùng lệnh kia.
+      const other = s.custom && !s.custom.sharedFrom ? sharedCommands(teamWorkspace, s.matchRoot) : null;
+      if (other) rmSync(customFile(teamWorkspace, key), { force: true });
       return { state: 'failed', log: s.log, tail: tail(s.log),
-        hint: s.reusedBuild ? 'The reused build did not start: call app start again, it builds afresh.'
+        hint: other ? `Your custom commands did not start the app. The commands that started it for ${other.sharedFrom} are remembered: call app start again without custom.`
+          : s.reusedBuild ? 'The reused build did not start: call app start again, it builds afresh.'
           : 'The build or the app exited: read the tail, fix the cause, then call app start again.' };
     }
     if (Date.now() >= deadline) {
@@ -237,6 +248,49 @@ async function checksBuilding(where, key, deadline) {
 // tới); {matchRoot}: thư mục trận của worktree. Nhớ theo item để start lại sau khi sửa code không phải gửi lại.
 const customFile = (teamWorkspace, key) => join(teamWorkspace, 'team-sdlc-pack', 'local', 'app-commands', `${key}.json`);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+// Lệnh riêng đã chạy được (app trả lời HTTP) nhớ theo app, cho item khác và trận sau cùng app. 33R91I3Q: lệnh start
+// chung hỏng trên app này ('sh' is not recognized), lệnh riêng chỉ nhớ theo item nên BUG-09, CR-05, CR-07, CR-08 mỗi đề
+// tự tìm lại, mỗi lần thử 83–121 s (CR-07 mất 6 trong 15 phút, CR-08 không kịp chụp ảnh nào). Dấu của app: manifest ở
+// thư mục app (package.json…); cwd lưu tương đối theo matchRoot, đường dẫn worktree trong lệnh đổi thành {matchRoot}.
+// Bản có bước build không bị bản không build ghi đè (đề đó dùng lại bản build của run_checks, đề khác chưa có).
+const MANIFESTS = ['package.json', 'pyproject.toml', 'requirements.txt', 'pom.xml', 'build.gradle', 'go.mod', 'composer.json', 'Gemfile'];
+function appSign(matchRoot) {
+  let root;
+  try { root = detectProfile(matchRoot).root ?? matchRoot; } catch { root = matchRoot; }
+  for (const base of [root, matchRoot]) {
+    for (const name of MANIFESTS) {
+      try { return digest(`${name}\n${readFileSync(join(base, name), 'utf8').replace(/\r\n/g, '\n')}`).slice(0, 24); } catch { /* thử file kế */ }
+    }
+  }
+  return null;
+}
+const sharedFile = (teamWorkspace, sign) => join(teamWorkspace, 'team-sdlc-pack', 'local', 'app-commands', `app-${sign}.json`);
+
+export function rememberShared(teamWorkspace, key, matchRoot, custom) {
+  const sign = appSign(matchRoot);
+  if (!sign || !custom?.start) return null;
+  const spots = [matchRoot, matchRoot.replace(/\\/g, '/'), matchRoot.replace(/\\/g, '\\\\')];
+  const loose = text => spots.reduce((t, s) => t.split(s).join('{matchRoot}'), text);
+  const step = s => ({ command: loose(s.command), cwd: relative(matchRoot, s.cwd).replace(/\\/g, '/') || '.' });
+  const value = { from: key, at: new Date().toISOString(), build: (custom.build ?? []).map(step), start: step(custom.start),
+    env: Object.fromEntries(Object.entries(custom.env ?? {}).map(([k, v]) => [k, loose(v)])) };
+  // Còn đường dẫn tuyệt đối của trận hay worktree khác trong lệnh: không dùng lại được cho worktree khác.
+  if (/\.team-work|[\\/]matches[\\/]/i.test(JSON.stringify(value).replaceAll('{matchRoot}', ''))) return null;
+  const file = sharedFile(teamWorkspace, sign);
+  try { if (JSON.parse(readFileSync(file, 'utf8')).build?.length && !value.build.length) return null; } catch { /* chưa có */ }
+  writeFileAtomic(file, JSON.stringify(value));
+  return value;
+}
+
+export function sharedCommands(teamWorkspace, matchRoot) {
+  const sign = appSign(matchRoot);
+  if (!sign) return null;
+  try {
+    const saved = JSON.parse(readFileSync(sharedFile(teamWorkspace, sign), 'utf8'));
+    return { ...normalizeCustom({ build: saved.build, start: saved.start, env: saved.env }, matchRoot), sharedFrom: saved.from };
+  } catch { return null; }
+}
 
 export function normalizeCustom(custom, matchRoot) {
   if (custom === undefined || custom === null) return null;
@@ -295,6 +349,8 @@ export async function app({ teamWorkspace, action, backlogItemKey: key, matchRoo
       const saved = JSON.parse(readFileSync(customFile(teamWorkspace, key), 'utf8'));
       if (saved.matchRoot === where.matchRoot) commands = saved;
     } catch { /* chưa có lệnh riêng */ }
+    // Chưa có lệnh riêng của item: dùng lệnh một item khác đã chạy được trên cùng app.
+    commands ??= sharedCommands(teamWorkspace, where.matchRoot);
   }
   const waiting = await checksBuilding(where, key, deadline);
   if (waiting) return waiting;

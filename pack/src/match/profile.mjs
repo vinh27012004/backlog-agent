@@ -139,7 +139,7 @@ export function profileChecklist(profile, key) {
       text: `submit.json ${f.name}: ${f.type}, filled${f.exact ? ', compared exactly (copy strings as found; write the file with node)' : ''}` });
   }
   for (const s of profile.deliverables?.sourceFiles ?? []) {
-    lines.push({ id: `source:${s.path}`, kind: 'source', path: s.path, text: `${s.path} exists in your change` });
+    lines.push({ id: `source:${s.path}`, kind: 'source', path: s.path, text: `${s.path} exists (the item names this file)` });
   }
   if (profile.deliverables?.testLocation) lines.push({ id: 'tests:location', kind: 'tests', location: profile.deliverables.testLocation, text: `new tests under ${profile.deliverables.testLocation}` });
   const flags = profileFlags(profile);
@@ -153,6 +153,39 @@ export function profileChecklist(profile, key) {
   }
   for (const id of profile.scenarios ?? []) lines.push({ id: `scenario:${id}`, kind: 'scenario', scenario: id, text: `${id} reported PASS, FAIL or NOT_RUN with what you observed (NOT_RUN scores nothing)` });
   return lines.map(l => ({ ...l, key }));
+}
+
+// Checklist do luật code lập ngay lúc prepare, không chờ analyst (33R91I3Q: hồ sơ về sau prepare 45–133 s, thợ đã đọc
+// brief; 6/14 đề không bao giờ nhận checklist). Chỉ lấy thứ có sẵn dạng cấu trúc: evidence từng kịch bản trong MVS
+// (mvsEvidence), evidence đề nêu ngoài MVS (itemEvidence), trường trả lời của đề chỉ trả lời (template + schema), các dòng
+// kịch bản của template. Cùng id với profileChecklist để gộp được; dòng của analyst (có minViewport…) thay dòng trùng id.
+const STANDARD_FIELDS = new Set(['status', 'schemaVersion', 'backlogId', 'evidenceFiles', 'testResults', 'engineeringRecord', 'requirements', 'gitRevision', 'sourceChanges', 'cases']);
+export function ruleChecklist({ key = null, scenarioIds = [], mvsEvidence = new Map(), required = [], template = null, schema = null, answerOnly = false } = {}) {
+  const lines = [];
+  const kind = file => (/\.(png|jpe?g|webp)$/i.test(file) ? 'screenshot' : 'other');
+  const evidence = e => ({ id: `evidence:${e.scenario ?? '-'}:${e.file}`, kind: 'evidence', scenario: e.scenario, file: e.file, beforeFix: Boolean(e.beforeFix), minViewport: null,
+    text: `evidence/${e.file}${e.scenario ? ` for ${e.scenario} (cited in that row's evidence when you report PASS)` : ''}${e.beforeFix ? ', captured on the unfixed code' : ''}${kind(e.file) === 'screenshot' ? ' — a real page, not a *.FAILED-step* capture' : ''}` });
+  for (const id of scenarioIds) for (const file of mvsEvidence.get(id) ?? []) lines.push(evidence({ scenario: id, file }));
+  for (const e of required) lines.push(evidence({ scenario: null, file: e.file, beforeFix: e.beforeFix }));
+  if (answerOnly && template && typeof template === 'object' && !Array.isArray(template)) {
+    for (const [name, value] of Object.entries(template)) {
+      if (STANDARD_FIELDS.has(name)) continue;
+      const declared = schema?.properties?.[name]?.type;
+      const type = typeof declared === 'string' ? declared : jsonType(value);
+      if (!['string', 'number', 'integer', 'object'].includes(type)) continue;
+      lines.push({ id: `field:${name}`, kind: 'field', name, type, exact: false, text: `submit.json ${name}: ${type}, filled` });
+    }
+  }
+  for (const id of scenarioIds) lines.push({ id: `scenario:${id}`, kind: 'scenario', scenario: id, text: `${id} reported PASS, FAIL or NOT_RUN with what you observed (NOT_RUN scores nothing)` });
+  const seen = new Set();
+  return lines.filter(l => !seen.has(l.id) && seen.add(l.id)).map(l => ({ ...l, key }));
+}
+// Một checklist: dòng của luật code trước, dòng analyst thêm sau; cùng id thì lấy dòng của analyst. Dòng kịch bản để cuối.
+export function mergeChecklist(rule = [], analyst = []) {
+  const byId = new Map(rule.map(l => [l.id, l]));
+  for (const l of analyst) byId.set(l.id, l);
+  const all = [...byId.values()];
+  return [...all.filter(l => l.kind !== 'scenario'), ...all.filter(l => l.kind === 'scenario')];
 }
 
 const megabytes = bytes => (bytes >= 1048576 ? `${Number((bytes / 1048576).toFixed(2))} MB` : bytes >= 1024 ? `${Number((bytes / 1024).toFixed(1))} KB` : `${bytes} bytes`);
@@ -206,7 +239,8 @@ export function checklistProblems(profile, { answerDir, matchRoot = null, change
   try { submit = JSON.parse(readFileSync(join(answerDir, 'submit.json'), 'utf8')); } catch { return out; }   // answerCheck báo lỗi này
   const rows = new Map((Array.isArray(submit?.testResults) ? submit.testResults : []).map(r => [r?.id, r]));
   const passed = id => /^pass$/i.test(String(rows.get(id)?.result ?? ''));
-  for (const line of profileChecklist(profile, null)) {
+  // Nhận hồ sơ của analyst hoặc danh sách dòng đã gộp (mergeChecklist).
+  for (const line of Array.isArray(profile) ? profile : profileChecklist(profile, null)) {
     if (line.kind === 'evidence') {
       const there = existsSync(join(answerDir, 'evidence', line.file));
       if (line.scenario === null) {
@@ -229,7 +263,8 @@ export function checklistProblems(profile, { answerDir, matchRoot = null, change
       else if (!typeOk(submit[line.name], line.type)) out.push({ id: line.id, problem: `submit.json ${line.name} must be ${line.type}, it is ${jsonType(submit[line.name])}` });
     } else if (line.kind === 'source') {
       const tail = line.path.replaceAll('\\', '/').replace(/^\.?\//, '');
-      if (!changed.some(p => p === tail || p.endsWith(`/${tail}`)) && !exists(tail)) out.push({ id: line.id, problem: `${line.path} is not in your change: the item names this file` });
+      // 33R91I3Q TASK-08 bị từ chối vì "không sửa" các file đề nêu làm đối tượng viết test: file có sẵn trong repo là đạt.
+      if (!changed.some(p => p === tail || p.endsWith(`/${tail}`)) && !exists(tail)) out.push({ id: line.id, problem: `${line.path} does not exist: the item names this file` });
     } else if (line.kind === 'zero_condition') {
       const tail = line.path.replaceAll('\\', '/').replace(/^\.?\//, '').replace(/\/+$/, '');
       if (line.zeroKind === 'required_file') {

@@ -63,6 +63,9 @@ only in the Submission section; without it the item scored 0 of 200). Every list
   `{port}` is the helper's port, `{data}` a fresh data folder for your item, `{matchRoot}` your worktree match folder,
   e.g. `env: {APP_PORT: "{port}", APP_DATA_DIR: "{data}", WEB_ROOT: "{matchRoot}/src/web/build"}`. Later starts reuse
   it; `build: false` skips its build steps when the build output is current.
+- The helper keeps the `custom` commands that started this app for any item. When your brief's `<environment>` says it
+  has them, or a `failed` result says so, call `app start` without `custom`: the result names their source
+  (`commandsFrom`). Do not work the commands out again (four items of one match did, 83-121 s per try).
 - A scenario whose precondition says the development app runs (`pnpm dev`): `app start` with `mode: "dev"` (no build;
   the first page load compiles, call `status` again). Every other scenario uses production. Capture every production
   scenario first, then start dev and capture the dev scenarios last: the dev server overwrites the production build.

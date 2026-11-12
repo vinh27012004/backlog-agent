@@ -663,9 +663,28 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             await navigate(s.url);
             const password = entryPassword(output.base);
             const seen = [], until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 30_000));
+            // 33R91I3Q: app một trang tải xong (load) khi còn hiện "Initializing…", một lúc sau mới tự chuyển sang
+            // /bootstrap; nhận diện ngay lúc load thấy không có màn nào, coi như đã vào app, và mọi lần gọi trong trận trả
+            // screens: [] (BUG-09, CR-05, CR-07 mất ảnh trang). Chưa thấy màn nào thì chờ trang đứng yên 1,5 s (URL và chữ
+            // không đổi, không còn chữ đang tải) rồi mới kết luận, tối đa 12 s.
+            const settled = async () => {
+              const by = Math.min(until, Date.now() + 12_000);
+              let last = null, since = Date.now();
+              while (Date.now() < by) {
+                const found = await evaluate(`(${ENTRY_SCREEN})()`).catch(() => null);
+                if (found) return found;
+                const text = String(await evaluate('document.body ? document.body.innerText : ""').catch(() => '')).trim();
+                const sign = `${await evaluate('location.href').catch(() => '')}|${text}`;
+                if (sign !== last) { last = sign; since = Date.now(); }
+                const loading = !text || (text.length < 400 && /loading|initiali[sz]ing|connecting|creating|please wait|\.\.\.|…/i.test(text));
+                if (!loading && Date.now() - since >= 1500) return null;
+                await sleep(250);
+              }
+              return null;
+            };
             for (;;) {
               await waitReady();
-              const screen = await evaluate(`(${ENTRY_SCREEN})()`).catch(() => null);
+              const screen = await settled();
               if (!screen) break;
               if (seen.filter(k => k === screen.kind).length >= 2 || Date.now() >= until) {
                 fail('ENTRY_STUCK', `still on the ${screen.kind} screen after ${seen.length} entry step(s)` + (screen.kind === 'signin'

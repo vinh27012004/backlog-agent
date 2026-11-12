@@ -3,20 +3,20 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { absoluteTestWrites, answerCheck, changedFiles, requirementsCheck, strayAnswers } from './answers.mjs';
+import { absoluteTestWrites, answerCheck, changedFiles, mvsEvidence, requirementsCheck, strayAnswers } from './answers.mjs';
 import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
-import { CHECK_LABEL, baselineRerunFiles, cancelChecks, readChecks, verificationRows } from '../env/checks.mjs';
+import { CHECK_LABEL, baselineRerunFiles, cancelChecks, readChecks, typeErrorFiles, verificationRows } from '../env/checks.mjs';
 import { mutantsRunning, mutationTargets, readMutants, restorePending } from '../env/mutants.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
-import { stopApp } from '../env/app.mjs';
+import { sharedCommands, stopApp } from '../env/app.mjs';
 import { searchLogsHelp } from './logs.mjs';
 import { fingerprint, fingerprintAt, productChanges, revert, sameContent, shareFix } from './dependency.mjs';
 import { gradingBlock } from './grading.mjs';
 import { pickModel } from '../decide/models.mjs';
-import { checklistBlock, checklistProblems, profileBlock, profileChecklist, profileFlags, validateProfile, validateWave } from './profile.mjs';
+import { checklistBlock, checklistProblems, mergeChecklist, profileBlock, profileChecklist, profileFlags, ruleChecklist, validateProfile, validateWave } from './profile.mjs';
 import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -114,6 +114,8 @@ const LOOKUP_WAIT_MS = 90_000;
 const RETRY_MINUTES = 5;
 // EXP3I47A TASK-08 (−4): test mới không đỏ khi bỏ chỗ sửa `reportedPayee` (mutants.mjs).
 const MUTANT_MINUTES = 6;
+// Còn ít hơn số phút này tới return_by thì không đòi chạy typecheck (một lần 1–2,5 phút khi máy đang tải).
+const TYPECHECK_MINUTES = 4;
 const ITEM_KEY = /\b(?:TASK|BUG|CR|PI)-\d{1,3}\b/g;
 export function itemDependencies(key, text) {
   const out = [];
@@ -690,7 +692,11 @@ export class Workflow {
     const profile = this.profileOf(key);
     if (profile && !ji.checklistDelivered) {
       ji.checklistDelivered = new Date().toISOString();
-      parts.push(`The analyst's profile of this item (also in the brief as <item_profile> and <checklist> now):\n${profileBlock(profile)}\nChecklist:\n${checklistBlock(profileChecklist(profile, key))}`);
+      // Thợ đã có checklist của luật code từ brief: chỉ đưa các dòng analyst thêm.
+      const had = new Set(this.ruleLines(key).map(l => l.id));
+      const added = profileChecklist(profile, key).filter(l => !had.has(l.id));
+      const list = added.length ? `lines the analyst added to the brief's <checklist>:\n${added.map(l => `- ${l.text}`).join('\n')}` : 'the brief\'s <checklist> stays as it is.';
+      parts.push(`The analyst's profile of this item (also in the brief as <item_profile> now):\n${profileBlock(profile)}\nChecklist: ${list}`);
     }
     if (ji.sharedAreas?.length && !ji.sharedAreasDelivered) {
       ji.sharedAreasDelivered = new Date().toISOString();
@@ -713,21 +719,41 @@ export class Workflow {
     let text;
     try { text = readFileSync(file, 'utf8'); } catch { return; }
     text = text.replace(/<item_profile>[\s\S]*?<\/item_profile>\n\n/g, '').replace(/<checklist>[\s\S]*?<\/checklist>\n\n/g, '');
-    const blocks = `<item_profile>\n${profileBlock(profile)}\n</item_profile>\n\n<checklist>\n${checklistBlock(profileChecklist(profile, key))}\n</checklist>\n\n`;
+    const blocks = `<item_profile>\n${profileBlock(profile)}\n</item_profile>\n\n<checklist>\n${checklistBlock(this.checklistLines(key, profile))}\n</checklist>\n\n`;
     const at = text.indexOf('<item>\n');
     writeFileAtomic(file, at >= 0 ? `${text.slice(0, at)}${blocks}${text.slice(at)}` : `${text}\n${blocks}`);
   }
   // Checklist của hồ sơ lúc bàn giao: dòng nào chưa đạt thì từ chối một lần cho mỗi tập dòng, lần sau chỉ cảnh báo.
+  // Dòng checklist luật code đọc được từ MVS, template và schema của đề: có ngay lúc prepare, không cần analyst.
+  ruleLines(key) {
+    const r = this.rt, ids = this.scenarioIds(key);
+    let mvs = null, required = [];
+    try { mvs = r.itemMvs?.(key) ?? null; } catch { mvs = null; }
+    try { required = r.itemEvidence?.(key) ?? []; } catch { required = []; }
+    return ruleChecklist({ key, scenarioIds: ids, mvsEvidence: mvsEvidence(typeof mvs === 'string' ? mvs : null, ids), required,
+      template: r.itemTemplate?.(key) ?? null, schema: r.itemSchema?.(key) ?? null, answerOnly: this.item(key).verificationKind === 'answer_only' });
+  }
+  // Checklist duy nhất của đề: dòng của luật code, cộng dòng analyst thêm khi hồ sơ đã được nhận.
+  checklistLines(key, profile = this.profileOf(key)) {
+    return mergeChecklist(this.ruleLines(key), profile ? profileChecklist(profile, key) : []);
+  }
   async checklistGate(key, changed = null) {
-    const profile = this.profileOf(key);
-    if (!profile) return null;
+    const lines = this.checklistLines(key);
+    if (!lines.length) return null;
     const r = this.rt, ji = this.item(key), paths = this.paths(key);
     const folder = `${r.session.descriptor.matchId}/`;
     const list = changed ?? (r.liveWorktree(key) && ji.worktreeBase ? await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []) : []);
     const own = list.filter(f => f.status !== 'D' && f.path.startsWith(folder)).map(f => f.path.slice(folder.length));
     const appRoot = detectProfile(paths.matchRoot).root;
-    const exists = tail => [paths.matchRoot, appRoot].filter(Boolean).some(base => existsSync(join(base, tail)));
-    const failing = checklistProblems(profile, { answerDir: join(paths.matchRoot, 'answers', key), matchRoot: paths.matchRoot, changed: own, exists });
+    // File đề nêu tên theo đường dẫn trong một gói (src/server/x.ts): tìm theo đuôi đường dẫn trong các file git theo dõi.
+    const tracked = new Set();
+    for (const l of lines.filter(x => x.kind === 'source')) {
+      const tail = l.path.replaceAll('\\', '/').replace(/^\.?\//, '');
+      const hit = r.liveWorktree(key) ? await git(['ls-files', '--', `:(glob)**/${tail}`], { cwd: paths.worktreeRoot, allowFail: true }).catch(() => null) : null;
+      if (hit?.out?.trim()) tracked.add(tail);
+    }
+    const exists = tail => tracked.has(tail) || [paths.matchRoot, appRoot].filter(Boolean).some(base => existsSync(join(base, tail)));
+    const failing = checklistProblems(lines, { answerDir: join(paths.matchRoot, 'answers', key), matchRoot: paths.matchRoot, changed: own, exists });
     if (!failing.length) return null;
     const mark = failing.map(f => f.id).sort().join('|');
     const text = `checklist of this item (brief <checklist>): ${failing.map(f => f.problem).join('; ')}`;
@@ -765,7 +791,13 @@ export class Workflow {
           dependsOn: this.item(key).dependsOn ?? [] });
       })()),
       ...(s.reportOnly ? block('report_only_pi', REPORT_ONLY_PI.replace(/\r\n/g, '\n').replaceAll('<ID>', key)) : []),
-      ...(s.reportOnly ? [] : block('environment', environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null))),
+      ...(s.reportOnly ? [] : block('environment', (() => {
+        const text = environmentText(s.setup, s.setup?.skipped ? this.mainAppRoot() : null);
+        // 33R91I3Q: lệnh start riêng của app mà một đề đã chạy được (cả từ trận trước cùng app) được helper nhớ.
+        let known = null;
+        try { known = text && !s.setup?.skipped && wt.matchRoot && r.teamWorkspace ? sharedCommands(r.teamWorkspace, wt.matchRoot) : null; } catch { known = null; }
+        return known ? `${text}\napp start: call it without custom. The helper already has the project's own build and serve commands that started this app (first used by ${known.sharedFrom}) and runs them for your worktree.` : text;
+      })())),
       ...(s.reportOnly ? [] : block('skills', [s.skills?.item, s.skills?.stackNotes].filter(Boolean).join('\n'))),
       ...(s.reportOnly ? [] : block('profile', s.profile ?? null)),
       ...block('materials', [`dir: ${s.materialsDir ?? r.itemDir(key)}`, ...['template.json', 'mvs.json', 'requirements.json', 'start.json'].map(files).filter(Boolean),
@@ -783,6 +815,8 @@ export class Workflow {
       ...block('search_logs', s.searchLogs ?? null),
       ...block('knowledge_hints', s.knowledgeHints ?? null),
       ...block('related_events', s.relatedEvents ?? null),
+      // Checklist có từ lần đọc brief đầu tiên: luật code lập, analyst bổ sung sau (addProfileToBrief viết lại khối này).
+      ...(() => { let lines = []; try { lines = this.checklistLines(key); } catch { lines = []; } return block('checklist', lines.length ? checklistBlock(lines) : null); })(),
       ...block('item', [raw.descriptionMd ?? raw.description ?? '', s.startInstruction ? `\nStart instruction: ${s.startInstruction}` : ''].join('')),
       ...(s.reportOnly ? [] : block('skill_text', (() => {
         const answerOnly = s.verificationKind === 'answer_only';
@@ -1192,6 +1226,47 @@ export class Workflow {
     r.journal.save();
     return { problem: `no new test fails when these changes are undone: ${list.slice(0, 6).join('; ')}. Change the case that covers each one so the old and the new code give different observable results, or add a case, then run_checks {action: "mutants"} again. A change with no behaviour (refactor, log line, type only) needs no case: say so in your result and call candidate again as is` };
   }
+  // Kiểm an toàn (không đọc hồ sơ đề): lỗi kiểu trong file chính item đổi không được lên main. 33R91I3Q: CR-07 không gọi
+  // run_checks lần nào, đưa TS7053 ở reconciliation-audit.ts lên main lúc 14:41; BUG-12, PI-04, TASK-08, BUG-09 sau đó
+  // đều bàn giao với typecheck đỏ vì file đó. Lần typecheck trên source hiện tại đỏ ở file của item: từ chối một lần cho
+  // mỗi tập lỗi. Chưa có lần nào trên source hiện tại: đòi chạy một lần khi còn từ TYPECHECK_MINUTES phút. Lỗi ở file
+  // item không đổi (từ main) chỉ cảnh báo.
+  async typecheckGate(key) {
+    const r = this.rt, ji = this.item(key), paths = this.paths(key);
+    if (!r.liveWorktree(key) || !ji.worktreeBase || ji.verificationKind === 'answer_only') return null;
+    if (!detectProfile(paths.matchRoot).commands?.typecheck) return null;
+    const folder = `${r.session.descriptor.matchId}/`;
+    const changed = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []);
+    const code = changed.filter(f => f.status !== 'D' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && /\.[cm]?tsx?$/.test(f.path))
+      .map(f => f.path.slice(folder.length));
+    if (!code.length) return null;
+    const checks = readChecks(r.session.paths.teamWork, key);
+    const mine = checks && samePath(checks.matchRoot, paths.matchRoot) ? checks : null;
+    const row = mine?.finished?.typecheck ?? (mine?.results ?? []).find(c => c.name === 'typecheck') ?? null;
+    const current = (await this.snapshot(key, paths).catch(() => null))?.source ?? null;
+    const ranOn = mine?.source ?? mine?.startSnapshot?.source ?? null;
+    if (!row || !current || ranOn !== current) {
+      const left = this.minutesToReturn(key);
+      const text = 'no type check ran on your current source';
+      if (left === null || left < TYPECHECK_MINUTES || ji.typecheckAsked === current) return { warning: `${text}: handed off without it` };
+      ji.typecheckAsked = current;
+      r.journal.save();
+      return { problem: `${text}, and you changed ${code.length} TypeScript file${code.length === 1 ? '' : 's'}. A type error that reaches main fails the type check of every item after you. Call run_checks {checks: ["typecheck"]} (one to two minutes), fix what it reports in your files, then call candidate again` };
+    }
+    if (row.state !== 'failed' || row.advisory) return null;
+    let log = '';
+    try { log = readFileSync(join(paths.matchRoot, 'answers', key, row.log ?? 'evidence/typecheck.log'), 'utf8'); } catch { log = row.tail ?? ''; }
+    const own = f => code.some(t => t === f || t.endsWith(`/${f.replace(/^\.\//, '')}`));
+    const files = typeErrorFiles(log);
+    const hits = files.filter(own);
+    if (!hits.length) return files.length ? { warning: `the type check fails only in files you did not change (${files.slice(0, 4).join(', ')}): they came from main, leave them` } : null;
+    const lines = log.split(/\r?\n/).filter(l => /error\s+TS\d+/.test(l) && hits.some(f => l.replaceAll('\\', '/').includes(f))).map(l => l.trim().slice(0, 240));
+    const mark = `${current}|${lines.join('|')}`;
+    if (ji.typeErrorsSeen === mark) return { warning: `type errors in your files stay in this handoff: ${lines.slice(0, 3).join('; ')}` };
+    ji.typeErrorsSeen = mark;
+    r.journal.save();
+    return { problem: `the type check fails in files you changed: ${lines.slice(0, 6).join('; ')}. Once on main these fail the type check of every later item. Fix them, run run_checks {checks: ["typecheck"]} again, then call candidate` };
+  }
   async candidateCheckpoint(args) {
     const key = args.backlogItemKey, owner = this.rt.journal.data.preparation?.baselineOwner;
     const lookup = await this.lookupBeforeHandoff(key);
@@ -1245,6 +1320,10 @@ export class Workflow {
     if (this.baselineWait(key) === 'owner') {
       warnings.push(`the baseline failures are not fixed on main yet: ${owner} lands that fix first. Hand off now as observed; publish waits for the fix, then the helper syncs your worktree and root asks you to rerun the full suite`);
     }
+    // Kiểm an toàn, không phụ thuộc hồ sơ đề: lỗi kiểu trong file của item.
+    const types = await this.typecheckGate(key).catch(() => null);
+    if (types?.problem) problems.push(types.problem);
+    else if (types?.warning) warnings.push(types.warning);
     // Checklist mục 2 và 3: chỉ xét khi không còn lỗi nào khác, để lần từ chối duy nhất không bị lẫn.
     if (!problems.length) {
       const notRun = this.notRunGate(key);
