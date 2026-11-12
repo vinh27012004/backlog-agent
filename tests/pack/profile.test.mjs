@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { checklistBlock, checklistProblems, profileBlock, profileChecklist, profileFlags, profileForJev, validateProfile } from '../../pack/src/match/profile.mjs';
+import { checklistBlock, checklistProblems, profileBlock, profileChecklist, profileFlags, validateProfile, validateWave } from '../../pack/src/match/profile.mjs';
 import { tempDir } from './support.mjs';
 
 // Trích đề CR-07 và TASK-08 của bộ 14 item (BI7A5ACV, EXP3I47A).
@@ -87,7 +87,6 @@ test('flags: only an item whose grading names broken builds asks for the mutatio
   assert.ok(profileChecklist(task08(), 'TASK-08').some(l => l.kind === 'mutants'));
   assert.ok(!profileChecklist(cr07(), 'CR-07').some(l => l.kind === 'mutants'));
   assert.match(checklistBlock(profileChecklist(cr07(), 'CR-07')), /1\. evidence\/reconciliation-2025-10\.csv for CR-07-TC-02/);
-  assert.ok(JSON.stringify(profileForJev(cr07(), { type: 'CR', points: 70 })).length < 1500);
 });
 
 test('checklist at handoff: required evidence of a PASS scenario, answer fields and named source files', () => {
@@ -108,4 +107,25 @@ test('checklist at handoff: required evidence of a PASS scenario, answer fields 
   // Kịch bản NOT_RUN không bị đòi evidence ở đây (notRunGate lo), sai kiểu thì báo.
   write({ status: 'PARTIAL', auditSummary: 'text', testResults: [row(1, 'PASS'), row(2, 'NOT_RUN'), row(3, 'NOT_RUN'), row(4, 'NOT_RUN')] });
   assert.deepEqual(checklistProblems(cr07(), { answerDir: dir, exists: () => true }).map(p => p.problem), ['submit.json auditSummary must be object, it is string']);
+});
+
+// Báo cáo đợt: phụ thuộc giữa các đề (có trích dẫn), file dùng chung, thứ tự lên main (DVVFEPXF CR-05/CR-08).
+test('a wave report needs real items, a quote from either item for each dependency, and its own items in the order', () => {
+  const texts = { 'CR-07': [CR07], 'BUG-11': ['Support ticket: the books do not match the bank.'], 'CR-08': ['Extends the month close page of CR-05 with revision 3.'], 'CR-05': ['Month close page.'] };
+  const ctx = { items: ['CR-07', 'CR-08', 'CR-05'], known: ['CR-07', 'CR-08', 'CR-05', 'BUG-11'], textsOf: k => texts[k] ?? [] };
+  const report = () => ({
+    dependencies: [{ item: 'CR-07', needs: 'BUG-11', kind: 'figures', quote: 'only on source that also contains the BUG-11 fixes' },
+      { item: 'CR-08', needs: 'CR-05', kind: 'code', quote: 'Extends the month close page of CR-05' }],
+    sharedAreas: [{ files: ['FinancesApp.tsx', 'budget/app.ts'], items: ['CR-05', 'CR-07', 'CR-08'], kind: 'registration', note: 'routes and handlers' }],
+    landingOrder: ['CR-05', 'CR-07', 'CR-08'] });
+  assert.deepEqual(validateWave(report(), ctx).problems, []);
+  const bad = report(); bad.dependencies[1].quote = 'CR-08 cannot work without CR-05'; bad.dependencies.push({ item: 'CR-07', needs: 'CR-07', kind: 'code', quote: 'Reconciliation audit page' });
+  bad.sharedAreas[0].items.push('TASK-99'); bad.sharedAreas[0].files.push('../outside.ts'); bad.landingOrder.push('BUG-11');
+  const p = validateWave(bad, ctx).problems.join('\n');
+  assert.match(p, /dependencies\[1\] \(CR-08 needs CR-05\): quote not found word for word in the text of CR-08 or CR-05/);
+  assert.match(p, /an item cannot need itself/);
+  assert.match(p, /sharedAreas\[0\]: not backlog items: TASK-99/);
+  assert.match(p, /must be a relative path or a file name/);
+  assert.match(p, /landingOrder lists only the items of this wave.*not in it: BUG-11/);
+  assert.match(validateWave({ dependencies: [] }, ctx).problems.join('\n'), /schema .*missing required property/);
 });

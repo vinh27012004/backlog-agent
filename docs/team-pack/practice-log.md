@@ -559,3 +559,18 @@ journal, transcript Codex của root và từng worker, bundle `runs/judge/BI7A5
 | L120 | `tools/judge/usage.mjs` lấy transcript cuối làm giờ hết trận (40m50s); transcript dừng vì hết credit | Báo cáo judge và bench so thời lượng sai | Chưa sửa |
 | L121 | `mutants` (mới từ `1c8812a`) chạy lại vitest của loot-core cho từng chỗ sửa: 25–60 s mỗi chỗ, BUG-09 59 s (1 chỗ), BUG-11 159 s (4), BUG-12 211 s (8), CR-05 307 s (6), TASK-08 314 s (12, stale vì source đổi giữa chừng), PI-04 175 s cho 1 chỗ (chờ slot lệnh nặng). Giai đoạn evidence của BUG-09/BUG-11/TASK-08/CR-05 dài 15–18 phút, phần lớn là chờ `run_checks status` và `mutants` (`waitSeconds` dương nào cũng chờ tới 110 s, theo thiết kế từ RATH0OHJ) | BUG-12 đang chạy mutants (4/8) khi hết credit | Chưa sửa. Hướng: bỏ qua mutants khi item còn ít phút hơn tổng thời gian ước tính (số chỗ × thời gian một lần test), hay chạy các bản đột biến song song trong bản sao worktree |
 | L122 | Hạn mức gói plus hết sau khoảng 40 phút với 14 item. Credit: team_fixer 183,7/197 (14 thread, `gpt-6-luna` effort high, 356 lượt, 175 phút chạy); root 13,4 dù 46,5M input (98,8% cache, 63% sau `wait_for_update`); guardian 5,9M input, review mỗi `run_checks`/`app`/`publish_item` | Hết credit khi trận còn khoảng 7 phút | Chưa sửa. Hướng: mua thêm credit/gói lớn hơn cho trận thật; hay hạ effort fixer xuống medium |
+
+## #23 · 12/11/2026 · tự luyện `DVVFEPXF` (bộ 14 item như `BI7A5ACV`, pack ở commit `28ae867`)
+
+Nộp 12/14 item, 875 điểm đã nộp (BI7A5ACV: 9/14, 585), khoảng 238 credit; hạn mức Codex hết lúc 02:51:50Z khi trận còn
+khoảng 9 phút. Lần đầu chạy `team_analyst` (từng đề) và helper tự publish mọi loại item. Nguồn: journal, bundle
+`runs/judge/DVVFEPXF/`.
+
+| # | Việc | Hệ quả | Sửa |
+|---|---|---|---|
+| L123 | Analyst từng đề: 8/8 hồ sơ được nhận, 31–85 s (CR-07 gửi 3 lần, TASK-07 2 lần); `mutants` chỉ chạy ở TASK-08 (11 chỗ sửa, 310 s) | 7 item không phải chạy mutants; thợ bắt đầu muộn hơn khoảng 44 s | **Đã** đổi: thợ không chờ analyst, một analyst (`gpt-6.1-sol`) cho mỗi đợt, hồ sơ đến sau được đưa ở `ready_for_evidence` và kiểm ở `candidate` |
+| L124 | Helper tự publish (`autoPublishAll`): sau khi hết hạn mức vẫn nộp được CR-08, PI-04, BUG-11, TASK-08, BUG-12 | +5 item so với để root publish | Giữ |
+| L125 | CR-08 chờ CR-05: helper chép code CR-05 sang CR-08 lúc 02:42, CR-08 lên main 02:53 mang theo bản đó; CR-05 bàn giao 02:59, main đã có phiên bản khác của 4 file của chính nó, 3 lần publish hỏng dưới 1 s; root đã hết credit | CR-05 không nộp | **Đã** sửa: đề chờ giữ publish khi còn dư thời gian (`dependencyHold`); đề được chờ publish sau thì helper tự sync, giữ bản của nó ở các file đã chép (`echoedFiles`, `worktree sync` `prefer`), lập candidate mới và nộp. Báo cáo đợt của analyst thêm phụ thuộc mà đề không ghi thẳng |
+| L126 | Journal chỉ ghi `state: failed` cho job hỏng | Phải tự so file mới ra nguyên nhân của CR-05 | **Đã** sửa: `recordJob` lưu `error {code, message}` |
+| L127 | PI-03 (hạn 10 phút): prepare 84 s, tra log hàng loạt 262 s, hết hạn khi chưa bàn giao | PI-03 không nộp | Chưa sửa |
+| L128 | CR-07, CR-08 nộp với kịch bản NOT_RUN: bản build production không xong kịp; giai đoạn evidence trung bình 11m20s (BI7A5ACV 8m18s) | Mất điểm các kịch bản trang | Chưa sửa |

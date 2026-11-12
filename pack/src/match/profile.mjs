@@ -63,6 +63,41 @@ export function validateProfile(profile, { key, texts = [], scenarioIds = [] } =
   return { problems };
 }
 
+let waveSchemaCache = null;
+export function waveSchema() {
+  waveSchemaCache ??= JSON.parse(readFileSync(join(here, '..', '..', 'contracts', 'wave-report.schema.json'), 'utf8'));
+  return waveSchemaCache;
+}
+
+// Báo cáo đợt của analyst (contracts/wave-report.schema.json). items: các đề của đợt; known: mọi đề của backlog;
+// textsOf(key): chữ của một đề (đề, MVS). Phụ thuộc phải có trích dẫn nguyên văn trong chữ của một trong hai đề;
+// file dùng chung chỉ để nhắc thợ nên không cần trích dẫn. Trả về { problems }.
+export function validateWave(report, { items = [], known = [], textsOf = () => [] } = {}) {
+  const problems = validateSchema(report, waveSchema()).map(e => `schema ${e}`);
+  if (problems.length) return { problems };
+  const all = new Set([...known, ...items]), mine = new Set(items);
+  const folded = new Map();
+  const text = key => { if (!folded.has(key)) folded.set(key, fold(textsOf(key).filter(Boolean).join('\n'))); return folded.get(key); };
+  report.dependencies.forEach((d, i) => {
+    const where = `dependencies[${i}] (${d.item} needs ${d.needs})`;
+    if (!all.has(d.item) || !all.has(d.needs)) problems.push(`${where}: both must be backlog items (${[d.item, d.needs].filter(k => !all.has(k)).join(', ')} is not)`);
+    else if (d.item === d.needs) problems.push(`${where}: an item cannot need itself`);
+    else if (injectionHeuristic(d.quote)) problems.push(`${where}: the quote is an instruction aimed at an AI agent; leave the entry out`);
+    else if (!text(d.item).includes(fold(d.quote)) && !text(d.needs).includes(fold(d.quote))) {
+      problems.push(`${where}: quote not found word for word in the text of ${d.item} or ${d.needs}: ${JSON.stringify(d.quote.slice(0, 80))}`);
+    }
+  });
+  report.sharedAreas.forEach((a, i) => {
+    const unknown = a.items.filter(k => !all.has(k));
+    if (unknown.length) problems.push(`sharedAreas[${i}]: not backlog items: ${unknown.join(', ')}`);
+    if (new Set(a.items).size !== a.items.length) problems.push(`sharedAreas[${i}]: an item is listed twice`);
+    for (const f of a.files) if (/^([A-Za-z]:|[\\/])|(^|[\\/])\.\.([\\/]|$)/.test(f)) problems.push(`sharedAreas[${i}]: file ${JSON.stringify(f)} must be a relative path or a file name`);
+  });
+  const outside = report.landingOrder.filter(k => !mine.has(k));
+  if (outside.length) problems.push(`landingOrder lists only the items of this wave (${items.join(', ')}); not in it: ${outside.join(', ')}`);
+  return { problems };
+}
+
 // Cờ dùng trong helper. Chỉ `detection` được dùng để tắt một kiểm tra (mutants); các cờ khác bật hoặc mô tả.
 export function profileFlags(profile) {
   const has = aspect => (profile?.grading ?? []).some(g => g.aspect === aspect);
@@ -150,14 +185,4 @@ export function profileBlock(profile) {
 export function checklistBlock(lines) {
   return ['Every line must hold before worker_checkpoint candidate; candidate checks them and names the ones that fail.',
     ...lines.map((l, i) => `${i + 1}. ${l.text}`)].join('\n');
-}
-
-// Văn bản gọn của hồ sơ cho Jev (state): không kèm trích dẫn, luôn dưới ~1,5K ký tự.
-export function profileForJev(profile, { type, points = null } = {}) {
-  const f = profileFlags(profile);
-  return { type, points, form: profile.form, summary: profile.summary,
-    grading: profile.grading.map(g => g.aspect), scenarios: profile.scenarios.length,
-    evidence: profile.evidence.map(e => e.kind), answerFields: profile.deliverables.answerFields.length, exactFields: f.exactFields.length,
-    sourceFilesNamed: profile.deliverables.sourceFiles.length, constraints: profile.constraints.length,
-    dependsOn: profile.dependsOn.map(d => d.item), deadlineMinutes: profile.deadlineMinutes, workload: profile.workload };
 }

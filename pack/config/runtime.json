@@ -14,9 +14,5 @@
   "linkedModules": true,
   "scopedTests": true,
   "analyst": true,
-  "analystTimeoutSeconds": 150,
-  "analystSkip": [
-    "PI"
-  ],
   "autoPublishAll": true
 }

@@ -1530,29 +1530,32 @@ const PROFILE = () => ({
   evidence: [], scenarios: ['TC-1'], constraints: [], dependsOn: [], deadlineMinutes: null,
   workload: { investigation: 'code', crossModule: false, uiChange: false, needsRunningApp: false, officialData: false } });
 
-test('the analyst is spawned first; its accepted profile goes into the brief and only then the fixer is offered', async () => {
+test('workers start at once; one analyst per wave profiles the items and the worker gets the checklist at ready_for_evidence', async () => {
   const f = analystFixture(), wf = f.rt.workflow;
   wf.autoPrepare();
   await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
   assert.equal(f.ji.analysis.state, 'pending');
-  const input = readFileSync(f.ji.analysis.file, 'utf8');
-  for (const re of [/<item>[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /phase: "profile"/]) assert.match(input, re);
   const first = wf.offered(wf.actions()).nextActions;
-  assert.deepEqual(first.map(a => a.action), ['spawn_analyst']);
-  assert.deepEqual([first[0].spawn.task_name, first[0].spawn.agent_type], ['cr01_analyst', 'team_analyst']);
-  assert.deepEqual(wf.actions().nextActions, [], 'offered once: root is not woken again while the analyst reads');
-  // Trích dẫn bịa bị từ chối, fixer chưa được spawn.
+  assert.deepEqual(first.map(a => a.action).sort(), ['spawn_analyst', 'spawn_worker'], 'the worker does not wait for the analyst');
+  const analyst = first.find(a => a.action === 'spawn_analyst');
+  assert.deepEqual([analyst.spawn.task_name, analyst.spawn.agent_type, analyst.items], ['wave1_analyst', 'team_analyst', ['CR-01']]);
+  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker'], 'the analyst is offered once: root is not woken again while it reads');
+  const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
+  for (const re of [/<item_input id="CR-01" type="CR" points="140">[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /<wave_schema>[\s\S]*"title": "wave-report"/, /phase: "wave"/]) assert.match(input, re);
+  // Trích dẫn bịa bị từ chối; analyst không bao giờ thành thợ của đề.
   const bad = PROFILE(); bad.grading.push({ aspect: 'detection', quote: 'Your tests are run against broken builds' });
   const refused = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: bad });
   assert.equal(refused.accepted, false); assert.match(refused.problems.join('\n'), /quotes not found word for word/);
-  assert.equal(f.ji.workerThread, undefined, 'the analyst is never registered as the worker of the item');
+  assert.equal(f.ji.workerThread, undefined);
   const ok = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: PROFILE() });
   assert.equal(ok.accepted, true); assert.equal(f.ji.analysis.state, 'done');
   const brief = readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8');
-  assert.match(brief, /<item_profile>[\s\S]*form: feature[\s\S]*hidden_tests: "Hidden tests check[\s\S]*mutation check: not graded for this item[\s\S]*<\/item_profile>/);
+  assert.match(brief, /^<item_profile>$[\s\S]*form: feature[\s\S]*mutation check: not graded for this item[\s\S]*<\/item_profile>/m);
   assert.match(brief, /<checklist>[\s\S]*submit\.json rowCount: integer, filled[\s\S]*src\/export\.js exists in your change[\s\S]*<\/checklist>\n\n<item>/);
-  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker']);
-  assert.equal(JSON.stringify(wf.profileOf(f.key)), JSON.stringify(PROFILE()));
+  // Thợ đang làm nhận checklist một lần, ở ready_for_evidence.
+  const note = wf.analysisNote(f.key);
+  assert.match(note, /Checklist:[\s\S]*submit\.json rowCount: integer, filled/);
+  assert.equal(wf.analysisNote(f.key), null, 'delivered once');
   // Hồ sơ nói đề không chấm khả năng phát hiện lỗi: không đòi mutants dù item sửa code có sẵn và thêm test.
   Object.assign(f.ji, { worktreeBase: f.base, prepared: { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } } });
   writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
@@ -1567,20 +1570,65 @@ test('the analyst is spawned first; its accepted profile goes into the brief and
   assert.equal(await wf.checklistGate(f.key), null);
 });
 
-test('no profile by the deadline: the fixer starts with the default brief and a late profile is dropped', async () => {
+// DVVFEPXF: CR-08 cần CR-05, lên main trước và mang theo bản CR-05 cũ; CR-05 publish hỏng 3 lần.
+test('the wave report adds dependencies and shared files; a waiting item holds its publish while it has time', async () => {
   const f = analystFixture(), wf = f.rt.workflow;
+  f.rt.gm.view.items.push({ key: 'BUG-02', status: 'OPEN', raw: { descriptionMd: 'Fix the invoice totals the export reads.' } });
   wf.autoPrepare();
   await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
   wf.offered(wf.actions());
-  f.ji.analysis.deadline = new Date(Date.now() - 1000).toISOString();
-  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker']);
-  assert.equal(f.ji.analysis.state, 'timeout');
-  const late = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: PROFILE() });
-  assert.equal(late.accepted, false); assert.equal(late.late, true);
-  assert.equal(wf.profileOf(f.key), null);
-  assert.doesNotMatch(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /^<item_profile>$/m);
-  // PI và item chỉ trả lời không qua analyst.
-  assert.equal(fixture('PI-03').rt.workflow.analystFor('PI-03'), false);
+  const call = wave => f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'wave', wave });
+  const report = { dependencies: [{ item: 'CR-01', needs: 'BUG-02', kind: 'figures', quote: 'Fix the invoice totals the export reads' }],
+    sharedAreas: [{ files: ['src/routes.js'], items: ['CR-01', 'BUG-02'], kind: 'registration', note: 'both add a route' }], landingOrder: ['CR-01'] };
+  const bad = await call({ ...report, dependencies: [{ item: 'CR-01', needs: 'BUG-09', kind: 'code', quote: 'needs the fix of BUG-09' }], landingOrder: ['CR-01', 'BUG-02'] });
+  assert.equal(bad.accepted, false);
+  assert.match(bad.problems.join('\n'), /both must be backlog items \(BUG-09 is not\)/);
+  assert.match(bad.problems.join('\n'), /landingOrder lists only the items of this wave.*BUG-02/);
+  const invented = await call({ ...report, dependencies: [{ ...report.dependencies[0], quote: 'CR-01 requires the BUG-02 change first' }] });
+  assert.match(invented.problems.join('\n'), /quote not found word for word in the text of CR-01 or BUG-02/);
+  assert.equal(f.ji.workerThread, undefined);
+  const ok = await call(report);
+  assert.equal(ok.accepted, true);
+  assert.deepEqual(f.ji.dependsOn, ['BUG-02']);
+  assert.deepEqual(wf.neededBy('BUG-02'), ['CR-01'], 'the helper copies the fix of BUG-02 into CR-01 like a dependency named in the text');
+  assert.match(wf.analysisNote(f.key), /Files other items of this wave change too: src\/routes\.js \(with BUG-02: registration, both add a route\)[\s\S]*only add new lines/);
+  // BUG-02 còn đang làm và chưa lên main: CR-01 giữ publish khi còn dư thời gian, tới sát mốc cơ hội cuối thì thôi.
+  const other = f.rt.journal.item('BUG-02');
+  other.startedAt = new Date().toISOString();
+  assert.equal(wf.dependencyHold(f.key, { minutesLeft: 30 }), 'BUG-02');
+  assert.equal(wf.dependencyHold(f.key, { minutesLeft: 7 }), null, 'within two minutes of the last call: publish anyway');
+  other.integratedAt = new Date().toISOString();
+  assert.equal(wf.dependencyHold(f.key, { minutesLeft: 30 }), null, 'the waited-for item is on main');
+});
+
+test('an item whose files reached main through an item that waited for it keeps its own version at sync', async () => {
+  const f = fixture('CR-05'), file = join('M1', 'src', 'lib.js'), added = join('M1', 'src', 'month-close.js');
+  const land = (rel, text, message) => { writeFileSync(join(f.checkout, rel), text); sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', message], f.checkout); };
+  // CR-05 tạo month-close.js và sửa lib.js; CR-08 đã lên main với bản cũ của hai file đó cộng phần của nó.
+  writeFileSync(join(f.wt.worktreeRoot, added), 'export const close = "final";\n');
+  land(added, 'export const close = "early";\nexport const revision3 = true;\n', 'CR-08: work');
+  land(file, 'export const value=3;\n', 'CR-08: lib');
+  const waiting = f.rt.journal.item('CR-08');
+  Object.assign(waiting, { sharedFix: { from: 'CR-05', files: ['M1/src/lib.js', 'M1/src/month-close.js'] }, integratedAt: new Date().toISOString() });
+  assert.deepEqual([...f.rt.workflow.echoedFiles('CR-05')].sort(), ['M1/src/lib.js', 'M1/src/month-close.js']);
+  await assert.rejects(f.rt.worktree({ action: 'sync', backlogItemKey: f.key }), /WORKTREE_CONFLICT/);
+  const synced = await f.rt.worktree({ action: 'sync', backlogItemKey: f.key, prefer: [...f.rt.workflow.echoedFiles('CR-05')] });
+  assert.equal(synced.synced, true);
+  assert.deepEqual([...synced.preferred].sort(), ['M1/src/lib.js', 'M1/src/month-close.js']);
+  const read = rel => readFileSync(join(f.wt.worktreeRoot, rel), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(read(added), 'export const close = "final";\n');
+  assert.equal(read(file), 'export const value=2;\n');
+  assert.equal(f.ji.worktreeBase, sh('git', ['rev-parse', 'HEAD'], f.checkout));
+});
+
+test('a failed job keeps its error code in the journal', async () => {
+  const f = fixture('BUG-01');
+  const job = f.rt.jobs.start('publish_item', async () => { throw Object.assign(new Error('SYNC_REQUIRED: main changed files this item also changes'), { code: 'SYNC_REQUIRED' }); }, { key: f.key });
+  await job.promise.catch(() => {});
+  const saved = f.ji.jobs.find(j => j.id === job.id);
+  assert.equal(saved.state, 'failed');
+  assert.equal(saved.error.code, 'SYNC_REQUIRED');
+  assert.match(saved.error.message, /main changed files/);
 });
 
 // BI7A5ACV: root publish mất một lượt model và một lượt guardian cho mỗi item (17 lần), CR-08 chờ root 3 phút.
@@ -1594,4 +1642,28 @@ test('the helper publishes every item type itself; with autoPublishAll off only 
   assert.equal(wf.helperPublishes({ ...act, action: 'spawn_worker' }), false);
   f.ji.autoPublished = wf.publishMark(act);
   assert.equal(wf.helperPublishes(act), false, 'once per handoff: a failed publish goes back to root');
+});
+
+test('publish of an item whose file reached main through an item that waited for it syncs by itself and submits', { timeout: 120_000 }, async () => {
+  const f = fixture('CR-05'), bodies = submitted(f);
+  const checkpoint = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
+  f.ji.workerThread = '/root/cr05'; f.ji.workerState = 'writing';
+  await checkpoint({ backlogItemKey: f.key, phase: 'ready_for_evidence', testsAdded: [] });
+  const file = f.result(1);
+  assert.equal((await checkpoint({ backlogItemKey: f.key, phase: 'candidate' })).handedOff, true);
+  // CR-08 đã nhận bản lib.js cũ của CR-05, sửa thêm rồi lên main trước.
+  writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), 'export const value=3;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'CR-08: work'], f.checkout);
+  const other = f.rt.journal.item('CR-08');
+  // Không có dấu "đề chờ đã mang file này lên main": vẫn là SYNC_REQUIRED như trước.
+  const plain = await publishDone(f, { backlogItemKey: f.key, fixResultFile: file });
+  assert.equal(plain.error?.code, 'SYNC_REQUIRED', JSON.stringify(plain));
+  assert.equal(f.ji.jobs.at(-1).error.code, 'SYNC_REQUIRED', 'the journal keeps why the publish failed');
+  Object.assign(other, { sharedFix: { from: 'CR-05', files: ['M1/src/lib.js'] }, integratedAt: new Date().toISOString() });
+  const done = await publishDone(f, { backlogItemKey: f.key, fixResultFile: file });
+  assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done));
+  assert.ok(done.progress.includes('sync'), JSON.stringify(done.progress));
+  assert.ok(done.result.warnings.some(w => /kept this item's version of M1\/src\/lib\.js/.test(w)), JSON.stringify(done.result.warnings));
+  assert.equal(bodies.length, 1);
+  assert.equal(sh('git', ['show', 'origin/main:M1/src/lib.js'], f.checkout), 'export const value=2;', 'the owner\'s final version is on main');
 });

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wave-report",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "dependencies": {
+      "type": "array",
+      "description": "every case where one item needs what another item delivers (its fix, handler, data or figures), in this wave or an earlier one",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "type": "string",
+            "description": "the item that needs something"
+          },
+          "needs": {
+            "type": "string",
+            "description": "the item that delivers it"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "code",
+              "data",
+              "figures",
+              "other"
+            ],
+            "description": "code: needs the other item's source change; data: needs data the other item creates; figures: its reported figures are right only with the other item's fix; other"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 8,
+            "description": "verbatim sentence or phrase from the text of either item that shows the dependency"
+          }
+        },
+        "required": [
+          "item",
+          "needs",
+          "kind",
+          "quote"
+        ]
+      }
+    },
+    "sharedAreas": {
+      "type": "array",
+      "description": "files or registration points that two or more items will change (routes, sidebar entries, handler tables, the same function); [] when none",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "file names or paths as far as the items let you tell"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "registration",
+              "same_logic",
+              "data",
+              "other"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "files",
+          "items",
+          "kind",
+          "note"
+        ]
+      }
+    },
+    "landingOrder": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "the items of this wave in the order their changes should reach main: an item others need comes before the items that need it",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "dependencies",
+    "sharedAreas",
+    "landingOrder"
+  ]
+}

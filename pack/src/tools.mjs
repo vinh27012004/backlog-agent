@@ -185,8 +185,10 @@ export class Runtime {
       const j = this.journal;
       if (!j) return;
       const target = job.key ? j.item(job.key) : j.data.preparation;
+      // DVVFEPXF: CR-05 publish hỏng 3 lần, journal chỉ có state failed, phải tự so file mới ra nguyên nhân.
+      const error = job.state === 'failed' && job.error ? { error: { code: job.error.code ?? 'JOB_FAILED', message: String(job.error.message ?? '').slice(0, 300) } } : {};
       target.jobs = [...(target.jobs ?? []), { id: job.id, kind: job.kind, state: job.state,
-        startedAt: new Date(job.startedAt).toISOString(), ms: job.ms }].slice(-30);
+        startedAt: new Date(job.startedAt).toISOString(), ms: job.ms, ...error }].slice(-30);
       j.save();
     } catch { /* đo đạc không được làm hỏng job */ }
   }
@@ -250,8 +252,9 @@ export class Runtime {
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start even if little time is left.'), requiredScenarios: num('Number of verification scenarios you will run (MVS count or acceptance criteria, min 1).') }, ['backlogItemKey']), handler: a => this.startWork(a) },
       { name: 'prepare_item', description: 'GAME: one background job for Start Work, materials, worktree/environment setup, profile and complete worker brief inputs. Waits up to waitSeconds (default 25) and usually returns the finished team_fixer brief inputs; state running means call job_status.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start with little time left.'), waitSeconds: num('Wait max 45 seconds (default 25).') }, ['backlogItemKey']), handler: a => this.workflow.prepare(a) },
-      { name: 'worker_checkpoint', description: 'GAME, worker or root. This is how a worker signals root: never send_message to root. ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded and end your turn with the hint as your reply: root gets the sync from the helper and sends a followup to resume. candidate {result} (or after writing the fix-result yourself) writes or takes the newest fix-result and checks it against its contract, submit.json against the item schema/template, that no test configuration or issued test file changed (graders restore issued tests) and that no new test launches a browser; for an item that runs the full suite it first brings in the fix of the baseline owner once that is on main: problems keep you writing (handedOff:false) until you fix them and write the next numbered fix-result; warnings are information. blocked {question}: only for a decision or lookup that root alone can make (company tools, another item, the time box); the helper wakes root with answer_worker, then end your turn with the question as your reply and continue when root\'s followup arrives. resume grants writes again (root: also registers threadId and closes an answered question). Root never syncs a writing worker. baseline_fixed {files}: only the baseline owner (youFix in <baseline_failures>), once the issued failing tests pass: the product files of that fix, relative to matchRoot; the helper commits exactly those to main as a separate commit within seconds, and items that need the full suite pick it up when they sync; files [] records that the baseline cannot be fixed. Writes stay allowed. profile {profile}: team_analyst only, hands in the item profile before the fixer is spawned.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'blocked', 'resume', 'baseline_fixed', 'profile'] }, question: str('blocked: the one question for root, with what you already checked.'), threadId: str('Root: native worker thread ID when granting writes.'), files: { type: 'array', items: { type: 'string' }, description: 'baseline_fixed: product files of the baseline fix, relative to matchRoot (no tests, no test config, no answers/).' },
+      { name: 'worker_checkpoint', description: 'GAME, worker or root. This is how a worker signals root: never send_message to root. ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded and end your turn with the hint as your reply: root gets the sync from the helper and sends a followup to resume. candidate {result} (or after writing the fix-result yourself) writes or takes the newest fix-result and checks it against its contract, submit.json against the item schema/template, that no test configuration or issued test file changed (graders restore issued tests) and that no new test launches a browser; for an item that runs the full suite it first brings in the fix of the baseline owner once that is on main: problems keep you writing (handedOff:false) until you fix them and write the next numbered fix-result; warnings are information. blocked {question}: only for a decision or lookup that root alone can make (company tools, another item, the time box); the helper wakes root with answer_worker, then end your turn with the question as your reply and continue when root\'s followup arrives. resume grants writes again (root: also registers threadId and closes an answered question). Root never syncs a writing worker. baseline_fixed {files}: only the baseline owner (youFix in <baseline_failures>), once the issued failing tests pass: the product files of that fix, relative to matchRoot; the helper commits exactly those to main as a separate commit within seconds, and items that need the full suite pick it up when they sync; files [] records that the baseline cannot be fixed. Writes stay allowed. profile {profile} and wave {wave}: team_analyst only, hand in one item profile per item of the wave and then the wave report.',
+        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'blocked', 'resume', 'baseline_fixed', 'profile', 'wave'] }, question: str('blocked: the one question for root, with what you already checked.'), threadId: str('Root: native worker thread ID when granting writes.'), files: { type: 'array', items: { type: 'string' }, description: 'baseline_fixed: product files of the baseline fix, relative to matchRoot (no tests, no test config, no answers/).' },
+          wave: { type: 'object', description: 'wave (team_analyst only): the wave report described by <wave_schema> in the analysis file (dependencies between items, shared files, landing order), handed in after the profiles; backlogItemKey is any item of the wave.' },
           profile: { type: 'object', description: 'profile (team_analyst only): the item profile described by <profile_schema> in the analysis file. The helper checks the schema, every quote word for word against the item and MVS, and the scenario ids; accepted:false lists what to fix.' },
           result: { type: 'object', description: 'candidate: your part of the fix-result instead of writing the file yourself: {status, summary, requirements, verification (your scenario rows), and when they apply root_cause, hypotheses, criteria, suspects, risks, confidence, tests_added, test_change, needs_dependency}. The helper adds changed_files, tests_added (new test files), the run_checks rows of verification and defaults for the rest, validates the whole against the contract and writes the next numbered fix-result.' } }, ['backlogItemKey', 'phase']),
         readOnly: true, handler: a => this.workerCheckpoint(a) },
@@ -371,18 +374,25 @@ export class Runtime {
   // Lời gọi từ helper của subagent. Danh sách đóng, kiểm ở đây chứ không tin phía gửi: không Game Master, không git
   // publish, không progress; chờ job không trả sớm vì PI (việc của root).
   workerCheckpoint(args) {
-    if (args.phase === 'ready_for_evidence') return this.workflow.evidenceCheckpoint(args);
+    if (args.phase === 'ready_for_evidence') {
+      // Hồ sơ đề và file dùng chung của đợt (team_analyst) đến khi thợ đang làm: đưa cho thợ ở đây, một lần.
+      return Promise.resolve(this.workflow.evidenceCheckpoint(args)).then(res => {
+        const note = this.workflow.analysisNote(args.backlogItemKey);
+        return note ? { ...res, analysis: note } : res;
+      });
+    }
     if (args.phase === 'candidate') return this.workflow.candidateCheckpoint(args);
     if (args.phase === 'blocked') return this.workflow.blockedCheckpoint(args);
     if (args.phase === 'baseline_fixed') return this.workflow.baselineCheckpoint(args);
     if (args.phase === 'profile') return this.workflow.profileCheckpoint(args);
+    if (args.phase === 'wave') return this.workflow.waveCheckpoint(args);
     return this.workflow.checkpoint(args);
   }
 
   proxyCall(name, args) {
     // Worker sống thật mới đăng ký; root gọi read_item khi prepare không được coi là spawn thành công.
     // phase profile là của team_analyst: không đăng ký nó làm worker của item.
-    if (name === 'worker_checkpoint' && args.phase === 'profile') return this.workerCheckpoint(args);
+    if (name === 'worker_checkpoint' && ['profile', 'wave'].includes(args.phase)) return this.workerCheckpoint(args);
     if (['read_item', 'worker_checkpoint', 'company_lookup'].includes(name) || (name === 'worktree' && args.action === 'status')) {
       this.workflow.registerWorker(args.backlogItemKey);
     } else if (name === 'job_status') this.workflow.registerWorker(this.jobs.jobs.get(args.jobId)?.key);
@@ -1102,7 +1112,7 @@ export class Runtime {
     return { job, codegraph };
   }
 
-  async worktree({ action, backlogItemKey: key, message }) {
+  async worktree({ action, backlogItemKey: key, message, prefer = null, fromPublish = false }) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
     const { checkoutRoot, matchRoot, teamWork } = this.session.paths;
@@ -1168,7 +1178,9 @@ export class Runtime {
     // hình ở mọi worktree; CR-01 phải chép tay layout.tsx từ main vào worktree để chụp evidence).
     if (action === 'sync') {
       if (ji.workerState === 'writing') fail('WORKER_BUSY', 'worker must call worker_checkpoint ready_for_evidence/candidate and yield all writes before sync');
-      if (this.workflow.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before sync');
+      if ((this.workflow.publishOwner === key && !fromPublish) || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before sync');
+      // prefer: file mà item này là chủ (đã lên main qua một đề chờ nó, workflow.echoedFiles): xung đột thì giữ bản của item.
+      const mineWins = new Set(Array.isArray(prefer) ? prefer : []);
       if (ji.submitIntent && !ji.receipt) fail('SUBMISSION_PENDING', 'replay the pending submission before changing the worktree');
       // Fixer được spawn khi setup đầu còn chạy: reset của sync hay một lần cài lại không chen vào giữa lần cài đó.
       const setupRunning = this.jobs.jobs.get(ji.worktreeSetupJob);
@@ -1190,6 +1202,15 @@ export class Runtime {
         const [mine, theirs] = await Promise.all([git(['hash-object', '--', f], { cwd, allowFail: true }), git(['rev-parse', `${mainHead}:${f}`], { cwd, allowFail: true })]);
         if (mine.code !== 0 || theirs.code !== 0 || mine.out !== theirs.out) clash.push(f);
       }
+      // File chưa track của item mà main vừa thêm, thuộc nhóm prefer: giữ bản của item (reset --hard sẽ ghi đè nó).
+      const kept = [];
+      for (const f of clash.filter(p => mineWins.has(p))) {
+        const copy = join(teamWork, 'scratch', `${key}-sync-keep`, String(kept.length));
+        mkdirSync(dirname(copy), { recursive: true });
+        copyFileSync(join(cwd, f), copy);
+        kept.push({ file: f, copy });
+      }
+      for (const k of kept) clash.splice(clash.indexOf(k.file), 1);
       if (clash.length) fail('WORKTREE_CONFLICT', `main adds files ${key} also created: ${clash.slice(0, 5).join(', ')}; the worktree is unchanged`);
       const patch = join(teamWork, 'scratch', `${key}-sync-${Date.now()}.patch`);
       mkdirSync(dirname(patch), { recursive: true });
@@ -1234,6 +1255,12 @@ export class Runtime {
       // không còn giờ chụp trang (CR-07 hỏng 2 lần). Giữ cả hai phần thêm (git merge-file --union) khi mỗi bên không xoá
       // hay sửa dòng nào của file đó; bên nào có sửa dòng thì vẫn là xung đột thật, trả worker như trước.
       let autoMerged = [];
+      const preferred = kept.map(k => k.file);
+      if (conflicts?.length && mineWins.size) {
+        for (const f of conflicts.filter(p => mineWins.has(p) && mine.has(p))) { copyFileSync(mine.get(f).copy, join(cwd, f)); preferred.push(f); }
+        conflicts = conflicts.filter(p => !preferred.includes(p));
+        if (!conflicts.length) conflicts = null;
+      }
       if (conflicts?.length) {
         const merged = await unionMerge({ cwd, files: conflicts, mine, oldBase, mainHead, scratch: join(teamWork, 'scratch', `${key}-sync-mine`) }).catch(() => null);
         if (merged) { autoMerged = conflicts; conflicts = null; }
@@ -1243,8 +1270,9 @@ export class Runtime {
         if (conflicts.length) fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ')}; the worktree is unchanged (patch kept at ${patch})`);
         fail('WORKTREE_SYNC_FAILED', `git could not re-apply ${key}'s changes on main although no file conflicts (${gitError || 'no message'}); usually a process still running in the worktree (a test, build or server you started) holds a file: stop it, then sync again. The worktree is unchanged (patch kept at ${patch})`);
       }
+      for (const k of kept) copyFileSync(k.copy, join(cwd, k.file));
       // apply --3way ghi vào index; bỏ khỏi index để worktree giống lúc trước sync (thay đổi chưa stage).
-      if (tracked) await git(['reset', '-q'], { cwd });
+      if (tracked || preferred.length) await git(['reset', '-q'], { cwd });
       ji.worktreeBase = mainHead;
       ji.baseAt = new Date().toISOString();
       await this.workflow.noteBaselineFix(key);
@@ -1264,7 +1292,7 @@ export class Runtime {
       }
       j.save();
       return { synced: true, baseRevision: mainHead, changedFiles: changed.length, codegraph, ...(setupJobId ? { setupJobId } : {}),
-        ...(autoMerged.length ? { autoMerged } : {}),
+        ...(autoMerged.length ? { autoMerged } : {}), ...(preferred.length ? { preferred } : {}),
         hint: `${setupJobId ? 'Wait for setupJobId, then rebuild. ' : ''}Restart the app from this worktree before new evidence.`
           + (autoMerged.length ? ` Main and you both only added lines to ${autoMerged.join(', ')}: the helper kept both additions (yours and main's, nothing removed). Read those files once: both registrations must be there, in a valid order, with no duplicate import; then run_checks before more evidence.` : '') };
     }

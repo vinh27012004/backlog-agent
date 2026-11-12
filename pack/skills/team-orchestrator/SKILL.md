@@ -9,8 +9,8 @@ Use team_runtime for Game Master, progress, git commit/push and submission. Subm
 Root manages work; it does not read implementation code, capture evidence, review or debug helper internals.
 
 ## Flow per item
-The helper prepares the item -> spawn one team_analyst from nextActions (it profiles the item; PI and answer-only items
-have none) -> spawn one team_fixer from nextActions -> the worker codes and tests, captures evidence, writes its
+The helper prepares the item -> spawn one team_fixer from nextActions (and one team_analyst per release wave, which
+profiles the items in parallel) -> the worker codes and tests, captures evidence, writes its
 fix-result and checkpoints candidate -> the helper integrates, pushes and submits that result itself. That is the whole
 flow. There is no reviewer, gate or repair round: the helper submits the result as the worker left it, and publish
 warnings are information, not todos. You act on a publish only when it failed.
@@ -35,11 +35,11 @@ the company standard it names) and writes the worker brief to .team-work/items/<
 prepare_item, company tools or read skills for this. Only when nextActions still offers prepare_item (the automatic
 attempt failed) call prepare_item yourself, one per exec.
 
-When nextActions offers spawn_analyst, call spawn_agent with exactly its `spawn` object (agent_type team_analyst, a
-cheap model): the analyst reads the item and hands the helper a profile of it, which the helper checks, adds to the
-worker brief and uses to choose the worker's model. Spawn it at once, with the other spawns of the same turn, and do
-nothing else for that item: spawn_worker for it appears when the profile is accepted, or after its deadline with the
-default brief. The analyst ends by itself; never message it, wait for it or read its reply.
+When nextActions offers spawn_analyst, call spawn_agent with exactly its `spawn` object (agent_type team_analyst, one
+for a whole release wave; its `items` lists them): the analyst reads those items together and hands the helper a
+profile of each and a report of how they depend on each other. The helper checks them and passes them to the workers
+and into its own publish order. Spawn it at once, with the other spawns of the same turn. No worker waits for it:
+spawn_worker is offered at the same time. The analyst ends by itself; never message it, wait for it or read its reply.
 
 When nextActions offers spawn_worker, call spawn_agent with exactly its `spawn` object (task_name, agent_type
 team_fixer, fork_turns "none", model, reasoning_effort, message pointing to the brief). Spawn every spawn_worker in
