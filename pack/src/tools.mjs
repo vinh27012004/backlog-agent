@@ -6,7 +6,7 @@ import { app, forgetBuild, readState as appState, stopApp } from './env/app.mjs'
 import { captureEvidence } from './env/browser.mjs';
 import { runChecks } from './env/checks.mjs';
 import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
-import { CompanyTools, companyLimits } from './match/company.mjs';
+import { CompanyTools, collapseFiller, companyLimits } from './match/company.mjs';
 import { appDataLock } from './env/datalock.mjs';
 import { Decider } from './decide/decisions.mjs';
 import { JevClient, loadJevConfig } from './decide/jev.mjs';
@@ -1909,15 +1909,19 @@ export class Runtime {
     if (typeof name !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(name)) fail('INVALID_ARGUMENT', 'name');
     if (key !== undefined && !isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
     const result = await this.company.invoke(name, args);
-    const out = { untrusted: true, tool: name, isError: Boolean(result?.isError), content: result?.content ?? [],
-      structuredContent: result?.structuredContent ?? null };
+    const raw = { content: result?.content ?? [], structuredContent: result?.structuredContent ?? null };
+    // WQ7T6CEC: 42% ký tự của kết quả Company Tools là dãy một ký tự lặp ("complianceAnnexPadding … XXXX…"), mỗi lượt
+    // của thợ đọc lại chúng. Model và file đã lưu thấy bản rút gọn; bản gốc giữ ở company/raw/ (saveFact).
+    const shown = collapseFiller(raw);
+    const out = { untrusted: true, tool: name, isError: Boolean(result?.isError), content: shown.value.content,
+      structuredContent: shown.value.structuredContent, ...(shown.collapsed ? { fillerCollapsed: shown.collapsed } : {}) };
     // TOKXKPBV: chuẩn xuất CSV của CR-01 (kb_search) chỉ nằm trong brief, nên fixer phải hỏi lại root, còn
     // người chấm sau trận không đối chiếu được. Có backlogItemKey thì helper tự lưu kết quả cạnh vật liệu của item.
-    if (key && !out.isError) Object.assign(out, this.saveFact(key, name, args, out));
+    if (key && !out.isError) Object.assign(out, this.saveFact(key, name, args, out, shown.collapsed ? raw : null));
     return out;
   }
 
-  saveFact(key, name, args, { content, structuredContent }) {
+  saveFact(key, name, args, { content, structuredContent }, raw = null) {
     const dir = join(this.itemDir(key), 'company');
     mkdirSync(dir, { recursive: true });
     // Số thứ tự cấp đồng bộ: lời gọi song song (prefetch lúc prepare, company_lookup của worker) không trùng tên file.
@@ -1926,9 +1930,17 @@ export class Runtime {
     this.factSeq.set(dir, n);
     const savedTo = join(dir, `${String(n).padStart(2, '0')}-${name.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
     const payload = { tool: name, arguments: args, content, structuredContent };
-    const source = { kind: 'company_tool', backlogItemKey: key, retrievedAt: new Date().toISOString(), sha256: digest(payload) };
-    writeFileAtomic(savedTo, `${JSON.stringify({ ...payload, untrusted: true, source }, null, 2)}\n`);
-    return { savedTo, source };
+    // Nguồn (sha256) luôn là bản gốc của Company Tools; bản đã rút gọn chuỗi đệm ghi kèm rawFile.
+    const original = raw ? { tool: name, arguments: args, content: raw.content, structuredContent: raw.structuredContent } : payload;
+    const source = { kind: 'company_tool', backlogItemKey: key, retrievedAt: new Date().toISOString(), sha256: digest(original) };
+    let rawFile = null;
+    if (raw) {
+      rawFile = join(dir, 'raw', basename(savedTo));
+      mkdirSync(dirname(rawFile), { recursive: true });
+      writeFileAtomic(rawFile, `${JSON.stringify({ ...original, untrusted: true, source }, null, 2)}\n`);
+    }
+    writeFileAtomic(savedTo, `${JSON.stringify({ ...payload, untrusted: true, source, ...(rawFile ? { fillerCollapsed: true, rawFile } : {}) }, null, 2)}\n`);
+    return { savedTo, source, ...(rawFile ? { rawFile } : {}) };
   }
 
   // ------------------------------------------------------------------ poller nền (05 §6)
@@ -2090,7 +2102,7 @@ export async function callTool(runtime, tool, args, ctx, { activity: report = tr
     }
     const value = redactDeep(notice ? { ...result, notice } : result ?? {});
     const activity = takeActivity();
-    return { content: [{ type: 'text', text: truncate(JSON.stringify(value)) }],
+    return { content: [{ type: 'text', text: contentText(value) }],
       structuredContent: { ...(typeof value === 'object' && !Array.isArray(value) ? value : { value }), ...(activity.length ? { networkActivity: activity } : {}) },
       isError: false };
   } catch (error) {
@@ -2098,11 +2110,19 @@ export async function callTool(runtime, tool, args, ctx, { activity: report = tr
     const body = redactDeep({ error: { code: error instanceof HelperError ? error.code : 'INTERNAL_ERROR',
       message: oneLine(error instanceof HelperError ? error.message : String(error?.stack ?? error), 600),
       ...(error instanceof HelperError && error.details ? { details: error.details } : {}) } });
-    return { content: [{ type: 'text', text: JSON.stringify(body) }],
+    return { content: [{ type: 'text', text: contentText(body) }],
       structuredContent: { ...body, ...(activity.length ? { networkActivity: activity } : {}) }, isError: true };
   }
 }
 
+// Agent đọc kết quả tool bằng text(await tools.x(...)): in cả content lẫn structuredContent, nên cùng một kết quả vào
+// context hai lần (WQ7T6CEC: 28/29 kết quả của helper trong transcript BUG-09). structuredContent phải giữ đủ (Player đọc
+// networkActivity, thợ có code đọc r.structuredContent); bản text chỉ giữ phần đầu cho client chỉ đọc content.
+export const CONTENT_TEXT_MAX = 1500;
+export function contentText(value) {
+  const text = JSON.stringify(value);
+  return text.length <= CONTENT_TEXT_MAX ? text : `${text.slice(0, CONTENT_TEXT_MAX - 200)}… (${text.length} characters; the whole result is in structuredContent)`;
+}
 function truncate(text, max = 60_000) {
   return text.length > max ? `${text.slice(0, max)}…(truncated)` : text;
 }

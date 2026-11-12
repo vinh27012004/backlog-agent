@@ -60,3 +60,25 @@ test('company_call with backlogItemKey saves each result next to the item materi
   await assert.rejects(rt.companyCall({ name: 'kb_search', backlogItemKey: '../x' }), /INVALID_ARGUMENT/);
   assert.equal(calls.length, 4, 'a bad key is refused before the company system is called');
 });
+
+// WQ7T6CEC: 42% ký tự của kết quả Company Tools là dãy một ký tự lặp ("complianceAnnexPadding … XXXX…").
+test('filler runs in a Company Tools result are shortened for the model and the saved file; the raw result stays in company/raw', async () => {
+  const pad = 'X'.repeat(120);
+  const body = JSON.stringify({ articles: [{ id: 'KB-1', body: `rule A. ANNEX pad=${pad} checksum=0`, quote: '"'.repeat(45) }] });
+  const { rt, teamWork } = runtime(async () => ({ content: [{ type: 'text', text: body }] }));
+  const res = await rt.companyCall({ name: 'kb_search', arguments: { query: 'rules' }, backlogItemKey: 'CR-01' });
+  assert.equal(res.fillerCollapsed, 1);
+  const shown = JSON.parse(res.content[0].text);
+  assert.equal(shown.articles[0].body, 'rule A. ANNEX pad=XXXXXXXX…(120 chars) checksum=0');
+  assert.equal(shown.articles[0].quote, '"'.repeat(45), 'quote characters are never shortened: the JSON stays valid');
+  const saved = JSON.parse(readFileSync(res.savedTo, 'utf8'));
+  assert.equal(saved.fillerCollapsed, true);
+  assert.equal(saved.content[0].text, res.content[0].text);
+  assert.equal(res.rawFile, join(teamWork, 'items', 'CR-01', 'company', 'raw', '01-kb_search.json'));
+  const raw = JSON.parse(readFileSync(res.rawFile, 'utf8'));
+  assert.equal(raw.content[0].text, body, "the raw file keeps Company Tools' result as it came");
+  assert.equal(raw.source.sha256, saved.source.sha256);
+  const next = await rt.companyCall({ name: 'kb_search', arguments: { query: 'more' }, backlogItemKey: 'CR-01' });
+  assert.equal(next.savedTo, join(teamWork, 'items', 'CR-01', 'company', '02-kb_search.json'), 'the raw folder does not shift the numbering');
+});
+

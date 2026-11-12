@@ -153,3 +153,22 @@ function parseSse(text) {
   }
   return null;
 }
+
+// Dãy từ FILLER_RUN ký tự giống nhau trở lên trong kết quả Company Tools (bài KB có "complianceAnnexPadding … XXXX…"):
+// giữ 8 ký tự đầu và ghi độ dài, để model không đọc lại chúng ở mỗi lượt (WQ7T6CEC: 42% ký tự của 73 kết quả).
+// Đi qua mọi chuỗi, kể cả JSON nằm trong content[].text. Trả { value, collapsed: số dãy đã rút gọn }.
+export const FILLER_RUN = 40;
+const FILLER = new RegExp(`(.)\\1{${FILLER_RUN - 1},}`, 'gu');
+export function collapseFiller(value) {
+  let collapsed = 0;
+  // Ghi chú không có dấu nháy hay gạch ngược: chuỗi JSON nằm trong content[].text vẫn parse được.
+  const shorten = text => text.replace(FILLER, run => {
+    if (run[0] === '"' || run[0] === '\\') return run;
+    collapsed++;
+    return `${run.slice(0, 8)}…(${run.length} chars)`;
+  });
+  const walk = v => (typeof v === 'string' ? shorten(v) : Array.isArray(v) ? v.map(walk)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
+  const out = walk(value);
+  return { value: out, collapsed };
+}

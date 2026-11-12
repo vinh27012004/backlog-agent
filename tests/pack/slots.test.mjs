@@ -135,3 +135,17 @@ test('answer-only items need no slot, are always offered and go before code item
   ordered.writer = { state: { bytes: 0, blockers: {} } };
   assert.deepEqual(ordered.matchState().suggestedOrder.filter(k => ['CR-03', 'TASK-03', 'TASK-04'].includes(k)), ['TASK-04', 'TASK-03', 'CR-03']);
 });
+
+// WQ7T6CEC: text(await tools.x(...)) in cả content lẫn structuredContent; một kết quả vào context hai lần.
+test('a large tool result keeps only a short head in content; structuredContent carries the whole result', async () => {
+  const rt = runtime([row('CR-01', 'started')]);
+  rt.session.descriptor = { matchId: 'M1' };
+  const big = { rows: Array.from({ length: 300 }, (_, i) => ({ id: i, text: 'line of a long log' })) };
+  const res = await callTool(rt, { name: 'run_checks', handler: () => big }, {}, {}, { activity: false });
+  assert.ok(res.content[0].text.length <= 1500, `content text ${res.content[0].text.length}`);
+  assert.match(res.content[0].text, /the whole result is in structuredContent/);
+  assert.equal(res.structuredContent.rows.length, 300);
+  const small = await callTool(rt, { name: 'job_status', handler: () => ({ state: 'done' }) }, {}, {}, { activity: false });
+  assert.equal(JSON.parse(small.content[0].text).state, 'done', 'a small result keeps its full text');
+});
+
