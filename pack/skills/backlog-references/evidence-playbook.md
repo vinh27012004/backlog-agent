@@ -82,7 +82,13 @@ in `evidenceFiles`; a missing file scores the whole item 0.
   build, then start it yourself on a free port from 3100, output to the log path
   above (never into the worktree: Windows locks a running app's log and the worktree can no longer be synced or
   removed), and stop it with `taskkill /PID <pid> /T /F`. Never kill a process you did not start.
-- Sign in with the `login` step (§2): the helper signs in with the account the app's seed script creates and never
+- Open the app with the `enterApp {url: "<base>"}` step (§2) at the start of every capture. It passes the first-run
+  screens the app shows in its current state, in any order: server password setup (it sets the team's password for the
+  match), a password-only sign-in, a user name + password sign-in (seeded account), a welcome screen with Start
+  budgeting; it never clicks a demo or tour. Never hand-write fill/click steps for those screens (WQ7T6CEC: CR-07's
+  fixed steps met a different screen on each of three tries and lost TC-03/04). `ENTRY_STUCK` names the screen that
+  came back: restart the app with fresh app data and call it again.
+- Sign in with the `login` step (§2) when the app only needs that: the helper signs in with the account the app's seed script creates and never
   shows it to you. Never read, extract or type seed passwords yourself (`.env`, `seed.ts`, regex, dotenv), and never
   try another source after a failed login (Practice 9KNXREJ5: CR-01's fixer read `ADMIN_*` from a `.env` that had
   none, the login failed, it then pulled the default password out of `prisma/seed.ts`; auto-review rejected that as
@@ -94,7 +100,7 @@ in `evidenceFiles`; a missing file scores the whole item 0.
 Every call is a model turn. Run the scenarios of one call in MVS order; each gets its own `assertText` and the
 screenshot or download the MVS names (max 60 steps):
 ```
-login {url: "<base>/login", matchRoot: "<worktree matchRoot>"}
+enterApp {url: "<base>"}   (or login {url: "<base>/login", matchRoot: "<worktree matchRoot>"} for a plain sign-in)
 → goto <the screen> → <TC-01 steps> → assertText <TC-01 value> → screenshot answers/<ID>/evidence/<TC-01 file>.png
 → <TC-02 steps, e.g. change the filter> → assertText <TC-02 value> → download / screenshot <TC-02 files>
 ```

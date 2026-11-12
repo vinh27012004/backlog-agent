@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { seededAccount } from '../../pack/src/env/applogin.mjs';
-import { captureEvidence, evidencePath, findBrowser, profileHint } from '../../pack/src/env/browser.mjs';
+import { captureEvidence, entryPassword, evidencePath, findBrowser, profileHint } from '../../pack/src/env/browser.mjs';
 import { ensurePlaywright, install, McpClient, sh, tempDir } from './support.mjs';
 
 const page = body => `<!doctype html><html><head><title>Solova test</title></head><body>${body}</body></html>`;
@@ -637,4 +637,80 @@ test('a step that fails after the app redirected a restored profile suggests a n
   assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100/schedules/', url: 'http://localhost:3100/schedules' }), null, 'no redirect');
   assert.equal(profileHint({ profile: 'p', restored: true, gotoUrl: 'http://localhost:3100', url: 'http://localhost:3100/budget' }), null, 'the root page moving on is normal');
   assert.equal(profileHint({ profile: null, restored: true, gotoUrl: 'http://localhost:3100/a', url: 'http://localhost:3100/b' }), null);
+});
+
+// WQ7T6CEC: app Actual có sync server. Server mới: /bootstrap (đặt mật khẩu, có nút bẫy "Try Demo"); server đã có mật khẩu:
+// /login (chỉ một ô mật khẩu); đăng nhập rồi mà chưa có budget: màn chào "Start budgeting" / "Try the demo". CR-07 viết
+// bước cố định, mỗi lần kẹt một màn khác và mất TC-03/04; BUG-09 thử 3 lần mới qua.
+function entryApp() {
+  // Phiên đăng nhập theo cookie của từng trình duyệt, như server thật: trình duyệt mới phải đăng nhập lại.
+  const state = { password: null, budget: false, demo: false };
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    const html = h => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(h); };
+    const go = to => { res.writeHead(302, { Location: to }); res.end(); };
+    const url = req.url.split('?')[0];
+    const authed = /sid=ok/.test(req.headers.cookie ?? '');
+    if (url === '/api/bootstrap') { state.password = JSON.parse(body).p; res.writeHead(200); return res.end(); }
+    if (url === '/api/login') { const ok = JSON.parse(body).p === state.password; res.writeHead(ok ? 200 : 401, ok ? { 'Set-Cookie': 'sid=ok; Path=/; HttpOnly; SameSite=Lax' } : {}); return res.end(); }
+    if (url === '/api/demo') { state.demo = true; res.writeHead(200); return res.end(); }
+    if (url === '/api/start') { state.budget = true; res.writeHead(200); return res.end(); }
+    if (url === '/bootstrap') {
+      return html(page(`<p>Welcome to Actual! To secure your data, you'll need to set a password for your server.</p>
+<input type="password" placeholder="Password" id="a"><input type="password" placeholder="Confirm password" id="b">
+<button id="demo">Try Demo</button><button id="ok">OK</button>
+<script>
+demo.onclick = async () => { await fetch('/api/demo', {method:'POST'}); location.href = '/'; };
+ok.onclick = async () => { if (a.value !== b.value || !a.value) return; await fetch('/api/bootstrap', {method:'POST', body: JSON.stringify({p: a.value})}); setTimeout(() => location.href = '/login', 300); };
+</script>`));
+    }
+    if (url === '/login') {
+      return html(page(`<p>Sign in to this Actual instance</p><input type="password" placeholder="Password" id="p"><button id="go">Sign in</button><p id="msg"></p>
+<script>go.onclick = async () => { const r = await fetch('/api/login', {method:'POST', body: JSON.stringify({p: p.value})}); if (r.ok) location.href = '/'; else msg.textContent = 'Invalid password'; };</script>`));
+    }
+    if (!state.password) return go('/bootstrap');
+    if (!authed) return go('/login');
+    if (!state.budget) {
+      return html(page(`<h1>Welcome to Actual</h1><button id="d">Try the demo</button><button id="s">Start budgeting</button>
+<script>d.onclick = async () => { await fetch('/api/demo', {method:'POST'}); location.href = '/budget'; };
+s.onclick = async () => { await fetch('/api/start', {method:'POST'}); location.href = '/budget'; };</script>`));
+    }
+    return html(page(`<nav><a href="/schedules">Schedules</a></nav><h1>${url === '/schedules' ? 'Schedules' : 'Budget'}</h1>`));
+  });
+  return new Promise(r => server.listen(0, '127.0.0.1', () => r({ server, state, url: `http://127.0.0.1:${server.address().port}` })));
+}
+
+test('enterApp sets the server password, signs in and starts the budget, never the demo; a later call only signs in', { skip: !browser && 'no Edge/Chrome', timeout: 120_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const { server, state, url } = await entryApp();
+  try {
+    const first = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'enterApp', url }, { action: 'goto', url: `${url}/schedules` }, { action: 'assertText', text: 'Schedules' }] });
+    assert.match(first.visibleText, /Schedules/);
+    assert.deepEqual(first.steps.find(l => l.action === 'enterApp').screens, ['setup', 'signin', 'welcome']);
+    assert.equal(state.demo, false, 'never the demo');
+    assert.equal(state.budget, true);
+    assert.equal(state.password, entryPassword(null));
+    // Đề khác, trình duyệt mới, cùng server: chỉ còn màn đăng nhập, cùng mật khẩu.
+    const second = await captureEvidence({ teamWorkspace: tw, steps: [{ action: 'enterApp', url }, { action: 'assertText', text: 'Budget' }] });
+    assert.deepEqual(second.steps.find(l => l.action === 'enterApp').screens, ['signin']);
+    // Server có mật khẩu khác (do tay người hay công cụ khác đặt): báo kẹt rõ ràng thay vì chờ hết giờ.
+    state.password = 'someone-else';
+    await assert.rejects(captureEvidence({ teamWorkspace: tw, steps: [{ action: 'enterApp', url }] }), /ENTRY_STUCK: still on the signin screen.*fresh app data/);
+  } finally {
+    server.close();
+  }
+});
+
+test('a hand-written step that fails on a first-run screen points to enterApp', { skip: !browser && 'no Edge/Chrome', timeout: 90_000 }, async () => {
+  const tw = join(tempDir('mtm-browser-'), 'BUN');
+  const { server, url } = await entryApp();
+  try {
+    const err = await captureEvidence({ teamWorkspace: tw, timeoutMs: 15_000, steps: [{ action: 'goto', url }, { action: 'click', selector: 'button', text: 'Start budgeting', timeoutMs: 2000 }] })
+      .then(() => null, e => e);
+    assert.equal(err?.code, 'ELEMENT_NOT_FOUND');
+    assert.match(err.details.hint, /first-run setup screen\. Start the call with enterApp/);
+  } finally {
+    server.close();
+  }
 });

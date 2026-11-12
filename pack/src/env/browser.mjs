@@ -3,7 +3,7 @@
 // đội tự chạy); ảnh chỉ lưu vào answers/<ID>/evidence/ trong thư mục trận. Click/gõ phím là sự kiện input thật nên React nhận.
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { locate as locateMatchRoot } from './app.mjs';
 import { seededAccount } from './applogin.mjs';
@@ -107,6 +107,44 @@ const LOGIN_FORM = `() => {
   return { submit: !!submit };
 }`;
 const LOGIN_ROUTE = /\/(login|signin|sign-in|auth)\b/i;
+
+// Bước enterApp: màn hình nào đang chặn đường vào app (WQ7T6CEC: Actual có sync server; server mới hiện form đặt mật khẩu,
+// server đã có mật khẩu hiện form chỉ có mật khẩu, chưa có dữ liệu hiện màn chào "Start budgeting"; thợ BUG-09 thử 3 lần,
+// CR-07 thử 3 lần mỗi lần kẹt một màn khác và mất TC-03/04). Đánh dấu ô và nút bằng data-mtm-entry; null = đã vào app.
+// Không bao giờ chọn nút demo, tour hay "Try": dữ liệu demo không phải dữ liệu của item và mất khi tải lại.
+const ENTRY_SCREEN = `() => {
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  for (const el of document.querySelectorAll('[data-mtm-entry]')) el.removeAttribute('data-mtm-entry');
+  const label = el => (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+  const trap = t => /demo|tour|try\\b/i.test(t);
+  const buttons = scope => [...scope.querySelectorAll('button,input[type=submit],a[role=button]')].filter(b => visible(b) && !trap(label(b)));
+  const pass = [...document.querySelectorAll('input[type=password]')].filter(visible);
+  if (pass.length >= 2) {
+    const scope = pass[0].form || document;
+    const bs = buttons(scope);
+    const submit = bs.find(b => /^(ok|continue|save|next|submit|set password|create|confirm)$/i.test(label(b))) || bs.find(b => (b.type || '').toLowerCase() === 'submit');
+    pass[0].setAttribute('data-mtm-entry', 'p1'); pass[1].setAttribute('data-mtm-entry', 'p2');
+    if (submit) submit.setAttribute('data-mtm-entry', 'submit');
+    return { kind: 'setup', submit: !!submit };
+  }
+  if (pass.length === 1) {
+    const scope = pass[0].form || document;
+    const fields = [...scope.querySelectorAll('input')].filter(el => visible(el) && !/^(password|hidden|checkbox|radio|submit|button|image|file|reset)$/i.test(el.type));
+    if (fields.length) return { kind: 'userlogin' };
+    const bs = buttons(scope);
+    const submit = bs.find(b => /^(sign ?in|log ?in|login|ok|continue|unlock|đăng nhập)$/i.test(label(b))) || bs.find(b => (b.type || '').toLowerCase() === 'submit');
+    pass[0].setAttribute('data-mtm-entry', 'p1');
+    if (submit) submit.setAttribute('data-mtm-entry', 'submit');
+    return { kind: 'signin', submit: !!submit };
+  }
+  const start = buttons(document).find(b => /^(start budgeting|start fresh|get started|create (a )?new (budget|file))$/i.test(label(b)));
+  if (start) { start.setAttribute('data-mtm-entry', 'start'); return { kind: 'welcome' }; }
+  return null;
+}`;
+// Mật khẩu chung của mọi worktree trong một trận: đề nào đặt mật khẩu cho server trước thì đề sau vẫn đăng nhập được.
+// Chỉ dùng cho app chạy ở localhost của trận, không phải bí mật.
+export const entryPassword = matchRoot => `mtm-local-${String(matchRoot ? basename(matchRoot) : 'evidence').replace(/[^A-Za-z0-9]/g, '').slice(0, 24) || 'evidence'}-1`;
 
 // Selector là CSS hoặc cú pháp Playwright (text=, :has-text(), role=, >>, nth=): Playwright phân tích. Sai cú pháp thì
 // báo ngay, không chờ hết giờ.
@@ -307,7 +345,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
   const output = { base: context?.matchRoot ? locateMatchRoot(teamWorkspace, context.matchRoot).matchRoot : null, key: context?.backlogItemKey ?? null };
   let opened = false;
   for (const [i, s] of steps.entries()) {
-    if (['goto', 'login'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
+    if (['goto', 'login', 'enterApp'].includes(s.action) && !loopback(s.url)) fail('URL_NOT_ALLOWED', `${s.action} only accepts http(s)://localhost or 127.0.0.1`);
     if (s.action === 'login') accounts.set(i, seededAccount(locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot));
     if (s.action === 'screenshot') s.path = evidencePath(teamWorkspace, s.path, output);
     if (s.action === 'download') s.path = evidencePath(teamWorkspace, s.path, { ...output, pngOnly: false });
@@ -321,7 +359,7 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       checkSelector(s.to, i);
     }
     checkSelector(s, i);
-    if (['goto', 'login'].includes(s.action)) opened = true;
+    if (['goto', 'login', 'enterApp'].includes(s.action)) opened = true;
     else if (PAGE_ACTIONS.has(s.action) && !opened) {
       fail('INVALID_ARGUMENT', `step ${i + 1} (${s.action}) comes before any goto or login: each call opens a new blank page, so start with goto to the screen (browserProfile keeps the login cookie)`);
     }
@@ -620,6 +658,50 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
             log.push({ step: i + 1, action: 'login', account: account.sources });
             break;
           }
+          case 'enterApp': {
+            // Tự đi qua màn đặt mật khẩu, đăng nhập và màn chào tới khi vào app; mỗi màn tối đa 2 lần (lần 2 vẫn ở đó là kẹt).
+            await navigate(s.url);
+            const password = entryPassword(output.base);
+            const seen = [], until = Math.min(deadline, Date.now() + (s.timeoutMs ?? 30_000));
+            for (;;) {
+              await waitReady();
+              const screen = await evaluate(`(${ENTRY_SCREEN})()`).catch(() => null);
+              if (!screen) break;
+              if (seen.filter(k => k === screen.kind).length >= 2 || Date.now() >= until) {
+                fail('ENTRY_STUCK', `still on the ${screen.kind} screen after ${seen.length} entry step(s)` + (screen.kind === 'signin'
+                  ? ': the server already has a password the helper did not set (another tool or a manual sign-up); restart the app with fresh app data (app stop, app_data seed) and call enterApp again'
+                  : ': read error.details.visibleText and continue with explicit steps'));
+              }
+              seen.push(screen.kind);
+              const before = await evaluate('location.href').catch(() => '');
+              if (screen.kind === 'userlogin') {
+                let account;
+                try { account = seededAccount(output.base ?? locateMatchRoot(teamWorkspace, s.matchRoot).matchRoot); } catch {
+                  fail('ENTRY_STUCK', 'the app asks for a user name and password: use the login step (it signs in with the seeded account), then continue');
+                }
+                await evaluate(`(${LOGIN_FORM})()`).catch(() => null);
+                await fill({ selector: '[data-mtm-login=user]' }, account.username, { force: true });
+                await fill({ selector: '[data-mtm-login=password]' }, account.password, { force: true });
+                if (await page.$('[data-mtm-login=submit]')) await click({ selector: '[data-mtm-login=submit]' }); else await page.keyboard.press('Enter');
+              } else if (screen.kind === 'welcome') {
+                await click({ selector: '[data-mtm-entry=start]' });
+              } else {
+                await fill({ selector: '[data-mtm-entry=p1]' }, password, { force: true });
+                if (screen.kind === 'setup') await fill({ selector: '[data-mtm-entry=p2]' }, password, { force: true });
+                if (screen.submit) await click({ selector: '[data-mtm-entry=submit]' }); else await page.keyboard.press('Enter');
+              }
+              // Chờ trang đổi (URL hay màn hình) trước khi nhận diện lại: form gửi bằng fetch rồi mới chuyển trang.
+              const changeBy = Math.min(until, Date.now() + 8000);
+              while (Date.now() < changeBy) {
+                await sleep(250);
+                const now = await evaluate('location.href').catch(() => '');
+                const next = await evaluate(`(${ENTRY_SCREEN})()`).catch(() => null);
+                if (now !== before || next?.kind !== screen.kind) break;
+              }
+            }
+            log.push({ step: i + 1, action: 'enterApp', screens: seen });
+            break;
+          }
           case 'press':
             // Space + mũi tên: kéo-thả bằng bàn phím của @hello-pangea/dnd, dnd-kit (Space nhấc, mũi tên di, Space thả).
             await page.keyboard.press(s.key === ' ' || s.key === 'Space' ? 'Space' : String(s.key ?? 'Enter'));
@@ -812,7 +894,11 @@ export async function captureEvidence({ teamWorkspace, steps, viewport = { width
       if (at >= 0) {
         const step = steps[at];
         const state = await evaluate(PAGE_STATE, { selector: step.selector ?? null, text: step.text ?? null }).catch(() => null);
-        const hint = failureHint(step, state, error.code)
+        // Bước hỏng trên màn đặt mật khẩu, đăng nhập hay màn chào mà cuộc gọi không mở app bằng enterApp: chỉ đúng bước đó.
+        const entry = !steps.some(s => s.action === 'enterApp') && !['ENTRY_STUCK'].includes(error.code)
+          ? await evaluate(`(${ENTRY_SCREEN})()`).catch(() => null) : null;
+        const hint = (entry ? `The page is a first-run ${entry.kind} screen. Start the call with enterApp {url: "<the app's base url>"} instead of writing steps for it: it sets or enters the team's password, signs in and starts a new budget, and never picks a demo.` : null)
+          ?? failureHint(step, state, error.code)
           ?? profileHint({ profile: browserProfile, restored: restoredProfile, gotoUrl: lastGoto, url: state?.url ?? page.url() });
         error.details = { failedStep: at + 1, action: step.action, ...(state ?? {}), ...(hint ? { hint } : {}), stepsDone: log,
           screenshotsDone: shots.map(x => x.path),
