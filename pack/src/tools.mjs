@@ -37,6 +37,10 @@ import { HelperError, fail, isId, oneLine, sleep, writeFileAtomic } from './core
 const PREPARE_BUDGET_MS = 8 * 60_000;
 // Sự kiện luôn đánh thức root dù chưa sinh nextActions: trận dừng/kết thúc, đề đổi, item đóng, lỗi poll Game Master.
 const WAKE_EVENTS = new Set(['MATCH_STATUS', 'ITEM_CHANGED', 'ITEM_CLOSED', 'POLL_ERROR']);
+// Việc đã trả cho root trong chừng này không đánh thức root lại; root thấy nó với repeat: true.
+const REPEAT_MS = 45_000;
+// Trần một lần chờ của root (dưới tool_timeout_sec 120 của config/codex.toml).
+const ROOT_WAIT_MS = 110_000;
 // Company tool coi là tra cứu chỉ đọc theo tên (kb_search, search_logs, get_test_data…), ngoài cờ readOnlyHint của nó.
 const COMPANY_LOOKUP = /^(kb_|search|get_|list_|find_|read_|lookup)/i;
 const KB_STOP = new Set('the a an and or of to in on for with by from at as is are be this that these those it its our your their we you they must should can will not no every each all any when after before into than then them which who what how one two only also more most per via use used using keep make made see item items page screen points score maximum practice deadline minutes submission submit json file files evidence test tests'.split(' '));
@@ -275,8 +279,8 @@ export class Runtime {
           lastChance: obj({ reason: str('Why no further attempt fits and what is not verified (one line).') }, ['reason']) }, ['backlogItemKey', 'gitRevision']), handler: a => this.submitWork(a) },
       { name: 'report_progress', description: 'Write a root-decided progress event: BLOCKER_OPENED, BLOCKER_RESOLVED, BACKLOG_STATUS (IN_PROGRESS/COMPLETED/BLOCKED/FAILED), ORCHESTRATOR_RESTARTED, ORCHESTRATOR_ENDED, or a BLOCKED/FAILED stage. No envelope fields.',
         inputSchema: obj({ event: { type: 'object', description: 'Event without schemaVersion/playerSessionId.' } }, ['event']), handler: a => this.reportProgress(a) },
-      { name: 'wait_for_update', description: 'The one wait of root: block up to timeoutMs (max 55000). Returns at once when nextActions is not empty (up to 2 seconds to collect spawns while the same wave is still preparing); otherwise in GAME it returns when an event produces nextActions (new item with a free slot, worker yielded or blocked, fix-result written, job done) or on MATCH_STATUS, ITEM_CHANGED, ITEM_CLOSED, POLL_ERROR, else at the timeout, the next release or the nearest deadline. events lists everything seen since cursor (ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, WORKER_YIELDED, WORKER_BLOCKED, FIX_RESULT, AUTO_PUBLISH_FAILED, DEPENDENCY_READY, POLL_ERROR, TIMELINE). The helper publishes PI and answer-only handoffs itself; their publish_item reaches nextActions only when that publish failed. Use instead of ending the turn and instead of wait_agent. In code mode start the exec cell with `// @exec: {"yield_time_ms": 60000}` so the cell does not yield at 30 s and cost an extra wait turn.',
-        inputSchema: obj({ timeoutMs: num('Max wait in ms, up to 55000.'), cursor: num('Last seq you have seen; -1 = only events from now on.') }), readOnly: true, handler: (a, ctx) => this.waitForUpdate(a, ctx) },
+      { name: 'wait_for_update', description: 'The one wait of root: block up to timeoutMs (max 110000; start the exec with // @exec: {"yield_time_ms": 120000}). Returns at once when nextActions is not empty (up to 2 seconds to collect spawns while the same wave is still preparing); otherwise in GAME it returns when an event produces nextActions (new item with a free slot, worker yielded or blocked, fix-result written, job done) or on MATCH_STATUS, ITEM_CHANGED, ITEM_CLOSED, POLL_ERROR, else at the timeout, the next release or the nearest deadline. events lists everything seen since cursor (ITEM_NEW, ITEM_CHANGED, ITEM_CLOSING, ITEM_CLOSED, MATCH_STATUS, JOB_DONE, WORKER_YIELDED, WORKER_BLOCKED, FIX_RESULT, AUTO_PUBLISH_FAILED, DEPENDENCY_READY, POLL_ERROR, TIMELINE). The helper publishes PI and answer-only handoffs itself; their publish_item reaches nextActions only when that publish failed. Use instead of ending the turn and instead of wait_agent. In code mode start the exec cell with `// @exec: {"yield_time_ms": 60000}` so the cell does not yield at 30 s and cost an extra wait turn.',
+        inputSchema: obj({ timeoutMs: num('Max wait in ms, up to 110000.'), cursor: num('Last seq you have seen; -1 = only events from now on.') }), readOnly: true, handler: (a, ctx) => this.waitForUpdate(a, ctx) },
       { name: 'job_status', description: 'State and result of a background job. Returns early with `newPI` (keys) while a revealed PI has not been started: start it, then wait again.',
         inputSchema: obj({ jobId: str('Job id.'), waitSeconds: num('Seconds to wait (max 110; start the exec with // @exec: {"yield_time_ms": 120000}).') }, ['jobId']), readOnly: true, handler: a => this.jobStatus(a) },
       { name: 'detect_profile', description: 'Detect the application stack under a folder and return build/test commands. Read-only, no network.',
@@ -1590,15 +1594,20 @@ export class Runtime {
     return this.progress.write(e);
   }
 
-  async waitForUpdate({ timeoutMs = 50_000, cursor = 0 } = {}, ctx = {}) {
-    const callDeadline = Date.now() + 55_000;
+  async waitForUpdate({ timeoutMs = ROOT_WAIT_MS, cursor = 0 } = {}, ctx = {}) {
+    const callDeadline = Date.now() + ROOT_WAIT_MS;
     this.session.require();
     // cursor -1: chỉ sự kiện từ giờ (vòng chờ cuối trận của TOKXKPBV truyền 0, nhận lại 20 sự kiện cũ, root thức vô ích);
     // item đã ra mà chưa làm vẫn thấy trong state.open.
     const from = cursor < 0 ? this.events.seq : cursor;
     if (this.session.phase === 'GAME') this.workflow.autoPublish();
     const pending = this.workflow.actions();
-    const until = Date.now() + (pending.nextActions.length ? 0 : Math.max(0, Math.min(55_000, timeoutMs, pending.waitMs)));
+    // Việc đã trả cho root trong REPEAT_MS trước không đánh thức root lại (WQ7T6CEC: 199/237 lần thức về ngay vì cùng
+    // một spawn_worker); root vẫn thấy chúng, có cờ repeat, ở lần thức vì việc mới, sự kiện hay hết giờ.
+    this.offeredActions ??= new Map();
+    const sig = a => `${a.key}|${a.action}|${JSON.stringify(a.arguments ?? {})}`;
+    const fresh = list => list.filter(a => !(Date.now() - (this.offeredActions.get(sig(a)) ?? 0) < REPEAT_MS));
+    const until = Date.now() + (fresh(pending.nextActions).length ? 0 : Math.max(0, Math.min(ROOT_WAIT_MS, timeoutMs, pending.waitMs)));
     // GAME: chỉ thức khi có việc (nextActions) hoặc sự kiện root phải tự xử lý. Sự kiện không sinh việc (worker vừa
     // được helper tự sync rồi chạy tiếp, job dọn database, TIMELINE) thì chờ tiếp tới hạn: BTZNI69E 7/27 lần
     // wait_for_update về tay không, mỗi lần root đọc lại khoảng 120K context.
@@ -1607,7 +1616,7 @@ export class Runtime {
       const got = await this.events.wait(seen, Math.max(0, until - Date.now()), ctx.signal);
       if (got.length) { events.push(...got); seen = got[got.length - 1].seq; }
       if (!got.length || ctx.signal?.aborted || Date.now() >= until || this.session.phase !== 'GAME') break;
-      if (got.some(e => WAKE_EVENTS.has(e.type)) || this.workflow.actions().nextActions.length) break;
+      if (got.some(e => WAKE_EVENTS.has(e.type)) || fresh(this.workflow.actions().nextActions).length) break;
     }
     // ME1X0FFX: Start Work đã xong nhưng brief của item cùng wave còn đang prepare. Gom tối đa 2 s,
     // kể cả khi timeoutMs=0, để một lượt model có thể spawn cả wave. Abort và việc khẩn vẫn trả ngay.
@@ -1621,13 +1630,22 @@ export class Runtime {
     }
     const last = events.length ? events[events.length - 1].seq : from;
     const rows = this.gm.view ? this.itemRows() : [];
-    return { cursor: last, events: events.slice(-50), ...this.workflow.offered(this.workflow.actions()),
+    const result = this.workflow.offered(this.workflow.actions());
+    const now = Date.now();
+    result.nextActions = result.nextActions.map(a => (now - (this.offeredActions.get(sig(a)) ?? 0) < REPEAT_MS ? { ...a, repeat: true } : a));
+    for (const a of result.nextActions) if (!a.repeat) this.offeredActions.set(sig(a), now);
+    // Danh sách item chỉ gửi khi đổi so với lần trả trước: mỗi lần thức root đọc lại cả context (khoảng 1K token mỗi lần).
+    const lists = { open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
+      working: rows.filter(r => r.status !== 'CLOSED' && ['started', 'published'].includes(r.local)).map(r => r.key),
+      newResults: this.rootResults(),
+      submitted: rows.filter(r => r.local === 'submitted').map(r => r.key),
+      jobs: [...this.jobs.jobs.values()].filter(x => x.state === 'running').map(x => x.id) };
+    // cursor -1 hay 0: root bắt đầu lại vòng chờ (sau Resume, sau khi context bị nén): luôn gửi đủ danh sách.
+    const listKey = JSON.stringify(lists), same = cursor > 0 && listKey === this.lastStateLists;
+    this.lastStateLists = listKey;
+    return { cursor: last, events: events.slice(-50).filter(e => e.type !== 'TIMELINE'), ...result,
       state: { status: this.gm.view?.status ?? null, minutesLeft: this.minutesLeft(), nextReleaseAt: this.gm.view ? this.releases()?.next?.at ?? null : null,
-        open: rows.filter(r => r.status !== 'CLOSED' && r.local === 'todo').map(r => r.key),
-        working: rows.filter(r => r.status !== 'CLOSED' && ['started', 'published'].includes(r.local)).map(r => r.key),
-        newResults: this.rootResults(),
-        submitted: rows.filter(r => r.local === 'submitted').map(r => r.key),
-        jobs: [...this.jobs.jobs.values()].filter(x => x.state === 'running').map(x => x.id) } };
+        ...(same ? { listsUnchanged: true } : lists) } };
   }
 
   jobStatus({ jobId, waitSeconds = 0 }, { pi = true } = {}) {

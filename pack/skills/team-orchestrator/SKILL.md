@@ -49,8 +49,10 @@ rewrite the brief or add to the message: the brief already has the item, materia
 worktree, profile, return_by/checkpoint_by, results path and company facts. A missing or unavailable model inherits
 root; thread limit: retry the spawn on the next pass. The same worker codes, tests and captures every scenario's
 evidence.
-If a successful spawn is briefly offered again before that worker's first helper call, keep the existing task_name;
-do not spawn a duplicate. Retry failed spawn calls only.
+Each spawn is offered once. The worker tells the helper it runs in its first exec; a spawn_worker for the same item
+comes back only when that never happened within 90 seconds, i.e. your spawn failed: spawn it again with the same
+task_name. Never call list_agents to check whether a worker exists, and never send_message a worker to ask how it
+is doing: the helper knows (WQ7T6CEC: 14 list_agents, 6 wait_agent and 2 send_message turns of about 110K each).
 
 Workers look up the company systems themselves with company_lookup (kb_search, search_logs, get_test_data). Use
 company_call only for answer_worker questions they cannot look up, with backlogItemKey so the result is saved.
@@ -110,16 +112,18 @@ carries a `followup` text: send exactly that as the one followup_task.
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 
 ## Waiting and root budget
-One loop: wait_for_update {cursor} returns events, state and nextActions (ordered exact inputs). It returns at once
-when nextActions is not empty (up to 2 seconds to collect spawns while the same wave is still preparing), otherwise
+One loop: wait_for_update {cursor} returns events, state and nextActions (ordered exact inputs). An entry with
+repeat: true was already given to you less than a minute ago: act on it again only if your earlier call for it
+failed. state lists the items only when they changed (listsUnchanged: true otherwise). It returns at once
+when nextActions has an entry not given to you yet (up to 2 seconds to collect spawns while the same wave is still preparing), otherwise
 when an event brings work (a worker yielded or asked, a fix-result, a job,
-a new item with a free slot), on a match/item change, or at the next release or deadline (55 s at most). Do every
+a new item with a free slot), on a match/item change, or at the next release or deadline (110 s at most). Do every
 nextActions entry, then call wait_for_update again. It is your only wait: never call wait_agent to watch
 workers, because the helper already knows when a worker yields, hands off, asks or runs out of time, and every extra
 wake rereads your whole context (Practice BTZNI69E: 17 wait_agent and 15 send_message turns of about 120K each).
 Do not call next_actions next to wait_for_update: it returns the same list.
 Start every exec cell that calls wait_for_update with this first line, so the cell holds for the whole wait:
-`// @exec: {"yield_time_ms": 60000}`. Without it the cell yields after 30 s ("Script running with cell ID ...") and
+`// @exec: {"yield_time_ms": 120000}`. Without it the cell yields after 30 s ("Script running with cell ID ...") and
 you pay one more full-context turn for the `wait` that follows (Practice 9O802QWE: 25 such turns).
 Message a worker only for a nextActions entry (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) or
 a publish error, always as one followup_task that names the one thing to do. Never answer or acknowledge a worker's

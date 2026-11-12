@@ -200,13 +200,15 @@ function spawnWaveFixture({ delay = 120, secondWave = 0, fail = false } = {}) {
   return { ...f, second, job };
 }
 
-test('wait_for_update coalesces two prepare jobs in one wave and keeps both spawns retryable until worker activity', async () => {
+test('wait_for_update coalesces two prepare jobs in one wave; both spawns come back only if no worker activity follows', async () => {
   const f = spawnWaveFixture(), start = Date.now();
   const res = await f.rt.waitForUpdate({ cursor: -1, timeoutMs: 0 });
   assert.deepEqual(res.nextActions.map(a => a.key).sort(), ['BUG-01', 'BUG-02']);
   assert.ok(Date.now() - start >= 80); assert.ok(Date.now() - start < 2000);
   assert.ok(res.events.some(e => e.type === 'JOB_DONE' && e.jobId === f.job.id));
-  assert.deepEqual(f.rt.workflow.actions().nextActions.map(a => a.key).sort(), ['BUG-01', 'BUG-02']);
+  assert.deepEqual(f.rt.workflow.actions().nextActions, [], 'given to root: hidden while the workers start');
+  for (const key of ['BUG-01', 'BUG-02']) f.rt.journal.item(key).spawnOfferedAt = new Date(Date.now() - 91_000).toISOString();
+  assert.deepEqual(f.rt.workflow.actions().nextActions.map(a => a.key).sort(), ['BUG-01', 'BUG-02'], 'no helper call within 90 s: offered again');
 });
 
 test('spawn coalescing is capped at two seconds and does not wait for a different wave or urgent work', async () => {
@@ -573,7 +575,7 @@ test('wait_for_update in GAME keeps waiting through events that bring no work an
     return { res, ms: Date.now() - since };
   };
   let { res, ms } = await waitFor(900, () => { f.rt.events.push('TIMELINE', { event: 'x' }); f.rt.events.push('JOB_DONE', { kind: 'drop_databases' }); });
-  assert.ok(ms >= 850, `no early wake (${ms} ms)`); assert.deepEqual(res.events.map(e => e.type), ['TIMELINE', 'JOB_DONE']);
+  assert.ok(ms >= 850, `no early wake (${ms} ms)`); assert.deepEqual(res.events.map(e => e.type), ['JOB_DONE'], 'TIMELINE is not sent to root');
   ({ res, ms } = await waitFor(5000, () => f.rt.events.push('MATCH_STATUS', { status: 'PAUSED' })));
   assert.ok(ms < 2000, `MATCH_STATUS wakes root (${ms} ms)`);
   ({ res, ms } = await waitFor(5000, () => f.rt.workflow.blockedCheckpoint({ backlogItemKey: f.key, question: 'Need the KB revision.' })));
@@ -1539,7 +1541,7 @@ test('workers start at once; one analyst per wave profiles the items and the wor
   assert.deepEqual(first.map(a => a.action).sort(), ['spawn_analyst', 'spawn_worker'], 'the worker does not wait for the analyst');
   const analyst = first.find(a => a.action === 'spawn_analyst');
   assert.deepEqual([analyst.spawn.task_name, analyst.spawn.agent_type, analyst.items], ['wave1_analyst', 'team_analyst', ['CR-01']]);
-  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker'], 'the analyst is offered once: root is not woken again while it reads');
+  assert.deepEqual(wf.actions().nextActions.map(a => a.action), [], 'the analyst and the worker are offered once: root is not woken again while they start');
   const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
   for (const re of [/<item_input id="CR-01" type="CR" points="140">[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /<wave_schema>[\s\S]*"title": "wave-report"/, /phase: "wave"/]) assert.match(input, re);
   // Trích dẫn bịa bị từ chối; analyst không bao giờ thành thợ của đề.
@@ -1862,4 +1864,37 @@ test('after the baseline fix lands, candidate asks for run_checks on the baselin
   const full = await landed(false);
   assert.match(full, /run the full suite once more/, 'no project profile: the full suite as before');
   assert.doesNotMatch(full, /testFiles/);
+});
+
+// WQ7T6CEC: spawn_worker còn trong nextActions tới khi thợ gọi helper lần đầu; wait_for_update về ngay mỗi lần, root
+// thức 198 lần chỉ để thấy nó và gọi list_agents/wait_agent để tự kiểm (khoảng 22M token, 55% input của root).
+test('spawn_worker is offered once and again only when the worker never reached the helper; its first exec registers it', async () => {
+  const f = fixture('CR-01'), wf = f.rt.workflow;
+  Object.assign(f.ji, { workerThread: undefined, workerState: undefined, spawn: { task_name: 'cr01_fixer', agent_type: 'team_fixer' }, prepared: { timeBox: { returnBy: new Date(Date.now() + 1_800_000).toISOString() } } });
+  f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: 'started', minutesLeft: 30 }];
+  assert.deepEqual(wf.offered(wf.actions()).nextActions.map(a => a.action), ['spawn_worker']);
+  assert.deepEqual(wf.actions().nextActions, [], 'hidden after it was given to root');
+  f.ji.spawnOfferedAt = new Date(Date.now() - 91_000).toISOString();
+  assert.deepEqual(wf.actions().nextActions.map(a => a.action), ['spawn_worker'], 'offered again after 90 s without a helper call');
+  await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'resume' });
+  assert.equal(f.ji.workerThread, '/root/cr01_fixer');
+  assert.deepEqual(wf.actions().nextActions, [], 'registered: never offered again');
+  assert.match(wf.spawnArgs(f.key, { briefFile: 'b.md', fixResultFile: 'r.json' }).message, /in that same exec call worker_checkpoint \{backlogItemKey: "CR-01", phase: "resume"\}/);
+});
+
+test('wait_for_update does not wake root again for an entry it already gave; the entry comes back with repeat: true', async () => {
+  const f = fixture('BUG-01');
+  f.ji.workerState = 'writing'; f.ji.workerThread = '/root/bug01_fixer'; f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
+  f.rt.workflow.blockedCheckpoint({ backlogItemKey: f.key, question: 'Need the KB revision.' });
+  let t0 = Date.now();
+  const first = await f.rt.waitForUpdate({ timeoutMs: 3000, cursor: f.rt.events.seq });
+  assert.ok(Date.now() - t0 < 2500, 'new work wakes root at once');
+  const ask = first.nextActions.find(a => a.action === 'answer_worker');
+  assert.ok(ask && !ask.repeat);
+  assert.ok(Array.isArray(first.state.working), 'lists sent the first time');
+  t0 = Date.now();
+  const second = await f.rt.waitForUpdate({ timeoutMs: 1500, cursor: first.cursor });
+  assert.ok(Date.now() - t0 >= 1400, `no wake for the same entry (${Date.now() - t0} ms)`);
+  assert.equal(second.nextActions.find(a => a.action === 'answer_worker').repeat, true);
+  assert.equal(second.state.listsUnchanged, true, 'unchanged lists are not resent');
 });

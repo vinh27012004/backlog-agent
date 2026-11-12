@@ -93,6 +93,8 @@ const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid J
 // Còn chừng này phút (theo hạn item hoặc hết trận) thì không làm thêm: dừng worker rồi nộp theo luật cơ hội cuối
 // (NBDB5U0O: BUG-04 có candidate PARTIAL lúc 17:16, root lo publish CR-01/CR-02, item đóng 17:22 khi chưa nộp).
 const LAST_CALL_MINUTES = 6;
+// spawn_worker đã đưa cho root: chờ chừng này cho thợ gọi helper lần đầu rồi mới đưa lại (spawn hỏng, hết thread).
+const SPAWN_QUIET_MS = 90_000;
 // Item helper tự publish (row.reserveMinutes nhỏ hơn mức thường, tools.mjs publishReserve): cơ hội cuối mở đúng lúc
 // returnBy, không cắt lượt của thợ sớm hơn (PI hạn 10 phút trước đây bị gọi dừng khi còn 4 phút).
 const lastCallThreshold = row => (row?.reserveMinutes && row.reserveMinutes < 5 ? row.reserveMinutes
@@ -398,7 +400,7 @@ export class Workflow {
     const m = out.triage?.models?.fixer?.[0] ?? null;
     return { task_name: `${key.toLowerCase().replace(/[^a-z0-9]/g, '')}_fixer`, agent_type: 'team_fixer', fork_turns: 'none',
       ...(m?.model ? { model: m.model } : {}), ...(m?.reasoning_effort ? { reasoning_effort: m.reasoning_effort } : {}),
-      message: `You are the team_fixer for ${key}. Your complete brief is ${out.briefFile}: read it first, whole, in one exec that starts with // @exec: {"max_output_tokens": 40000}, then follow your instructions. `
+      message: `You are the team_fixer for ${key}. Your complete brief is ${out.briefFile}: read it first, whole, in one exec that starts with // @exec: {"max_output_tokens": 40000}, and in that same exec call worker_checkpoint {backlogItemKey: "${key}", phase: "resume"} (it tells the helper you are running), then follow your instructions. `
         + `Hand off to ${out.fixResultFile} by ${out.timeBox?.returnBy ?? 'return_by'} UTC.` };
   }
   // ---- team_analyst: hồ sơ đề và báo cáo đợt (profile.mjs) -----------------------------------------------------
@@ -585,6 +587,7 @@ export class Workflow {
   offered(result) {
     let changed = false;
     for (const act of result?.nextActions ?? []) {
+      if (act.action === 'spawn_worker') { this.item(act.key).spawnOfferedAt = new Date().toISOString(); changed = true; continue; }
       if (act.action !== 'spawn_analyst') continue;
       const w = this.waves()[act.wave];
       if (!w) continue;
@@ -1748,7 +1751,7 @@ export class Workflow {
   // all: cả publish_item helper tự làm (autoPublish); root chỉ thấy phần còn lại.
   actions({ all = false } = {}) {
     const r = this.rt;
-    if (r.session.phase !== 'GAME' || !r.gm.view || !r.session.paths?.teamWork) return { nextActions: [], waitMs: 55_000 };
+    if (r.session.phase !== 'GAME' || !r.gm.view || !r.session.paths?.teamWork) return { nextActions: [], waitMs: 110_000 };
     const rows = r.itemRows(), items = r.journal?.data.items ?? {};
     // Item mà item khác đang chờ đi trước (root trả lời và gửi followup cho nó trước).
     const waited = new Set(rows.filter(x => this.neededBy(x.key).length).map(x => x.key));
@@ -1810,6 +1813,10 @@ export class Workflow {
         }
       }
       if (ji.prepared && !ji.workerThread && !c) {
+        // WQ7T6CEC: spawn_worker còn nằm trong nextActions tới khi thợ gọi helper lần đầu (vài phút); wait_for_update trả về
+        // ngay mỗi lần, root thức 198 lần chỉ để thấy nó, gọi list_agents/wait_agent để tự kiểm (khoảng 22M token, 55% input
+        // của root). Đã đưa cho root thì ẩn đi, đưa lại sau SPAWN_QUIET_MS nếu thợ vẫn chưa gọi helper (spawn hỏng).
+        if (ji.spawnOfferedAt && Date.now() - Date.parse(ji.spawnOfferedAt) < SPAWN_QUIET_MS) continue;
         add(key, 'spawn_worker', {}, { prepareJobId: ji.prepareJobId, ...(ji.spawn ? { spawn: ji.spawn } : {}) });
         continue;
       }
@@ -1854,7 +1861,9 @@ export class Workflow {
     nextActions.push(...this.analystActions());
     nextActions.sort((a, b) => (urgency(a) === urgency(b) ? 0 : urgency(a) - urgency(b)));
     const now = Date.now();
-    const wake = [now + 55_000, Date.parse(r.releases()?.next?.at) + 1000,
+    const wake = [now + 110_000, Date.parse(r.releases()?.next?.at) + 1000,
+      // Thợ đã được đưa cho root mà vẫn chưa gọi helper: thức dậy để đưa lại.
+      ...Object.values(items).filter(x => x.spawnOfferedAt && !x.workerThread && !x.endedAt).map(x => Date.parse(x.spawnOfferedAt) + SPAWN_QUIET_MS + 200),
       // Đợt đang gom đề cho analyst: thức dậy khi hết thời gian gom.
       ...Object.values(r.journal.data.waves ?? {}).filter(w => w.state === 'open').map(w => Date.parse(w.firstReadyAt) + WAVE_GATHER_MAX_MS + 200),
       ...rows.filter(x => items[x.key]?.startedAt && !items[x.key]?.endedAt && !items[x.key]?.receipt && x.minutesLeft !== null)
