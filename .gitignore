@@ -19,3 +19,6 @@ harness/
 
 # playwright-core cho test của pack (tests/pack/support.mjs tự cài, phiên bản ở pack/config/playwright.json)
 /playwright/
+
+# worktree tạm của subagent (Claude Code): bản sao repo, không commit
+/.claude/worktrees/
