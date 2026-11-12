@@ -108,3 +108,24 @@ test('a guessed consecutive id range is extended past both ends while ids still 
   assert.deepEqual(hours.coverage, [{ service: 'rule-engine', fetched: 5, total: 50 }]);
   assert.match(searchLogsHelp(null), /complete:true only says every query you sent returned all of its matches/);
 });
+
+// DVVFEPXF PI-03: 320 id lấy đúng từ danh mục, helper vẫn tra tiếp tuần tự 126 id ngoài danh mục; kết quả chỉ có
+// sau 262 s và item đóng khi chưa nộp.
+test('ids from the catalogue are not extended; the result of the asked queries comes first; extension probes in parallel', async () => {
+  const s = server();
+  const queries = Array.from({ length: 12 }, (_, i) => ({ query: `SCH-${String(i + 8).padStart(4, '0')}` }));
+  const catalogue = await bulkSearch({ invoke: s.invoke, queries, extend: false });
+  assert.equal(catalogue.extended, undefined);
+  assert.equal(catalogue.entries.length, 12);
+  // onMain: các truy vấn được hỏi xong thì báo ngay, trước phần mở rộng.
+  const seen = [];
+  const r = await bulkSearch({ invoke: s.invoke, queries, onMain: m => seen.push({ entries: m.entries.length, extending: m.extending, complete: m.complete }) });
+  assert.deepEqual(seen, [{ entries: 12, extending: true, complete: true }]);
+  assert.equal(r.entries.length, 30);
+  // Mở rộng theo lô: nhiều lời gọi chạy cùng lúc thay vì nối đuôi nhau.
+  let inFlight = 0, peak = 0;
+  const slow = async args => { inFlight++; peak = Math.max(peak, inFlight); await new Promise(res => setTimeout(res, 20)); inFlight--; return s.invoke(args); };
+  const ext = await bulkSearch({ invoke: slow, queries: Array.from({ length: 5 }, (_, i) => ({ query: `SCH-${String(i + 1).padStart(4, '0')}` })), concurrency: 8, onMain: () => { peak = 0; } });
+  assert.deepEqual(ext.extended.map(x => [x.added.length, x.added[0], x.added.at(-1)]), [[25, 'SCH-0006', 'SCH-0030']]);
+  assert.ok(peak >= 4, `extension calls overlap (peak ${peak})`);
+});

@@ -309,3 +309,13 @@ test('cancelChecks asks the running run to stop and waits for it; nothing runnin
   assert.ok(Date.now() - t0 < 2000, 'returns once the run stopped');
   assert.equal(readChecks(teamWork, 'CR-08').state, 'cancelled');
 });
+
+// DVVFEPXF PI-03: worker tự chạy mutants (3 chỗ sửa), lệnh chặn 121 s ngay trước return_by.
+test('a PI never runs the mutation check: run_checks answers at once', async () => {
+  const tw = tempDir('mtm-pi-mutants-');
+  const t0 = Date.now();
+  const res = await runChecks({ teamWorkspace: tw, backlogItemKey: 'PI-03', matchRoot: join(tw, 'matches', 'M1', 'M1'), action: 'mutants', waitSeconds: 110 });
+  assert.deepEqual([res.state, res.skipped], ['skipped', 'PI']);
+  assert.match(res.hint, /not run for a PI/);
+  assert.ok(Date.now() - t0 < 2000, 'no wait');
+});

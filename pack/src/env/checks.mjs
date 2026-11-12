@@ -225,6 +225,11 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
   parallel = true, force = false, waitSeconds = MAX_WAIT_SECONDS, scopeTests = true, maxHeavy = null }) {
   if (!teamWorkspace) fail('NOT_CONFIGURED', 'helper is not installed inside a TeamWorkspace');
   if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
+  // PI: không chấm khả năng phát hiện lỗi và trần 10–12 phút không chừa chỗ (DVVFEPXF PI-03: worker tự chạy mutants 3 chỗ
+  // sửa, lệnh chặn 121 s ngay trước return_by; item đóng khi chưa nộp).
+  if (action === 'mutants' && /^PI-/i.test(String(key))) {
+    return { state: 'skipped', skipped: 'PI', hint: 'The mutation check is not run for a PI: it is not graded and the PI time cap leaves no room. Your new test that fails on the unfixed code is enough; go on with the answers.' };
+  }
   const where = locate(teamWorkspace, matchRoot);
   const teamWork = dirname(where.logDir);
   if (action === 'mutants') return runMutants({ teamWorkspace, backlogItemKey: key, matchRoot, waitSeconds, force, maxHeavy });

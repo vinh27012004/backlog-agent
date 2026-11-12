@@ -498,7 +498,7 @@ test('worker_checkpoint candidate {result} writes the fix-result from the worker
   f.rt.journal.data.preparation.baseline = { failing: ['tests/old.test.js > old'] };
   const part = { status: 'fixed', summary: 'Value is 2', root_cause: 'value was 1', requirements: [{ id: 'AC-1', status: 'met', evidence: 'src/lib.js:1' }],
     verification: [{ check: 'TC-1', command: null, result: 'pass', note: 'observed' }] };
-  let res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, status: 'done' } });
+  let res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, status: 'maybe' } });
   assert.equal(res.handedOff, false); assert.match(res.problems[0], /fix-result contract: .*status/);
   assert.equal(existsSync(join(f.results, 'BUG-01-fixer-1.json')), false, 'nothing is written for a bad result');
   res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, changed_files: [] } });
@@ -1666,4 +1666,34 @@ test('publish of an item whose file reached main through an item that waited for
   assert.ok(done.result.warnings.some(w => /kept this item's version of M1\/src\/lib\.js/.test(w)), JSON.stringify(done.result.warnings));
   assert.equal(bodies.length, 1);
   assert.equal(sh('git', ['show', 'origin/main:M1/src/lib.js'], f.checkout), 'export const value=2;', 'the owner\'s final version is on main');
+});
+
+// DVVFEPXF: worktree checkout cả 14 trận cũ còn trong repo (34 816 file, 6% thuộc trận), prepare giữa trận 49–168 s.
+test('a new worktree checks out only the match folder; changes in it are seen as usual', async () => {
+  const f = fixture('BUG-01');
+  mkdirSync(join(f.checkout, 'OLDMATCH', 'src'), { recursive: true });
+  writeFileSync(join(f.checkout, 'OLDMATCH', 'src', 'old.js'), 'export const old = 1;\n');
+  sh('git', ['add', 'OLDMATCH'], f.checkout); sh('git', ['commit', '-q', '-m', 'an earlier match'], f.checkout);
+  f.rt.refreshCodegraph = async () => ({ skipped: 'test' });
+  const { job } = await f.rt.createWorktreeOnce('CR-09');
+  await job.promise.catch(() => {});
+  const wt = f.rt.wtPaths('CR-09');
+  assert.ok(existsSync(join(wt.matchRoot, 'src', 'lib.js')), 'the match folder is there');
+  assert.equal(existsSync(join(wt.worktreeRoot, 'OLDMATCH')), false, 'other matches are not checked out');
+  assert.equal(existsSync(join(f.checkout, 'OLDMATCH', 'src', 'old.js')), true, 'the main checkout keeps everything');
+  writeFileSync(join(wt.matchRoot, 'src', 'lib.js'), 'export const value=9;\n');
+  assert.match(sh('git', ['status', '--porcelain'], wt.worktreeRoot), /M M1\/src\/lib\.js/);
+  assert.doesNotMatch(sh('git', ['status', '--porcelain'], wt.worktreeRoot), /OLDMATCH/, 'files outside the cone are not reported deleted');
+});
+
+// DVVFEPXF PI-03: candidate bị từ chối 7 s trước khi item đóng vì status "DONE" và confidence là chuỗi.
+test('the words of submit.json in the result part are mapped to the fix-result contract instead of refused', async () => {
+  const f = fixture('PI-03');
+  const ok = await f.rt.workflow.composeResult(f.key, { status: 'DONE', summary: 'Midpoint fix and incident report.', confidence: '0.85',
+    verification: [{ check: 'red-green', command: null, result: 'PASS', note: 'x' }], requirements: [], hypotheses: [{ cause: 'range posts the larger bound', check: 'red test', evidence: 'evidence/red.log', verdict: 'Confirmed' }] });
+  assert.equal(ok.problems, undefined, JSON.stringify(ok));
+  const written = JSON.parse(readFileSync(ok.file, 'utf8'));
+  assert.deepEqual([written.status, written.confidence, written.verification[0].result, written.hypotheses[0].verdict], ['fixed', 0.85, 'pass', 'confirmed']);
+  const bad = await f.rt.workflow.composeResult(f.key, { status: 'maybe', summary: 'x' });
+  assert.match(bad.problems[0], /\.status: must be one of "fixed", "partial", "cannot_fix"/, 'an unknown word is still refused');
 });

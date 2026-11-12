@@ -69,7 +69,10 @@ const MINUTES = Array.from({ length: 60 }, (_, i) => pad(i));
 
 // queries: [{service?, query?}]; hours: {from, to} (mỗi truy vấn × mỗi giờ trong khung). invoke(args) gọi search_logs.
 // Trả {calls, entries (đã sắp), complete, incomplete: [{service, query, total, got}], window}.
-export async function bulkSearch({ invoke, queries, hours = null, concurrency = CONCURRENCY, maxCalls = MAX_CALLS, onProgress = null }) {
+// extend: false khi id lấy từ danh mục của test data (catalogue), không mở rộng dải id. onMain(kết quả): gọi khi mọi truy
+// vấn được hỏi đã xong, trước phần mở rộng, để kết quả tới tay thợ sớm (DVVFEPXF PI-03: 322 truy vấn xong, rồi 126 id
+// ngoài danh mục được tra tuần tự, kết quả chỉ có sau 262 s; item đóng khi chưa nộp).
+export async function bulkSearch({ invoke, queries, hours = null, concurrency = CONCURRENCY, maxCalls = MAX_CALLS, onProgress = null, extend = true, onMain = null }) {
   const base = (Array.isArray(queries) && queries.length ? queries : [{}]).map(q => ({
     ...(typeof q?.service === 'string' && q.service ? { service: q.service } : {}),
     query: typeof q?.query === 'string' ? q.query.trim() : '' }));
@@ -122,22 +125,32 @@ export async function bulkSearch({ invoke, queries, hours = null, concurrency = 
   // EXTEND_EMPTY id liền không có dòng nào. QDO8W480 PI-04: danh mục có 70 schedule (SCH-1001..1070), thợ tra 50 id,
   // kết quả ghi complete:true và ba trường báo cáo tính từ 189/645 dòng của tháng 12 đều sai (45 điểm).
   const extended = [];
-  if (!window && !stopped) {
-    for (const run of idRuns(base)) {
-      const row = { ...(run.service ? { service: run.service } : {}), prefix: run.prefix, asked: [run.format(run.min), run.format(run.max)], added: [] };
-      for (const step of [1, -1]) {
-        let empty = 0;
-        for (let n = (step > 0 ? run.max : run.min) + step, tried = 0; n >= 0 && empty < EXTEND_EMPTY && tried < EXTEND_MAX && !stopped; n += step, tried++) {
-          const q = { ...(run.service ? { service: run.service } : {}), query: run.format(n) };
-          const page = await ask(q);
-          if (!page) { incomplete.push({ ...describe1(q), total: null, got: 0, reason: 'call failed' }); break; }
+  const runs = !window && !stopped && extend ? idRuns(base) : [];
+  if (onMain) {
+    try { await onMain({ calls, entries: sortLog(found.values()), complete: !incomplete.length && !stopped, incomplete: incomplete.slice(0, 50), incompleteCount: incomplete.length, extending: runs.length > 0 }); } catch { /* chỉ để báo sớm */ }
+  }
+  for (const run of runs) {
+    const row = { ...(run.service ? { service: run.service } : {}), prefix: run.prefix, asked: [run.format(run.min), run.format(run.max)], added: [] };
+    for (const step of [1, -1]) {
+      // Tra theo lô song song (qua limiter), dừng khi gặp EXTEND_EMPTY id liền không có dòng nào. Lô đầu EXTEND_EMPTY id (dải
+      // đã hết thì không tốn thêm lời gọi nào), cả lô có dòng thì nhân đôi tới EXTEND_BATCH.
+      let empty = 0, n = (step > 0 ? run.max : run.min) + step, tried = 0, size = EXTEND_EMPTY;
+      while (n >= 0 && empty < EXTEND_EMPTY && tried < EXTEND_MAX && !stopped) {
+        const batch = [];
+        for (let i = 0; i < size && n >= 0 && tried < EXTEND_MAX; i++, n += step, tried++) batch.push({ ...(run.service ? { service: run.service } : {}), query: run.format(n) });
+        const pages = await Promise.all(batch.map(q => ask(q)));
+        for (const [i, page] of pages.entries()) {
+          if (empty >= EXTEND_EMPTY) break;
+          const q = batch[i];
+          if (!page) { incomplete.push({ ...describe1(q), total: null, got: 0, reason: 'call failed' }); empty = EXTEND_EMPTY; break; }
           if (!page.total) { empty++; continue; }
           empty = 0; keep(page); row.added.push(q.query);
           if (page.total > page.entries.length) incomplete.push({ ...describe1(q), total: page.total, got: page.entries.length, reason: 'more than 20 matches: add hours or narrower words' });
         }
+        if (pages.every(p => p?.total)) size = Math.min(EXTEND_BATCH, size * 2);
       }
-      if (row.added.length) extended.push({ ...row, added: row.added.sort() });
     }
+    if (row.added.length) extended.push({ ...row, added: row.added.sort() });
   }
   // Mỗi service có dòng trong kết quả: đã lấy bao nhiêu trên tổng số dòng của service (một lời gọi mỗi service).
   const coverage = [];
@@ -157,7 +170,7 @@ export function planSize({ queries, hours = null }) {
   return n * (hours ? hourWindow(hours)?.words.length ?? 1 : 1);
 }
 // Các dãy id liên tiếp trong danh sách truy vấn: cùng service, cùng tiền tố, từ 5 id số liền nhau trở lên.
-const EXTEND_EMPTY = 3, EXTEND_MAX = 300;
+const EXTEND_EMPTY = 3, EXTEND_MAX = 300, EXTEND_BATCH = 16;
 export function idRuns(queries) {
   const groups = new Map();
   for (const q of queries) {
@@ -181,6 +194,6 @@ export function searchLogsHelp(inputSchema) {
     'Matching: the entry (field names included) and the query are lower-cased and split into words at every non-letter/digit; every query word must equal a whole word of the entry (AND, any order, no wildcard). ts 2025-10-18T22:51:08.468Z gives the words 2025, 10, 18t22, 51, 08, 468z: query 2025-10-18T22 selects that hour (in every month that has a day 18), 2025-10-18 never selects a day (18 matches any 18), 2025.10.3 matches any entry with the words 2025, 10 and 3, TX-007* matches nothing. Good filters: message words (applied, posted), ids (TX-00282, SCH-0103), hour words (18t22), seq numbers, field names (txnId).',
     'Fetch in bulk, never in your own loops: company_lookup {name: "search_logs", backlogItemKey, queries: [{service, query}, ...] (up to 2500, build the list in code, e.g. every TX-00001..TX-00716 or SCH-0001..SCH-0320), hours: {from: "2025-10-15T08", to: "2025-11-03T09"} (optional: each query once per hour in that window, entries outside it dropped)}. The helper runs them in parallel, splits an hour with more than 20 matches by minute, and saves ONE file (savedTo) with every entry once, sorted by ts then context.seq, plus complete:true or the list of incomplete queries. It answers within about 100 s or returns a jobId: job_status {jobId, waitSeconds: 110}. Company Tools allow the whole team about 100 calls a minute, so 300 calls take 3 minutes: a lookup that cannot finish before your return_by is refused at once with the number of calls that still fit. An hours window costs one call per query per hour (a full month is 744 for ONE query): use it only for a window of a few hours or days; otherwise list ids (the first 20 entries of a service show its id fields) and message words. Shorter lookups run first, and single lookups are never held up by a bulk one.',
     'Compute the answers with a script over that file (never by reading entries), and only from complete data: complete:false means the counts are lower bounds, say so and add the missing queries.',
-    'complete:true only says every query you sent returned all of its matches. It says nothing about entries your queries never asked for. Take id lists from the catalogue in the test data (get_test_data), not from a guessed range: every id of the catalogue, plus the services the incident rules name (deploy, support, removals). The helper extends a consecutive id range past both ends while ids still have entries (extended) and reports per service how many entries you fetched out of its total (coverage): when a service the rules count is far from covered, find what is missing before you answer.',
+    'complete:true only says every query you sent returned all of its matches. It says nothing about entries your queries never asked for. Take id lists from the catalogue in the test data (get_test_data), not from a guessed range: every id of the catalogue, plus the services the incident rules name (deploy, support, removals), and pass catalogue: true so the helper does not look past it (ids outside the catalogue are noise the rules do not count). Without catalogue: true the helper extends a consecutive id range past both ends while ids still have entries (extended) and reports per service how many entries you fetched out of its total (coverage): when a service the rules count is far from covered, find what is missing before you answer.',
   ].join('\n');
 }

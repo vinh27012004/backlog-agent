@@ -74,6 +74,10 @@ reached its 12-minute cap before its source fix, so it scored 0 for the fix and 
 3. While it runs: get the incident data in ONE bulk company_lookup as <search_logs> in the brief explains (the ids or
    the release windows the KB and the deploy entries point to), write answers/<ID>/evidence/derive.mjs over that file,
    run it, write submit.json. Never page search_logs by hand and never guess parameters (limit, pageSize, take).
+   When the ids are the whole catalogue from get_test_data, pass catalogue: true: the helper then does not look past
+   them (DVVFEPXF PI-03: 126 extra ids outside the catalogue delayed the result). While job_status still says running,
+   read its progress: "every query you sent is done: <file>" means that file already has every entry you asked for;
+   compute from it at once and rerun the script when the job ends.
 4. run_checks {action: "status"}, then worker_checkpoint candidate. If the fix is not green by your checkpoint_by,
    hand off the answers anyway and say the fix is missing; a reproduction test without its fix never ships (the
    helper moves it to evidence).

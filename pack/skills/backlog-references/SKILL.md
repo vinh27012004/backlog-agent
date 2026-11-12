@@ -91,6 +91,7 @@ or the item's wording; a new kind of failure is a case of one of them.
    old code gives too detects nothing. run_checks {action: "mutants"} undoes each change in turn and lists those no
    test catches; candidate asks for it once when you changed existing code and added tests. When the
    analyst's profile says "mutation check: not graded for this item", do not run it: it costs minutes and earns nothing there.
+   Never run it for a PI (the helper refuses it there): the red test on the unfixed code is the PI's whole proof.
 4. Expectations: does each expected value in your tests come from a sentence of the item or its specification, for
    that very operation, and not from what your code returns?
 5. Scope: does your diff hold only this item's files? No cache folders (node_modules/, .vite, coverage), no test

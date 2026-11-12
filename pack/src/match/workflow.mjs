@@ -22,6 +22,31 @@ import { fail, oneLine, sleep, writeFileAtomic } from '../core/util.mjs';
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const FIX_RESULT_SCHEMA_FILE = fileURLToPath(new URL('../../contracts/fix-result.schema.json', import.meta.url));
 const PROFILE_SCHEMA_FILE = fileURLToPath(new URL('../../contracts/item-profile.schema.json', import.meta.url));
+// Chữ quen của submit.json (DONE/PARTIAL/BLOCKED, PASS/FAIL/NOT_RUN) và độ tin dạng chữ trong phần fix-result của thợ:
+// đổi sang đúng enum của contract thay vì từ chối (DVVFEPXF PI-03: candidate 02:42:41 bị từ chối vì status "DONE" và
+// confidence là chuỗi, 7 s trước khi item đóng). Giá trị không đoán được thì để nguyên cho contract báo lỗi.
+const RESULT_STATUS = { done: 'fixed', fixed: 'fixed', complete: 'fixed', completed: 'fixed', resolved: 'fixed', partial: 'partial',
+  blocked: 'cannot_fix', cannot_fix: 'cannot_fix', 'cannot fix': 'cannot_fix', failed: 'cannot_fix', not_fixed: 'cannot_fix' };
+const ROW_RESULT = { pass: 'pass', passed: 'pass', ok: 'pass', fail: 'fail', failed: 'fail', not_run: 'not_run', 'not run': 'not_run', notrun: 'not_run', skipped: 'not_run' };
+const REQ_STATUS = { met: 'met', done: 'met', pass: 'met', passed: 'met', not_met: 'not_met', 'not met': 'not_met', unmet: 'not_met', fail: 'not_met', failed: 'not_met',
+  not_applicable: 'not_applicable', 'n/a': 'not_applicable', na: 'not_applicable' };
+const VERDICT = { confirmed: 'confirmed', refuted: 'refuted', rejected: 'refuted', open: 'open', unconfirmed: 'open' };
+const CONFIDENCE = { high: 0.9, medium: 0.7, low: 0.4 };
+const mapped = (table, v) => (typeof v === 'string' && Object.hasOwn(table, v.trim().toLowerCase()) ? table[v.trim().toLowerCase()] : v);
+export function normalizeResultPart(part) {
+  const out = { ...part };
+  if ('status' in out) out.status = mapped(RESULT_STATUS, out.status);
+  if (typeof out.confidence === 'string') {
+    const t = out.confidence.trim().toLowerCase(), pct = /^(\d+(?:\.\d+)?)\s*%$/.exec(t);
+    const n = pct ? Number(pct[1]) / 100 : Object.hasOwn(CONFIDENCE, t) ? CONFIDENCE[t] : Number(t);
+    if (Number.isFinite(n)) out.confidence = n > 1 && n <= 100 ? n / 100 : n;
+  }
+  const rows = (list, field, table) => (Array.isArray(list) ? list.map(x => (x && typeof x === 'object' && field in x ? { ...x, [field]: mapped(table, x[field]) } : x)) : list);
+  if ('verification' in out) out.verification = rows(out.verification, 'result', ROW_RESULT);
+  if ('requirements' in out) out.requirements = rows(out.requirements, 'status', REQ_STATUS);
+  if ('hypotheses' in out) out.hypotheses = rows(out.hypotheses, 'verdict', VERDICT);
+  return out;
+}
 const WAVE_SCHEMA_FILE = fileURLToPath(new URL('../../contracts/wave-report.schema.json', import.meta.url));
 // Gom các đề cùng đợt cho một analyst: chờ tối đa chừng này từ lúc đề đầu tiên của đợt prepare xong.
 const WAVE_GATHER_MS = 20_000;
@@ -794,6 +819,7 @@ export class Workflow {
     const props = FIX_RESULT_SCHEMA.properties;
     const unknown = Object.keys(part).filter(k => !Object.hasOwn(props, k) || k === 'changed_files');
     if (unknown.length) return { problems: [`result has fields the helper fills or the contract lacks: ${unknown.join(', ')}`] };
+    part = normalizeResultPart(part);
     const folder = `${r.session.descriptor.matchId}/`;
     const changed = r.liveWorktree(key) && ji.worktreeBase ? await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []) : [];
     const own = changed.filter(f => f.path.startsWith(folder)).map(f => ({ ...f, rel: f.path.slice(folder.length) }));
