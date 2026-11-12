@@ -110,4 +110,4 @@ or the item's wording; a new kind of failure is a case of one of them.
 - BUG investigation: bug-patterns.md.
 - PI investigation: pi-triage.md.
 - Edge cases by domain (money, dates, ordering, batch/import/pagination, file export, access, UI layout, incident): domain-checks.md.
-- Workers capturing UI/data/download evidence: evidence-playbook.md.
+- Workers capturing UI/data/download evidence: evidence-playbook.md (core), evidence-playbook-details.md (one section on demand).

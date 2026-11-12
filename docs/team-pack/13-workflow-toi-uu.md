@@ -267,7 +267,9 @@ viết fix-result 8–11 KB mất 30–71 s; 2–3 lượt đầu chỉ để m�
   không ghi gì, không tốn số phiên bản), rồi ghi fix-result đánh số kế tiếp và bàn giao như cũ. Kết quả có
   `fixResultFile`. Worker tự viết file vẫn được.
 - Brief: khối cuối `<skill_text>` chép sẵn backlog-references/SKILL.md, skill theo loại item, stack notes, bug-patterns
-  (BUG), pi-triage (PI), domain-checks và evidence-playbook (trừ item chỉ trả lời), bỏ front matter. Đặt sau `<item>`
+  (BUG), pi-triage (PI), domain-checks và phần cốt lõi của evidence-playbook (chỉ khi item cần bằng chứng trên trang,
+  `needsPages`; item khác có một dòng chỉ tới file, từ sau WQ7T6CEC; `evidence-playbook-details.md` không bao giờ chép,
+  thợ mở đúng mục khi cần), bỏ front matter. Đặt sau `<item>`
   để output bị cắt thì mất skill chứ không mất đề; `item_meta` thêm `fix_result_schema`. Report-only PI giữ quy trình riêng.
 - `team-fixer.toml`: đọc brief một lệnh (`max_output_tokens 40000`), không mở lại file skill; liệt kê đúng các tool
   team_runtime của worker, cấm đọc mã nguồn/pack đã cài của helper; closing checks bằng `run_checks`; mọi exec chờ việc

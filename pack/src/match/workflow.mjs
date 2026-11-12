@@ -204,13 +204,17 @@ export function itemSkills(type, stack) {
 // mất đề. Report-only PI đã có quy trình riêng nên không cần.
 const SKILLS_DIR = new URL('../../skills/', import.meta.url);
 const REFERENCE = name => `.agents/skills/backlog-references/${name}`;
-export function skillFiles(type, skills, { answerOnly = false } = {}) {
+// WQ7T6CEC: brief ~60K ký tự, 75% là <skill_text>, và brief được đọc lại ở mỗi lượt của thợ (26,9 credit). Playbook
+// chụp trang (phần cốt lõi; phần chi tiết evidence-playbook-details.md thợ chỉ mở khi cần) chỉ chép khi item cần bằng
+// chứng trên trang (`pages`); item khác chỉ có một dòng chỉ tới file.
+export const PLAYBOOK = REFERENCE('evidence-playbook.md');
+export function skillFiles(type, skills, { pages = true } = {}) {
   const t = String(type ?? '').toUpperCase();
   return [REFERENCE('SKILL.md'), skills?.item, skills?.stackNotes,
     ...(t === 'BUG' ? [REFERENCE('bug-patterns.md')] : []), ...(t === 'PI' ? [REFERENCE('pi-triage.md')] : []),
-    REFERENCE('domain-checks.md'), ...(answerOnly ? [] : [REFERENCE('evidence-playbook.md')])].filter(Boolean);
+    REFERENCE('domain-checks.md'), ...(pages ? [PLAYBOOK] : [])].filter(Boolean);
 }
-export function skillText(files) {
+export function skillText(files, { pointer = false } = {}) {
   const parts = [];
   for (const rel of files) {
     let text;
@@ -219,8 +223,14 @@ export function skillText(files) {
     parts.push(`=== ${rel} ===\n${text}`);
   }
   if (!parts.length) return null;
-  return [`These skill files are copied here in full: never open them again (${parts.length} files).`, ...parts].join('\n\n');
+  const note = pointer && !files.includes(PLAYBOOK)
+    ? [`${PLAYBOOK} is not copied: this item names no screenshot, page or download evidence. Read that file before any app start or capture_evidence call.`]
+    : [];
+  return [`These skill files are copied here in full: never open them again (${parts.length} files).`, ...note, ...parts].join('\n\n');
 }
+// Item cần bằng chứng trên trang: ảnh trong MVS hay mô tả, script chạy trong trang, hay đề/MVS nói tới chụp, trình duyệt,
+// tải file xuống. Sai theo hướng chép thừa: chép thừa chỉ tốn token, thiếu thì thợ vẫn có dòng chỉ tới file.
+export const PAGE_EVIDENCE = /\b(screenshots?|screen ?shots?|browser|downloads?|downloaded|capture_evidence|playwright|viewport|ui evidence|page evidence)\b/i;
 
 // Khối <environment> của brief: trạng thái job setup của worktree lúc prepare xong (fixer được spawn không chờ nó).
 // TASK chỉ trả lời không có node_modules trong worktree; derive.mjs của TASK-04 (CA3WKX60, EIOR38SI) nạp typescript của
@@ -774,7 +784,11 @@ export class Workflow {
       ...block('knowledge_hints', s.knowledgeHints ?? null),
       ...block('related_events', s.relatedEvents ?? null),
       ...block('item', [raw.descriptionMd ?? raw.description ?? '', s.startInstruction ? `\nStart instruction: ${s.startInstruction}` : ''].join('')),
-      ...(s.reportOnly ? [] : block('skill_text', skillText(skillFiles(s.type ?? typeOf(key), s.skills, { answerOnly: s.verificationKind === 'answer_only' })))),
+      ...(s.reportOnly ? [] : block('skill_text', (() => {
+        const answerOnly = s.verificationKind === 'answer_only';
+        const pages = !answerOnly && this.needsPages(key, raw, s);
+        return skillText(skillFiles(s.type ?? typeOf(key), s.skills, { pages }), { pointer: !answerOnly });
+      })())),
     ];
     const file = join(r.itemDir(key), 'brief.md');
     writeFileAtomic(file, `${lines.join('\n')}\n`);
@@ -953,6 +967,15 @@ export class Workflow {
     for (const m of text.matchAll(/[A-Za-z0-9][\w.-]*\.(?:png|jpe?g|webp)\b/gi)) out.add(m[0]);
     for (const e of r.itemEvidence?.(key) ?? []) if (/\.(png|jpe?g|webp)$/i.test(e.file)) out.add(e.file);
     return [...out];
+  }
+  // Item cần chụp trang hay tải file qua trình duyệt (PAGE_EVIDENCE): quyết định có chép playbook vào brief không.
+  needsPages(key, raw = {}, s = {}) {
+    if (this.screenshotFiles(key).length) return true;
+    if (pageScripts(s.materialsDir ?? this.rt.itemDir(key), s.files).length) return true;
+    const mvs = this.rt.itemMvs?.(key);
+    const text = [raw.descriptionMd ?? raw.description ?? '', typeof mvs === 'string' ? mvs : mvs ? JSON.stringify(mvs) : '',
+      ...(this.rt.itemEvidence?.(key) ?? []).map(e => e.file ?? '')].join('\n');
+    return PAGE_EVIDENCE.test(text);
   }
   // Ảnh còn thiếu của item có hạn (null khi không có hạn hay không cần ảnh).
   missingScreens(key) {

@@ -167,9 +167,12 @@ test('the helper prepares a new item itself once, prefetches company facts, writ
   assert.match(brief, /fix_result_schema: .*fix-result\.schema\.json/);
   const skills = brief.slice(brief.indexOf('<skill_text>'));
   assert.ok(brief.indexOf('<skill_text>') > brief.indexOf('</item>'), 'skills come after the item');
-  for (const rel of ['backlog-references/SKILL.md', 'backlog-cr/SKILL.md', 'stack-notes/unknown.md', 'backlog-references/domain-checks.md', 'backlog-references/evidence-playbook.md']) {
+  for (const rel of ['backlog-references/SKILL.md', 'backlog-cr/SKILL.md', 'stack-notes/unknown.md', 'backlog-references/domain-checks.md']) {
     assert.ok(skills.includes(`=== .agents/skills/${rel} ===`), rel);
   }
+  // WQ7T6CEC: brief đọc lại ở mỗi lượt; item không có bằng chứng trên trang chỉ có dòng chỉ tới playbook.
+  assert.doesNotMatch(skills, /evidence-playbook\.md ===/, 'no screenshot, page or download evidence: the playbook is not copied');
+  assert.match(skills, /evidence-playbook\.md is not copied: .*Read that file before any app start or capture_evidence call/);
   assert.doesNotMatch(skills, /bug-patterns\.md ===|^---\nname:/m, 'no BUG reference, no front matter');
   const spawn = f.rt.workflow.actions().nextActions.find(a => a.action === 'spawn_worker')?.spawn;
   assert.deepEqual([spawn?.task_name, spawn?.agent_type, spawn?.fork_turns, spawn?.model, spawn?.reasoning_effort], ['cr01_fixer', 'team_fixer', 'none', 'gpt-6.1-sol', 'high']);
@@ -1392,6 +1395,8 @@ test('a deadline item that needs screenshots is told to capture them first, in t
   const returnBy = new Date(Date.now() + 10 * 60_000).toISOString();
   const brief = text => readFileSync(wf.writeBrief('CR-07', { item: { title: 'CR', descriptionMd: '' }, fixResultFile: 'x', companyFacts: [], timeBox: { deadline: text, returnBy } }), 'utf8');
   assert.match(brief(true), /<screens_first>\nThis item closes at .* and needs screenshots: reconciliation\.png\. .*before ready_for_evidence/);
+  assert.match(brief(false), /=== \.agents\/skills\/backlog-references\/evidence-playbook\.md ===/, 'a screenshot in the MVS copies the playbook core');
+  assert.doesNotMatch(brief(false), /evidence-playbook-details\.md ===|is not copied/, 'the details file is opened on demand, never copied');
   assert.doesNotMatch(brief(false), /^<screens_first>$/m, 'no deadline, no block');
   assert.match(brief(false), /^<grading>\r?\nHow this item is scored[\s\S]*screenshots required: reconciliation\.png[\s\S]*closes at: the end of the match/m);
 

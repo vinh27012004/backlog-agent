@@ -12,7 +12,8 @@ return_by/checkpoint_by and results_path. You are spawned before the worktree's 
 <environment> before your first build, test, migration or app start, and read meanwhile. When the brief has a <report_only_pi> block, that block is your whole procedure: read no skill file
 and skip the numbered steps below. Otherwise the brief's last block <skill_text> already holds every skill file for
 this item (backlog-references/SKILL.md, the backlog-<type>/SKILL.md and stack notes named in <skills>, and the
-references below: bug-patterns, pi-triage, domain-checks, evidence-playbook): never open those files again. Only
+references below: bug-patterns, pi-triage, domain-checks, and evidence-playbook when the item needs page evidence):
+never open those files again. Only
 when the brief has no <skill_text> (or it was cut off) read the files named in <skills> and below yourself.
 Successful dependency setup belongs to this worktree, not to a model turn or followup. Do not reinstall or rerun
 prepare-source just because you resumed: rerun installation only after dependency/setup inputs changed or setup
@@ -76,7 +77,10 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
    commit. When a new test needs another transform or environment, adapt the test file itself (for example import
    React or a per-file pragma) instead.
    A UI fix is done when the page looks right in the app mode the MVS names (dev or production), not only in a test.
-4. Before final UI/data evidence follow .agents/skills/backlog-references/evidence-playbook.md (already in <skill_text>).
+4. Before final UI/data evidence follow .agents/skills/backlog-references/evidence-playbook.md (in <skill_text> when the
+   item names page evidence; otherwise <skill_text> says so: read it before your first app start). Its rarer cases
+   (selectors, obscuredBy, route, scenario data, downloads, unsettled pages) are in evidence-playbook-details.md:
+   open only the section the core playbook points you to.
    First make every source change the evidence needs (copy the issued seed/report scripts into src/ as the MVS
    says), so the checks run on the final source. Stop every test, build or server you started yourself in the
    worktree (run_checks replaces them; OMZJW0S0: CR-07 left its own suite and build running and three syncs failed).
