@@ -1,6 +1,6 @@
 ---
 name: team-orchestrator
-description: MTM GAME turn. Run parallel item workers; each one codes, tests and captures evidence, then its result is published directly, until the match ends.
+description: MTM GAME turn. Run parallel item workers; an analyst profiles each item, its worker codes, tests and captures evidence, and the helper publishes the result itself, until the match ends.
 ---
 
 # Team orchestrator
@@ -9,9 +9,11 @@ Use team_runtime for Game Master, progress, git commit/push and submission. Subm
 Root manages work; it does not read implementation code, capture evidence, review or debug helper internals.
 
 ## Flow per item
-The helper prepares the item -> spawn one team_fixer from nextActions -> the worker codes and tests, captures
-evidence, writes its fix-result and checkpoints candidate -> publish_item with that fixResultFile. That is the whole flow. There is no reviewer, gate
-or repair round: the helper submits the result as the worker left it, and publish warnings are information, not todos.
+The helper prepares the item -> spawn one team_analyst from nextActions (it profiles the item; PI and answer-only items
+have none) -> spawn one team_fixer from nextActions -> the worker codes and tests, captures evidence, writes its
+fix-result and checkpoints candidate -> the helper integrates, pushes and submits that result itself. That is the whole
+flow. There is no reviewer, gate or repair round: the helper submits the result as the worker left it, and publish
+warnings are information, not todos. You act on a publish only when it failed.
 
 ## Start
 For START_GAME_V4, pass configure_session the marker line and a JSON descriptor containing only schemaVersion,
@@ -65,11 +67,11 @@ Never sync under a writing worker; a sync conflict leaves the worktree intact, r
 worker with the error. Never sync only to pick up another item's fix.
 
 ## Publish
-PI and answer-only items: the helper publishes the handoff itself the moment the worker checkpoints candidate, so
-their publish_item never reaches you unless that automatic publish failed (event AUTO_PUBLISH_FAILED or a failed
-publish job); then handle it like any publish error below.
-As soon as a worker returns its fix-result, call publish_item with exactly the arguments nextActions gives
-(fixResultFile, or candidateId) and a concise commit message. It records the candidate, integrates, pushes and
+The helper publishes every handoff itself the moment the worker checkpoints candidate (BUG, CR, TASK, PI and
+answer-only items alike), so publish_item never reaches you unless that automatic publish failed (event
+AUTO_PUBLISH_FAILED or a failed publish job) or the operator switched it off. Never call publish_item for an item
+nextActions does not offer it for. When nextActions does offer publish_item, call it with exactly the arguments it
+gives (fixResultFile, or candidateId) and a concise commit message. It records the candidate, integrates, pushes and
 submits as one job and waits for it (state running: job_status). PI publish preempts any other pending publication.
 On failure act on code/hint, then call publish_item again: successful steps/receipts survive.
 - WORKER_BUSY: the worker has not checkpointed candidate yet; wait for it.
@@ -99,10 +101,11 @@ Never call request_user_input or request_user_input_async: there is no human ope
 ## Priorities and time
 PI (Product Incident) is top priority over everything: teams are ranked by submission time (100% points for the
 fastest team, then 90%, 75%, 60%). When notice.urgentPI or a new PI appears, prepare and dispatch it immediately; it
-does not occupy a standard slot. The helper publishes its result the moment the worker hands off.
+does not occupy a standard slot. As for every item, the helper publishes its result the moment the worker hands off.
 Next priorities: least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
 Under four minutes left do not begin a new ordinary item. In an item's last six minutes next_actions puts its
-entries first with lastCall: stop_worker, then publish_item as given; do them before any other work. stop_worker
+entries first with lastCall: stop_worker, then publish_item when it is offered (the helper usually publishes the
+handoff itself); do them before any other work. stop_worker
 carries a `followup` text: send exactly that as the one followup_task.
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 

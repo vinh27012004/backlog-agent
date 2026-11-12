@@ -27,7 +27,8 @@ test('a PI attempt is capped and gets a checkpoint; other items keep the match o
   near(pi.returnBy, now + 12 * 60_000);
   near(pi.checkpointBy, now + 6 * 60_000);
   const task = rt.timeBox({ key: 'TASK-01', deadlineMinutes: null });
-  assert.equal(task.workMinutes, 21);
+  // Helper tự publish cả item sửa code (autoPublishAll): chừa 3 phút thay vì 5.
+  assert.equal(task.workMinutes, 23);
   assert.equal(task.checkpointBy, undefined);
   left = 8;
   const late = rt.timeBox({ key: 'PI-02', deadlineMinutes: null });
@@ -35,7 +36,10 @@ test('a PI attempt is capped and gets a checkpoint; other items keep the match o
   assert.equal(late.workMinutes, 6);
   assert.equal(late.reserveMinutes, 2);
   near(late.checkpointBy, now + 6 * 60_000);
-  assert.equal(rt.timeBox({ key: 'BUG-01', deadlineMinutes: 15 }).workMinutes, 3, 'root publishes BUG/CR: 5 minutes kept');
+  assert.equal(rt.timeBox({ key: 'BUG-01', deadlineMinutes: 15 }).workMinutes, 5, 'the helper publishes BUG/CR: 3 minutes kept');
+  rt.runtimeConfig = () => ({ autoPublishAll: false });
+  assert.equal(rt.timeBox({ key: 'BUG-01', deadlineMinutes: 15 }).workMinutes, 3, 'autoPublishAll off: root publishes BUG/CR, 5 minutes kept');
+  assert.equal(rt.timeBox({ key: 'PI-02', deadlineMinutes: 10 }).workMinutes, 6, 'PI still published by the helper');
   rt.runtimeConfig = () => ({ autoPublish: false });
   assert.equal(rt.timeBox({ key: 'PI-02', deadlineMinutes: 10 }).workMinutes, 3, 'autoPublish off: root publishes the PI too');
 });

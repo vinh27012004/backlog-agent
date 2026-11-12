@@ -24,7 +24,10 @@ try {
   check('team-pack-info', info.version === pkg.version && info.teamId, `${info.teamId} / ${info.teamName}`);
 } catch (error) { check('package', false, error.message); }
 
+// Ba profile agent: root, thợ và analyst (BI7A5ACV, 12/11). Thiếu team-analyst.toml thì spawn_analyst hỏng và mọi item
+// chờ hết analystTimeoutSeconds mới có thợ.
 for (const [from, to] of [['agents/team-orchestrator.toml', '.codex/agents/team-orchestrator.toml'],
+  ['agents/team-fixer.toml', '.codex/agents/team-fixer.toml'], ['agents/team-analyst.toml', '.codex/agents/team-analyst.toml'],
   ['team-pack-info.json', '.mtm/team-pack-info.json'], ['team-runtime.json', '.mtm/team-runtime.json']]) {
   const a = join(runtime, from), b = join(tw, to);
   check(`registration ${to}`, existsSync(a) && existsSync(b) && read(a) === read(b));

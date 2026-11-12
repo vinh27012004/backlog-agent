@@ -57,6 +57,9 @@ const PUBLISH_RESERVE_MIN = 5;
 // PI hạn 10 phút bị chừa 5 phút, PI-04 (prepare 90 s) còn 3,5 phút, bàn giao ở phút 5,4 chưa sửa source trong khi item
 // đóng ở phút 10: mất 24 điểm fix; PI-03 bàn giao khi còn 2,4 phút và lần tra log chưa xong.
 const SELF_PUBLISH_RESERVE_MIN = 2;
+// BUG/CR/TASK sửa code mà helper tự publish (autoPublishAll): cũng không có lượt root, publish thật 14–19 s (BI7A5ACV
+// BUG-11, TASK-07), nhưng chừa thêm một phút cho một vòng SYNC_REQUIRED (sync rồi một followup cho thợ).
+const CODE_SELF_PUBLISH_RESERVE_MIN = 3;
 // PI là cuộc đua (Game Rules §6: 100/90/75/60% theo thứ hạng, bấm giờ từ lúc đề hiện): mỗi lượt fixer tối đa
 // PI_ATTEMPT_MIN thay vì tới giờ hết trận; tới PI_CHECKPOINT_MIN mà chưa xác nhận được giả thuyết nào thì fixer trả
 // partial kèm danh sách giả thuyết để root cho kiểm song song (SRE: định kỳ xét lại hướng đi). Chỉnh sau diễn tập.
@@ -641,8 +644,10 @@ export class Runtime {
   // PI_ATTEMPT_MIN mỗi lượt và mốc checkpointBy. Giờ tuyệt đối theo đồng hồ máy, tính từ lúc gọi (lượt mới đọc lại từ
   // match_state); trận PAUSED thì hạn thật lùi lại, nên root đọc lại returnBy sau khi trận chạy tiếp.
   publishReserve(key) {
-    const self = this.runtimeConfig().autoPublish !== false && (typeOf(key) === 'PI' || this.answerOnlyItem(key));
-    return self ? SELF_PUBLISH_RESERVE_MIN : PUBLISH_RESERVE_MIN;
+    const cfg = this.runtimeConfig();
+    if (cfg.autoPublish === false) return PUBLISH_RESERVE_MIN;
+    if (typeOf(key) === 'PI' || this.answerOnlyItem(key)) return SELF_PUBLISH_RESERVE_MIN;
+    return cfg.autoPublishAll === false ? PUBLISH_RESERVE_MIN : CODE_SELF_PUBLISH_RESERVE_MIN;
   }
   timeBox(item) {
     const left = this.gm.itemMinutesLeft(item);
