@@ -1527,7 +1527,7 @@ const PROFILE = () => ({
     { aspect: 'team_tests_pass', quote: 'The grader runs the tests itself on your submitted revision' }],
   deliverables: { sourceFiles: [{ path: 'src/export.js', quote: 'Add src/export.js' }], testLocation: null,
     answerFields: [{ name: 'rowCount', type: 'integer', exact: false, quote: 'report the row count in rowCount' }] },
-  evidence: [], scenarios: ['TC-1'], constraints: [], dependsOn: [], deadlineMinutes: null,
+  evidence: [], scenarios: ['TC-1'], constraints: [], dependsOn: [], zeroConditions: [],
   workload: { investigation: 'code', crossModule: false, uiChange: false, needsRunningApp: false, officialData: false } });
 
 test('workers start at once; one analyst per wave profiles the items and the worker gets the checklist at ready_for_evidence', async () => {

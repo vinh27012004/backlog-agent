@@ -714,7 +714,7 @@ export class Workflow {
     const own = list.filter(f => f.status !== 'D' && f.path.startsWith(folder)).map(f => f.path.slice(folder.length));
     const appRoot = detectProfile(paths.matchRoot).root;
     const exists = tail => [paths.matchRoot, appRoot].filter(Boolean).some(base => existsSync(join(base, tail)));
-    const failing = checklistProblems(profile, { answerDir: join(paths.matchRoot, 'answers', key), changed: own, exists });
+    const failing = checklistProblems(profile, { answerDir: join(paths.matchRoot, 'answers', key), matchRoot: paths.matchRoot, changed: own, exists });
     if (!failing.length) return null;
     const mark = failing.map(f => f.id).sort().join('|');
     const text = `checklist of this item (brief <checklist>): ${failing.map(f => f.problem).join('; ')}`;
