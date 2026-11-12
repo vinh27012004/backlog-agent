@@ -8,7 +8,7 @@ import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
-import { CHECK_LABEL, cancelChecks, readChecks, verificationRows } from '../env/checks.mjs';
+import { CHECK_LABEL, baselineRerunFiles, cancelChecks, readChecks, verificationRows } from '../env/checks.mjs';
 import { mutantsRunning, mutationTargets, readMutants, restorePending } from '../env/mutants.mjs';
 import { validateSchema } from '../core/jsonschema.mjs';
 import { stopApp } from '../env/app.mjs';
@@ -1127,7 +1127,17 @@ export class Workflow {
       warnings.unshift(`no product change came with your new tests (${parked.join(', ')}): they reproduce a defect this handoff does not fix, so they would fail every later commit's suite. The helper moved them to answers/${key}/evidence/unshipped-tests/; say in the engineering record that the fix is not in this revision`);
     }
     if (caught?.synced) {
-      problems.unshift(`${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : ''}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
+      // WQ7T6CEC BUG-09: chạy lại cả bộ test chờ 574 s (máy đang tải) dù bản sửa chỉ đổi vài file của chủ baseline. Chỉ
+      // chạy lại file của các test fail sẵn cộng test mới của item; không tính được danh sách thì vẫn cả bộ như cũ.
+      const paths = this.paths(key), folder = `${this.rt.session.descriptor.matchId}/`;
+      const ownTests = (await changedFiles(paths.worktreeRoot, this.item(key).worktreeBase).catch(() => []))
+        .filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
+        .map(f => join(paths.matchRoot, f.path.slice(folder.length)));
+      const rerun = baselineRerunFiles(paths.matchRoot, this.rt.journal.data.preparation?.baseline?.failing ?? [], ownTests);
+      const setup = caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : '';
+      problems.unshift(rerun
+        ? `${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${setup}: rerun only the tests it affects, run_checks ${JSON.stringify({ checks: ['test'], testFiles: rerun })} (the test files of the baseline failures and your own new tests; apply a migration it brings the way the project does first), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Do not run the full suite again. Scenarios and screenshots you already verified stay PASS: do not recapture them`
+        : `${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${setup}: run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Scenarios you already verified stay PASS: only the suite needs the rerun`);
     } else if (caught?.error) warnings.push(`could not sync ${owner}'s baseline fix into your worktree (${caught.error}); hand off as observed`);
     if (this.baselineWait(key) === 'owner') {
       warnings.push(`the baseline failures are not fixed on main yet: ${owner} lands that fix first. Hand off now as observed; publish waits for the fix, then the helper syncs your worktree and root asks you to rerun the full suite`);
