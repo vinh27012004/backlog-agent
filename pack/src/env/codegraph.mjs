@@ -2,7 +2,8 @@
 // team-sdlc-pack/codegraph/, Codex chạy `serve --mcp`, agent gọi tool codegraph_* với projectPath = thư mục trận.
 // Server không tự index: gọi lên thư mục chưa index thì nó bảo agent thôi dùng codegraph cả phiên. Nên helper dựng
 // index (.codegraph/ trong thư mục trận, đã nằm trong .git/info/exclude) cho checkout chính lúc setup_environment
-// và cho worktree ngay trong `worktree create`, trước khi root kịp giao việc cho fixer.
+// và cho worktree ở nền khi `worktree create` (WQ7T6CEC: dựng index trên đường găng làm prepare mất ~45 s, 12 thợ chỉ
+// gọi codegraph 3 lần); thợ gọi trước khi index xong thì server bảo thôi dùng codegraph, thợ vẫn còn rg.
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, run } from '../core/jobs.mjs';

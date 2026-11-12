@@ -163,7 +163,7 @@ const sharedFollowup = (from, files) => `${from}'s product fix was copied into y
 // dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
 const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
 // Lời root gửi worker khi helper vừa sync bản sửa baseline vào worktree đã bàn giao của nó.
-const baselineFollowup = owner => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. Run the full suite once more to its evidence log (apply a migration it brings the way the project does), record the real result in submit.json, then call worker_checkpoint candidate with your updated result (or write the next numbered fix-result yourself). Change nothing else.`;
+const baselineFollowup = (owner, rerun = null) => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. ${rerun ? `Rerun only the tests it affects, run_checks ${JSON.stringify({ checks: ['test'], testFiles: rerun })} (the test files of the baseline failures and your own new tests, not the full suite; scenarios and screenshots you already verified stay PASS, do not recapture them), record that result` : 'Run the full suite once more to its evidence log'} (apply a migration it brings the way the project does), record the real result in submit.json, then call worker_checkpoint candidate with your updated result (or write the next numbered fix-result yourself). Change nothing else.`;
 // PI chỉ báo cáo: brief thay mọi skill (CA3WKX60: fixer PI-01 đọc 42K ký tự skill trong 22 s, rồi tự kéo log, tự chép
 // evidence, viết fix-result 27 s; tổng 2m28s cho 10 lượt). Ba lượt: đọc, suy ra + ghi submit.json, bàn giao.
 const REPORT_ONLY_PI = `Report-only incident (Form A): the item forbids source changes, so this block is your whole procedure and replaces
@@ -1210,11 +1210,7 @@ export class Workflow {
     if (caught?.synced) {
       // WQ7T6CEC BUG-09: chạy lại cả bộ test chờ 574 s (máy đang tải) dù bản sửa chỉ đổi vài file của chủ baseline. Chỉ
       // chạy lại file của các test fail sẵn cộng test mới của item; không tính được danh sách thì vẫn cả bộ như cũ.
-      const paths = this.paths(key), folder = `${this.rt.session.descriptor.matchId}/`;
-      const ownTests = (await changedFiles(paths.worktreeRoot, this.item(key).worktreeBase).catch(() => []))
-        .filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
-        .map(f => join(paths.matchRoot, f.path.slice(folder.length)));
-      const rerun = baselineRerunFiles(paths.matchRoot, this.rt.journal.data.preparation?.baseline?.failing ?? [], ownTests);
+      const rerun = await this.baselineRerun(key).catch(() => null);
       const setup = caught.setupJobId ? ` (dependency setup job ${caught.setupJobId}: wait for it with job_status)` : '';
       problems.unshift(rerun
         ? `${owner}'s fix for the baseline failures just landed on main and the helper synced it into your worktree, keeping your changes${setup}: rerun only the tests it affects, run_checks ${JSON.stringify({ checks: ['test'], testFiles: rerun })} (the test files of the baseline failures and your own new tests; apply a migration it brings the way the project does first), record the real result in submit.json and call candidate again with your updated result (or the next numbered fix-result). Do not run the full suite again. Scenarios and screenshots you already verified stay PASS: do not recapture them`
@@ -1343,8 +1339,10 @@ export class Workflow {
     // File các đề đang làm khác cũng đổi, trên source vừa sync (analysisNote đưa cho thợ trong phản hồi này).
     await this.refreshOverlap(key);
     // Sync vừa mang bản sửa baseline về: kết quả cả bộ test chạy trước đó không còn đúng với commit sẽ nộp.
-    const baseline = !hadBaseline && ji.baselineFixIn && this.baselineApplies(key)
-      ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.` : '';
+    const rerun = !hadBaseline && ji.baselineFixIn && this.baselineApplies(key) ? await this.baselineRerun(key).catch(() => null) : undefined;
+    const baseline = rerun === undefined ? ''
+      : rerun ? ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: rerun only the tests it affects, run_checks ${JSON.stringify({ checks: ['test'], testFiles: rerun })} (not the full suite), and record that result.`
+        : ` This sync brought ${r.journal.data.preparation.baselineOwner}'s fix for the baseline failures: run the full suite once more (apply a migration it brings the way the project does) and record that result.`;
     if (synced.setupJobId) return { ...yielded, synced, hint: `Dependencies changed: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume after setup.${baseline}` };
     try {
       const screens = this.missingScreens(key);
@@ -1517,6 +1515,19 @@ export class Workflow {
   }
   // Poller, sau khi bản sửa lên main: sync worktree của item đã bàn giao mà còn thiếu nó (worker đã nghỉ). Candidate
   // cũ thành stale; actions() đưa refresh_candidate để root nhờ worker chạy lại cả bộ test.
+  // Bản sửa baseline vừa vào worktree của `key`: file test cần chạy lại (file của các test fail sẵn cộng test mới của
+  // item), lưu ở ji.baselineRerun cho mọi thông báo (candidate, ready_for_evidence, followup của root). null: không tính
+  // được thì vẫn cả bộ test như cũ (WQ7T6CEC BUG-09: cả bộ 574 s khi máy đang tải).
+  async baselineRerun(key) {
+    const ji = this.item(key), paths = this.paths(key), folder = `${this.rt.session.descriptor.matchId}/`;
+    const ownTests = (await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []))
+      .filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
+      .map(f => join(paths.matchRoot, f.path.slice(folder.length)));
+    const rerun = baselineRerunFiles(paths.matchRoot, this.rt.journal.data.preparation?.baseline?.failing ?? [], ownTests);
+    ji.baselineRerun = rerun ?? null;
+    this.rt.journal.save();
+    return ji.baselineRerun;
+  }
   async syncHeldItems() {
     const r = this.rt, fix = this.baselineFix();
     if (fix?.state !== 'landed') return [];
@@ -1530,6 +1541,7 @@ export class Workflow {
         stopApp(r.teamWorkspace, key);
         await r.worktree({ action: 'sync', backlogItemKey: key });
         ji.baselineSynced = { revision: fix.revision, resultFile, at: new Date().toISOString() };
+        await this.baselineRerun(key).catch(() => null);
         r.events.push('BASELINE_SYNCED', { key });
       } catch (e) {
         ji.baselineSyncError = { code: e.code ?? 'INTERNAL_ERROR', message: oneLine(e.message ?? e, 300) };
@@ -1809,7 +1821,7 @@ export class Workflow {
         held.add(key);
         if (ji.workerState === 'writing') continue;
         if (lastCallOf(row)) add(key, 'publish_item', { fixResultFile: ji.baselineSynced.resultFile }, { lastCall: true, minutesLeft: row.minutesLeft });
-        else add(key, 'refresh_candidate', {}, { reason: 'baseline_fix', workerThread: ji.workerThread ?? null, followup: baselineFollowup(r.journal.data.preparation?.baselineOwner ?? 'the baseline owner') });
+        else add(key, 'refresh_candidate', {}, { reason: 'baseline_fix', workerThread: ji.workerThread ?? null, followup: baselineFollowup(r.journal.data.preparation?.baselineOwner ?? 'the baseline owner', ji.baselineRerun) });
         continue;
       }
       if (this.baselineWait(key, row)) { held.add(key); continue; }

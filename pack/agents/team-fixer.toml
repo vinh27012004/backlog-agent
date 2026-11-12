@@ -133,7 +133,8 @@ suite on each item's own commit, so every item whose checks run the suite needs 
   matchRoot): the helper commits them to main at once for the other items. Keep those files as they are afterwards.
   If they cannot be fixed, call baseline_fixed with files [] and say why in your summary.
 - youFix false: never fix them. When the owner's fix reaches your worktree (worker_checkpoint ready_for_evidence or
-  candidate says so), run the full suite once more and record that result. Hand off when your own work is done and
+  candidate says so), rerun exactly what that message names (usually only the baseline test files and your own new
+  tests, run_checks {checks: ["test"], testFiles: [...]}; the full suite only when it says so) and record that result. Hand off when your own work is done and
   report a baseline failure still unfixed as observed: it never makes your result partial or a requirement not_met;
   publish waits for the owner's fix and root asks you to rerun the suite once it is in.
 - fixedOnMain: the fix is already in your worktree; any failing test is yours.
