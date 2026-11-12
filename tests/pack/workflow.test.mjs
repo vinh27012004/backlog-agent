@@ -1606,6 +1606,13 @@ test('workers start at once; one analyst per wave profiles the items and the wor
   const analyst = first.find(a => a.action === 'spawn_analyst');
   assert.deepEqual([analyst.spawn.task_name, analyst.spawn.agent_type, analyst.items], ['wave1_analyst', 'team_analyst', ['CR-01']]);
   assert.deepEqual(wf.actions().nextActions.map(a => a.action), [], 'the analyst and the worker are offered once: root is not woken again while they start');
+  // 33R91I3Q: analyst nộp hồ sơ đầu 45–133 s sau khi spawn; sau 60 s nó chưa gọi helper không có nghĩa là spawn hỏng.
+  const wave = f.rt.journal.data.waves[f.ji.analysis.wave], offered = wave.offeredAt;
+  wave.offeredAt = new Date(Date.now() - 150_000).toISOString();
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'still starting after 150 s: not offered again');
+  wave.offeredAt = new Date(Date.now() - 250_000).toISOString();
+  assert.ok(wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'silent for 250 s: the spawn failed, offered once more');
+  wave.offeredAt = offered; delete wave.retried;
   const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
   for (const re of [/<item_input id="CR-01" type="CR" points="140">[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /<wave_schema>[\s\S]*"title": "wave-report"/, /phase: "wave"/]) assert.match(input, re);
   // Trích dẫn bịa bị từ chối; analyst không bao giờ thành thợ của đề.

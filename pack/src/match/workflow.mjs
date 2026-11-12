@@ -95,6 +95,9 @@ const BLOCKING_ANSWER = /^(schema |missing answers\/|submit\.json is not valid J
 const LAST_CALL_MINUTES = 6;
 // spawn_worker đã đưa cho root: chờ chừng này cho thợ gọi helper lần đầu rồi mới đưa lại (spawn hỏng, hết thread).
 const SPAWN_QUIET_MS = 90_000;
+// Analyst chỉ gọi helper khi nộp hồ sơ đầu tiên, 45–133 s sau khi được spawn (33R91I3Q): chờ 60 s thì đợt 4 bị đưa lại cho root
+// khi analyst còn đang đọc. Spawn hỏng thật (hết thread) vẫn được đưa lại một lần.
+const ANALYST_QUIET_MS = 240_000;
 // Item helper tự publish (row.reserveMinutes nhỏ hơn mức thường, tools.mjs publishReserve): cơ hội cuối mở đúng lúc
 // returnBy, không cắt lượt của thợ sớm hơn (PI hạn 10 phút trước đây bị gọi dừng khi còn 4 phút).
 const lastCallThreshold = row => (row?.reserveMinutes && row.reserveMinutes < 5 ? row.reserveMinutes
@@ -590,7 +593,7 @@ export class Workflow {
         w.state = 'ready';
         this.rt.journal.save();
       }
-      const quiet = w.offeredAt && (w.calls || w.retried || Date.now() - Date.parse(w.offeredAt) < 60_000);
+      const quiet = w.offeredAt && (w.calls || w.retried || Date.now() - Date.parse(w.offeredAt) < ANALYST_QUIET_MS);
       if (!quiet) out.push({ key: w.items[0], action: 'spawn_analyst', arguments: {}, wave: w.id, items: w.items, spawn: w.spawn });
     }
     return out;
