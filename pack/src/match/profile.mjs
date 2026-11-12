@@ -7,7 +7,7 @@
 //
 // Hai nhóm kiểm tra (CLAUDE.md, 08-guardrails): hồ sơ được TẮT kiểm tra tốn thời gian (mutants) khi mục chấm của đề
 // không nói tới; kiểm tra an toàn (schema submit.json, cấu hình test, test gốc, node_modules, secret) không đọc hồ sơ.
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { injectionHeuristic } from '../decide/decisions.mjs';
@@ -24,6 +24,9 @@ export function profileSchema() {
 const fold = text => String(text ?? '').normalize('NFKC').replace(/[`*_>#|]/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
   .replace(/[‐-―]/g, '-').replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 
+// Đường dẫn trong hồ sơ phải tương đối, không ra ngoài dự án.
+const outsidePath = p => /^([A-Za-z]:|[\\/])|(^|[\\/])\.\.([\\/]|$)/.test(p);
+
 function quotesOf(profile) {
   const out = [];
   const add = (where, quote) => out.push({ where, quote });
@@ -33,6 +36,7 @@ function quotesOf(profile) {
   (profile.evidence ?? []).forEach((e, i) => add(`evidence[${i}] (${e.file})`, e.quote));
   (profile.constraints ?? []).forEach((c, i) => add(`constraints[${i}]`, c.quote));
   (profile.dependsOn ?? []).forEach((d, i) => add(`dependsOn[${i}] (${d.item})`, d.quote));
+  (profile.zeroConditions ?? []).forEach((z, i) => add(`zeroConditions[${i}] (${z.kind})`, z.quote));
   return out;
 }
 
@@ -57,8 +61,15 @@ export function validateProfile(profile, { key, texts = [], scenarioIds = [] } =
     if (e.scenario !== null && !wanted.has(e.scenario)) problems.push(`evidence ${e.file}: scenario ${e.scenario} is not a testResults id of the template (use null for a file required outside a scenario)`);
   }
   for (const f of profile.deliverables.sourceFiles) {
-    if (/^([A-Za-z]:|[\\/])|(^|[\\/])\.\.([\\/]|$)/.test(f.path)) problems.push(`sourceFiles path ${JSON.stringify(f.path)} must be relative, inside the project`);
+    if (outsidePath(f.path)) problems.push(`sourceFiles path ${JSON.stringify(f.path)} must be relative, inside the project`);
   }
+  profile.zeroConditions.forEach((z, i) => {
+    const where = `zeroConditions[${i}] (${z.kind})`;
+    if (z.path !== null && outsidePath(z.path)) problems.push(`${where}: path ${JSON.stringify(z.path)} must be relative, inside the match folder`);
+    if (z.kind !== 'other' && !z.path) problems.push(`${where}: give the path the item names (use kind other when it names none)`);
+    if (z.kind === 'max_size' && !(z.maxBytes > 0)) problems.push(`${where}: give the limit in maxBytes (20 MB = 20971520)`);
+    if (z.kind !== 'max_size' && z.maxBytes !== null) problems.push(`${where}: maxBytes is only for max_size; use null`);
+  });
   for (const d of profile.dependsOn) if (d.item === key) problems.push(`dependsOn names ${key} itself`);
   return { problems };
 }
@@ -111,9 +122,17 @@ export function profileFlags(profile) {
 // Checklist: mỗi dòng là một điều kiểm được bằng code lúc candidate. id ổn định để ghi "đã từ chối một lần".
 export function profileChecklist(profile, key) {
   const lines = [];
+  // Một file cho cùng một kịch bản chỉ một dòng (WQ7T6CEC BUG-09 khai tc-01-schedules.png hai lần); cùng file cho kịch
+  // bản khác là hợp lệ. Dòng trùng góp beforeFix và minViewport vào dòng đầu.
+  const evidence = new Map();
   for (const e of profile.evidence ?? []) {
-    lines.push({ id: `evidence:${e.scenario ?? '-'}:${e.file}`, kind: 'evidence', scenario: e.scenario, file: e.file, beforeFix: e.beforeFix,
-      text: `evidence/${e.file}${e.scenario ? ` for ${e.scenario} (cited in that row's evidence when you report PASS)` : ''}${e.beforeFix ? ', captured on the unfixed code' : ''}${e.kind === 'screenshot' ? ' — a real page, not a *.FAILED-step* capture' : ''}` });
+    const id = `evidence:${e.scenario ?? '-'}:${e.file}`, seen = evidence.get(id);
+    if (!seen) evidence.set(id, { ...e, minViewport: e.minViewport ?? null });
+    else { seen.beforeFix ||= e.beforeFix; seen.minViewport ??= e.minViewport ?? null; if (seen.kind === 'other') seen.kind = e.kind; }
+  }
+  for (const [id, e] of evidence) {
+    lines.push({ id, kind: 'evidence', scenario: e.scenario, file: e.file, beforeFix: e.beforeFix, minViewport: e.minViewport,
+      text: `evidence/${e.file}${e.scenario ? ` for ${e.scenario} (cited in that row's evidence when you report PASS)` : ''}${e.beforeFix ? ', captured on the unfixed code' : ''}${e.minViewport ? `, at a viewport of at least ${e.minViewport}` : ''}${e.kind === 'screenshot' ? ' — a real page, not a *.FAILED-step* capture' : ''}` });
   }
   for (const f of profile.deliverables?.answerFields ?? []) {
     lines.push({ id: `field:${f.name}`, kind: 'field', name: f.name, type: f.type, exact: f.exact,
@@ -126,18 +145,62 @@ export function profileChecklist(profile, key) {
   const flags = profileFlags(profile);
   if (flags.detection) lines.push({ id: 'detection:mutants', kind: 'mutants', text: 'run_checks {action: "mutants"} on your final source: graders run your tests against broken builds, each change needs a test that fails without it' });
   if (flags.typecheck) lines.push({ id: 'typecheck', kind: 'typecheck', text: 'the type check passes: the item grades it' });
+  // Điều kiện làm item 0 điểm mà code kiểm được: giới hạn dung lượng và file bắt buộc (WQ7T6CEC TASK-07).
+  for (const z of profile.zeroConditions ?? []) {
+    if (!z.path || outsidePath(z.path)) continue;
+    if (z.kind === 'max_size' && z.maxBytes > 0) lines.push({ id: `zero:max_size:${z.path}`, kind: 'zero_condition', zeroKind: 'max_size', path: z.path, maxBytes: z.maxBytes, text: `${z.path} stays under ${megabytes(z.maxBytes)}: the item scores 0 above it` });
+    if (z.kind === 'required_file') lines.push({ id: `zero:required_file:${z.path}`, kind: 'zero_condition', zeroKind: 'required_file', path: z.path, text: `${z.path} exists: the item scores 0 without it` });
+  }
   for (const id of profile.scenarios ?? []) lines.push({ id: `scenario:${id}`, kind: 'scenario', scenario: id, text: `${id} reported PASS, FAIL or NOT_RUN with what you observed (NOT_RUN scores nothing)` });
   return lines.map(l => ({ ...l, key }));
+}
+
+const megabytes = bytes => (bytes >= 1048576 ? `${Number((bytes / 1048576).toFixed(2))} MB` : bytes >= 1024 ? `${Number((bytes / 1024).toFixed(1))} KB` : `${bytes} bytes`);
+
+// Kích thước ảnh PNG từ IHDR (byte 16..23, big-endian); null khi file không bắt đầu bằng chữ ký PNG. Chỉ đọc 24 byte.
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+export function pngSize(file) {
+  let fd = null;
+  try {
+    fd = openSync(file, 'r');
+    const head = Buffer.alloc(24);
+    if (readSync(fd, head, 0, 24, 0) < 24 || !head.subarray(0, 8).equals(PNG_SIGNATURE)) return null;
+    return { width: head.readUInt32BE(16), height: head.readUInt32BE(20) };
+  } catch { return null; } finally { if (fd !== null) closeSync(fd); }
+}
+
+// Tổng dung lượng file hoặc thư mục (đệ quy, không theo symlink/junction: node_modules liên kết của worktree trỏ vào
+// checkout chính). Dừng sớm khi đã vượt limit. null khi đường dẫn không có.
+function sizeOf(path, limit = Infinity) {
+  let st;
+  try { st = lstatSync(path); } catch { return null; }
+  if (st.isSymbolicLink()) return 0;
+  if (!st.isDirectory()) return st.size;
+  let total = 0;
+  const stack = [path];
+  while (stack.length && total <= limit) {
+    let entries = [];
+    const dir = stack.pop();
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const d of entries) {
+      if (d.isSymbolicLink()) continue;
+      const full = join(dir, d.name);
+      if (d.isDirectory()) stack.push(full);
+      else { try { total += lstatSync(full).size; } catch { /* file vừa bị xoá */ } }
+    }
+  }
+  return total;
 }
 
 const jsonType = v => (v === null ? 'null' : Array.isArray(v) ? 'array' : Number.isInteger(v) ? 'integer' : typeof v);
 const typeOk = (v, t) => jsonType(v) === t || (t === 'number' && typeof v === 'number');
 const empty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length) || (jsonType(v) === 'object' && !Object.keys(v).length);
 
-// Kiểm checklist trên bài đang bàn giao. answerDir: answers/<ID> của worktree; changed: đường dẫn (trong thư mục trận)
-// item đã thêm/sửa; exists(path): file có trong worktree. Trả về [{ id, problem }]: chỉ những dòng chưa đạt mà code
-// kiểm được chắc chắn (dòng mutants, typecheck, scenario do các gate sẵn có lo).
-export function checklistProblems(profile, { answerDir, changed = [], exists = () => false } = {}) {
+// Kiểm checklist trên bài đang bàn giao. answerDir: answers/<ID> của worktree; matchRoot: thư mục trận của worktree
+// (không có thì bỏ qua các kiểm tra cần nó); changed: đường dẫn (trong thư mục trận) item đã thêm/sửa; exists(path):
+// file có trong worktree. Trả về [{ id, problem }]: chỉ những dòng chưa đạt mà code kiểm được chắc chắn (dòng mutants,
+// typecheck, scenario do các gate sẵn có lo).
+export function checklistProblems(profile, { answerDir, matchRoot = null, changed = [], exists = () => false } = {}) {
   const out = [];
   let submit = null;
   try { submit = JSON.parse(readFileSync(join(answerDir, 'submit.json'), 'utf8')); } catch { return out; }   // answerCheck báo lỗi này
@@ -153,12 +216,31 @@ export function checklistProblems(profile, { answerDir, changed = [], exists = (
         if (!there) out.push({ id: line.id, problem: `${line.scenario} is PASS but evidence/${line.file} does not exist: capture it or report the scenario as observed` });
         else if (!cited) out.push({ id: line.id, problem: `${line.scenario} is PASS but its evidence does not cite evidence/${line.file}, which the item requires for it` });
       }
+      // Ảnh nhỏ hơn viewport đề đòi (WQ7T6CEC CR-07 TC-03: PNG "at a desktop viewport of at least 1280x720").
+      const min = /^(\d+)x(\d+)$/.exec(line.minViewport ?? '');
+      if (min && there && (line.scenario === null || passed(line.scenario))) {
+        const size = pngSize(join(answerDir, 'evidence', line.file));
+        if (size && (size.width < Number(min[1]) || size.height < Number(min[2]))) {
+          out.push({ id: `viewport:${line.scenario ?? '-'}:${line.file}`, problem: `evidence/${line.file} is ${size.width}x${size.height}, smaller than the ${line.minViewport} the item requires: capture it again at a viewport of at least ${line.minViewport}` });
+        }
+      }
     } else if (line.kind === 'field') {
       if (!Object.hasOwn(submit ?? {}, line.name) || empty(submit[line.name])) out.push({ id: line.id, problem: `submit.json ${line.name} is empty: the item scores it${line.exact ? ' by exact comparison' : ''}` });
       else if (!typeOk(submit[line.name], line.type)) out.push({ id: line.id, problem: `submit.json ${line.name} must be ${line.type}, it is ${jsonType(submit[line.name])}` });
     } else if (line.kind === 'source') {
       const tail = line.path.replaceAll('\\', '/').replace(/^\.?\//, '');
       if (!changed.some(p => p === tail || p.endsWith(`/${tail}`)) && !exists(tail)) out.push({ id: line.id, problem: `${line.path} is not in your change: the item names this file` });
+    } else if (line.kind === 'zero_condition') {
+      const tail = line.path.replaceAll('\\', '/').replace(/^\.?\//, '').replace(/\/+$/, '');
+      if (line.zeroKind === 'required_file') {
+        // Không có matchRoot thì chỉ biết answers/ và exists(): không đủ để nói file thiếu.
+        const found = existsSync(join(answerDir, tail)) || (matchRoot && existsSync(join(matchRoot, tail))) || exists(tail);
+        if (!found && matchRoot) out.push({ id: line.id, problem: `${line.path} does not exist in the item's answers folder or the match folder: the item scores 0 without it` });
+      } else if (line.zeroKind === 'max_size' && matchRoot) {
+        const base = [join(matchRoot, tail), join(answerDir, tail)].find(p => existsSync(p));
+        const size = base ? sizeOf(base, line.maxBytes) : null;
+        if (size !== null && size > line.maxBytes) out.push({ id: line.id, problem: `${line.path} is ${megabytes(size)} or more, above the ${megabytes(line.maxBytes)} limit: the item scores 0 above it; make it smaller` });
+      }
     }
   }
   return out;
