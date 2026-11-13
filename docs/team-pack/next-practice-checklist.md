@@ -6,6 +6,47 @@ rồi đối chiếu từng mục dưới đây với transcript (`~/.codex/sess
 có `agent_path`) và `<checkout>/.team-work/journal.json`. Ghi kết quả vào `practice-log.md` mục #8; mục nào đạt thì xoá
 khỏi file này. Kết quả đối chiếu của #7: `practice-log.md`, mục #7, "Đối chiếu checklist".
 
+## Sau `33R91I3Q` (13/11): cần kiểm ở trận kế và việc còn mở
+
+Các sửa lỗi của `practice-log.md` mục #25 (commit `2a1299d`, `22eb132`) mới qua test offline và một lần tái hiện
+`enterApp` trên bản build của trận; chưa trận thật nào chạy chúng.
+
+**Trước trận**
+- [ ] Cài lại pack: `pwsh -NoProfile -File pack/install.ps1 -TeamWorkspace D:\mtm\BUN -Force`.
+- [ ] `team-sdlc-pack/local/models.json` không tồn tại (đã xoá sau lần thử luna): CR/BUG/PI chạy `gpt-6.1-sol`.
+- [ ] Chạy cùng bộ 14 item để so với `DVVFEPXF` (judge 12/14, 238 credit) và `33R91I3Q` (8/14, 64 credit).
+- [ ] Nên cài Node 22 LTS: Node 24.11.1 của máy làm 2 test `windows-1252` trong `parse-file.test.ts` luôn đỏ.
+
+**Kiểm sau trận** (transcript từng thợ + `journal.json`)
+- [ ] `enterApp`: `screens` có `setup`/`signin`/`welcome` ở lần đầu của mỗi server mới, không còn `screens: []` rồi kẹt
+      ở `/bootstrap` (L137). Có lần nào kết thúc ở "Too many requests" không (L145).
+- [ ] `worktree sync` có `autoMerged`: file sau gộp còn biên dịch được, không dòng nào bị lặp (L138; xem
+      `budget/app.ts`, `FinancesApp.tsx`).
+- [ ] `app start` của đề thứ hai trở đi trả `commandsFrom`; không thợ nào tự viết lại `custom` (L139). Đếm số lần
+      `app start` mỗi đề và thời gian tới `ready`.
+- [ ] `typecheckGate`: có lần từ chối nào, đúng hay nhầm; main cuối trận typecheck sạch (L140). Đề sát hạn vẫn lọt
+      (chỉ đòi chạy khi còn ≥ 4 phút).
+- [ ] Baseline lúc chuẩn bị là `FAIL`/`PASS`, không `TIMEOUT` (L141).
+- [ ] Checklist: brief của mọi đề có `<checklist>` ngay lúc prepare; `checklistDelivered` có ở đề chỉ trả lời và đề
+      có hạn (33R91I3Q: 6/14 không nhận); `checklistSeen` từ chối đúng chỗ, không chặn nhầm như TASK-08 (L142).
+- [ ] Thiếu evidence đề yêu cầu giờ bị từ chối một lần (trước chỉ cảnh báo, lựa chọn 03/11): xem có tốn lượt vô ích
+      không, nếu có thì trả về cảnh báo.
+- [ ] Analyst: đúng một thread mỗi đợt, không có `retried` khi analyst còn đang đọc (L146).
+
+**Việc còn mở** (chưa làm, có lý do)
+- Dùng lại một analyst cho cả trận (`followup_task` cho đợt sau): lợi ~2 credit mỗi đợt, phải thêm đường lùi khi
+  thread chết. Hoãn.
+- Gộp `<grading>`, `<required_evidence>`, `<checklist>` thành một khối và bỏ `<item_profile>`: chờ xem checklist mới
+  chạy ra sao trong một trận.
+- Agent checker cho item dài và khó: đã duyệt, chưa xây; tốn thêm credit `gpt-6.1-sol`.
+- `typecheckGate` cho đề sát hạn: cần chạy typecheck sớm hơn (ví dụ lúc `app start` đầu tiên), chưa thiết kế.
+- `run_checks` bước test 500–570 s khi nhiều đề chạy cùng lúc (riêng một mình 172 s). `vitest related` đã đo và
+  **không dùng**: file ở giữa đồ thị import kéo cả 99 file test (L147).
+- Root spawn tuần tự: PI chờ 15–18 s khi root đang spawn thợ của đợt trước. Chưa có cách sửa không làm chậm đề khác.
+- Test `prepare and play items in worktrees end to end` đỏ một lần khi chạy cả bộ (bước chờ prewarm 30 s), chạy riêng
+  thì xanh: nghi do tải máy.
+- Hạn mức gói plus: với model mặc định, trận 14 item tốn ~238 credit và từng hết hạn mức ở phút 40.
+
 > **03/11:** bỏ gate, `team_reviewer`, `team_pi_hypothesis`, `team_verifier` và verified mode. Mục nào về gate, main gate,
 > pre-gate, reviewer, solver hay checker giả thuyết không còn áp dụng; thay vào đó kiểm: mỗi item đúng một fixer (thêm
 > một worker evidence khi tier strong), fixer chạy cả bộ test trước evidence, `publish_item` nộp ngay sau bàn giao, và
