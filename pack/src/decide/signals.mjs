@@ -61,6 +61,14 @@ export function answerOnlyText(description) {
   return /\bchang\w*\s+(?:the\s+)?(?:application\s+)?source\b/i.test(lines.slice(at + 1, end < 0 ? undefined : end).join('\n'));
 }
 
+// Luật chấm đọc được từ chữ đề và MVS bằng regex (thay hồ sơ của team_analyst, bỏ sau CUZ7KL95). detection: test của
+// đội bị chạy trên bản app hỏng và được điểm khi đỏ ở đó (337 đề đã chấm tới 13/11: chỉ TASK-08, luôn "a detection
+// share for each broken build it fails on"). Chỉ dùng để bật/tắt mutation check, không thành lệnh hay đường dẫn.
+const DETECTION = /\b(?:broken|faulty|buggy|seeded|mutant|mutated)\s+(?:builds?|versions?|variants?|implementations?)\b|\bdetection\s+(?:share|score|points?|rate)\b|\bmutation\s+(?:test\w*|score|check)\b|\bmutants?\b/i;
+export function gradingRules(text) {
+  return { detection: DETECTION.test(String(text ?? '')), from: 'rules' };
+}
+
 // Đếm mục đánh số / gạch đầu dòng dưới heading "Acceptance criteria" (không có thì "Requirements").
 export function countCriteria(text) {
   const lines = String(text ?? '').split(/\r?\n/);

@@ -13,6 +13,5 @@
   "autoChecks": true,
   "linkedModules": true,
   "scopedTests": true,
-  "analyst": true,
   "autoPublishAll": true
 }

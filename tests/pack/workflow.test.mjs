@@ -138,7 +138,7 @@ test('prepare is idempotent and returns worker brief inputs without repeating St
 test('the helper prepares a new item itself once, prefetches company facts, writes the brief and hands root the spawn arguments', async () => {
   const f = fixture('CR-01');
   const base = f.rt.runtimeConfig.bind(f.rt);
-  f.rt.runtimeConfig = () => ({ ...base(), analyst: false });   // luồng analyst có test riêng ở cuối file
+  f.rt.runtimeConfig = () => base();
   Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
   f.rt.itemRows = () => [{ key: f.key, type: 'CR', status: 'OPEN', local: f.ji.prepared ? 'started' : 'todo', minutesLeft: 30 }];
   f.rt.gm.view.items[0].raw = { title: 'Export the filtered invoice list as CSV', points: 140,
@@ -1527,6 +1527,8 @@ test('candidate asks once for the mutation check and once more while a change su
   const f = fixture('BUG-01'), wf = f.rt.workflow;   // fixture sửa src/lib.js (value=1 → 2)
   writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
   f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } };
+  // Đề chấm phát hiện lỗi (gradingRules); đề không chấm thì mutantGate im lặng (test luật ở phần checklist cuối file).
+  f.rt.gm.view.items[0].raw = { descriptionMd: 'Your suite earns a detection share for each broken build it fails on.' };
   const ask = await wf.mutantGate('BUG-01');
   assert.match(ask.problem, /changed existing product code \(1 change\) and added tests.*run_checks \{action: "mutants"\}/);
   assert.match((await wf.mutantGate('BUG-01')).warning, /no mutation check on your final source/);
@@ -1568,9 +1570,8 @@ test('candidate refuses while the mutation check is running, whatever the time l
   assert.ok(!(await f.rt.workflow.handoffCheck('BUG-01')).problems.some(p => /mutation check/.test(p)));
 });
 
-// Hồ sơ đề: team_analyst đọc đề trước, helper kiểm rồi mới spawn fixer (BI7A5ACV: mutants chạy trên 8 item trong khi
-// chỉ TASK-08 chấm khả năng phát hiện lỗi; phân tích đề bằng regex không đủ tin).
-function analystFixture() {
+// Từ sau CUZ7KL95 không còn team_analyst: checklist và luật chấm do luật code đọc từ đề lúc prepare.
+function ruleFixture() {
   const f = fixture('CR-01');
   f.base = f.ji.worktreeBase;
   Object.assign(f.ji, { startedAt: undefined, workerState: undefined, worktreeBase: undefined });
@@ -1584,90 +1585,31 @@ function analystFixture() {
   f.rt.company.invoke = async () => ({ content: [{ type: 'text', text: 'x' }] });
   return f;
 }
-const PROFILE = () => ({
-  form: 'feature', summary: 'Export module and the row count of the export.',
-  grading: [{ aspect: 'hidden_tests', quote: 'Hidden tests check the export in many more cases' },
-    { aspect: 'team_tests_pass', quote: 'The grader runs the tests itself on your submitted revision' }],
-  deliverables: { sourceFiles: [{ path: 'src/export.js', quote: 'Add src/export.js' }], testLocation: null,
-    answerFields: [{ name: 'rowCount', type: 'integer', exact: false, quote: 'report the row count in rowCount' }] },
-  evidence: [], scenarios: ['TC-1'], constraints: [], dependsOn: [], zeroConditions: [],
-  workload: { investigation: 'code', crossModule: false, uiChange: false, needsRunningApp: false, officialData: false } });
-
-test('workers start at once; one analyst per wave profiles the items and the worker gets the checklist at ready_for_evidence', async () => {
-  const f = analystFixture(), wf = f.rt.workflow;
+test('prepare writes the rule checklist and grading rules; no analyst is offered; mutants only when the item grades detection', async () => {
+  const f = ruleFixture(), wf = f.rt.workflow;
   wf.autoPrepare();
   await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
-  assert.equal(f.ji.analysis.state, 'pending');
-  // Checklist của luật code có trong brief ngay lúc prepare, trước khi analyst nộp hồ sơ.
-  assert.match(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /<checklist>\nEvery line must hold[^\n]*\n1\. TC-1 reported PASS, FAIL or NOT_RUN[^\n]*\n<\/checklist>\n\n<item>/);
-  assert.doesNotMatch(readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8'), /<item_profile>/);
-  const first = wf.offered(wf.actions()).nextActions;
-  assert.deepEqual(first.map(a => a.action).sort(), ['spawn_analyst', 'spawn_worker'], 'the worker does not wait for the analyst');
-  const analyst = first.find(a => a.action === 'spawn_analyst');
-  assert.deepEqual([analyst.spawn.task_name, analyst.spawn.agent_type, analyst.items], ['wave1_analyst', 'team_analyst', ['CR-01']]);
-  assert.deepEqual(wf.actions().nextActions.map(a => a.action), [], 'the analyst and the worker are offered once: root is not woken again while they start');
-  // 33R91I3Q: analyst nộp hồ sơ đầu 45–133 s sau khi spawn; sau 60 s nó chưa gọi helper không có nghĩa là spawn hỏng.
-  const wave = f.rt.journal.data.waves[f.ji.analysis.wave], offered = wave.offeredAt;
-  wave.offeredAt = new Date(Date.now() - 150_000).toISOString();
-  assert.ok(!wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'still starting after 150 s: not offered again');
-  wave.offeredAt = new Date(Date.now() - 250_000).toISOString();
-  assert.ok(wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'silent for 250 s: the spawn failed, offered once more');
-  wave.offeredAt = offered; delete wave.retried;
-  const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
-  for (const re of [/<item_input id="CR-01" type="CR" points="140">[\s\S]*Hidden tests check the export/, /<profile_schema>[\s\S]*"title": "item-profile"/, /<wave_schema>[\s\S]*"title": "wave-report"/, /phase: "wave"/]) assert.match(input, re);
-  // Trích dẫn bịa bị từ chối; analyst không bao giờ thành thợ của đề.
-  const bad = PROFILE(); bad.grading.push({ aspect: 'detection', quote: 'Your tests are run against broken builds' });
-  const refused = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: bad });
-  assert.equal(refused.accepted, false); assert.match(refused.problems.join('\n'), /quotes not found word for word/);
-  assert.equal(f.ji.workerThread, undefined);
-  const ok = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'profile', profile: PROFILE() });
-  assert.equal(ok.accepted, true); assert.equal(f.ji.analysis.state, 'done');
   const brief = readFileSync(join(f.rt.itemDir(f.key), 'brief.md'), 'utf8');
-  assert.match(brief, /^<item_profile>$[\s\S]*form: feature[\s\S]*mutation check: not graded for this item[\s\S]*<\/item_profile>/m);
-  assert.match(brief, /<checklist>[\s\S]*submit\.json rowCount: integer, filled[\s\S]*src\/export\.js exists \(the item names this file\)[\s\S]*<\/checklist>\n\n<item>/);
-  // Thợ đang làm nhận phần analyst thêm một lần, trong lời gọi helper kế tiếp của nó (33R91I3Q: chỉ đưa ở
-  // ready_for_evidence, 6/14 đề không bao giờ nhận); dòng kịch bản đã có trong brief từ prepare thì không lặp lại.
-  const resumed = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'resume' });
-  assert.match(resumed.analysis, /Checklist: lines the analyst added to the brief's <checklist>:\n- submit\.json rowCount: integer, filled\n- src\/export\.js exists/);
-  assert.doesNotMatch(resumed.analysis, /TC-1 reported PASS/);
-  assert.equal(wf.analysisNote(f.key), null, 'delivered once');
-  // Hồ sơ nói đề không chấm khả năng phát hiện lỗi: không đòi mutants dù item sửa code có sẵn và thêm test.
+  assert.match(brief, /<checklist>\nEvery line must hold[^\n]*\n1\. TC-1 reported PASS, FAIL or NOT_RUN[^\n]*\n<\/checklist>\n\n<item>/);
+  assert.doesNotMatch(brief, /<item_profile>/);
+  assert.deepEqual(wf.offered(wf.actions()).nextActions.map(a => a.action), ['spawn_worker']);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.rt.itemDir(f.key), 'grading-rules.json'), 'utf8')), { detection: false, from: 'rules' });
+  // Đề không chấm khả năng phát hiện lỗi: không đòi mutants dù item sửa code có sẵn và thêm test.
   Object.assign(f.ji, { worktreeBase: f.base, prepared: { timeBox: { returnBy: new Date(Date.now() + 20 * 60_000).toISOString() } } });
   writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
   assert.equal(await wf.mutantGate(f.key), null);
-  // Checklist: trường trả lời trống và file đề nêu tên chưa có thì từ chối một lần, lần sau chỉ cảnh báo.
-  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'PARTIAL', rowCount: null }));
-  const gate = await wf.checklistGate(f.key);
-  assert.match(gate.problem, /submit\.json rowCount is empty.*src\/export\.js does not exist: the item names this file/);
-  assert.match((await wf.checklistGate(f.key)).warning, /accepted on the second handoff/);
-  writeFileSync(join(f.wt.matchRoot, 'src', 'export.js'), 'export const rows = 1;\n');
-  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'DONE', rowCount: 3 }));
-  assert.equal(await wf.checklistGate(f.key), null);
+  // Đề chấm phát hiện lỗi (TASK-08: "a detection share for each broken build it fails on"): checklist có dòng mutants,
+  // mutantGate đòi chạy.
+  writeFileSync(join(f.rt.itemDir(f.key), 'grading-rules.json'), JSON.stringify({ detection: true, from: 'rules' }));
+  assert.ok(wf.checklistLines(f.key).some(l => l.kind === 'mutants'));
+  assert.match((await wf.mutantGate(f.key))?.problem ?? '', /no mutation check ran on this source/);
 });
 
 // DVVFEPXF: CR-08 cần CR-05, lên main trước và mang theo bản CR-05 cũ; CR-05 publish hỏng 3 lần.
-test('the wave report adds dependencies and shared files; a waiting item holds its publish while it has time', async () => {
-  const f = analystFixture(), wf = f.rt.workflow;
+test('a waiting item holds its publish while the item it needs is in work and time allows', async () => {
+  const f = ruleFixture(), wf = f.rt.workflow;
   f.rt.gm.view.items.push({ key: 'BUG-02', status: 'OPEN', raw: { descriptionMd: 'Fix the invoice totals the export reads.' } });
-  wf.autoPrepare();
-  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
-  wf.offered(wf.actions());
-  const call = wave => f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'wave', wave });
-  const report = { dependencies: [{ item: 'CR-01', needs: 'BUG-02', kind: 'figures', quote: 'Fix the invoice totals the export reads' }],
-    sharedAreas: [{ files: ['src/routes.js'], items: ['CR-01', 'BUG-02'], kind: 'registration', note: 'both add a route' }], landingOrder: ['CR-01'] };
-  const bad = await call({ ...report, dependencies: [{ item: 'CR-01', needs: 'BUG-09', kind: 'code', quote: 'needs the fix of BUG-09' }], landingOrder: ['CR-01', 'BUG-02'] });
-  assert.equal(bad.accepted, false);
-  assert.match(bad.problems.join('\n'), /both must be backlog items \(BUG-09 is not\)/);
-  assert.match(bad.problems.join('\n'), /landingOrder lists only the items of this wave.*BUG-02/);
-  const invented = await call({ ...report, dependencies: [{ ...report.dependencies[0], quote: 'CR-01 requires the BUG-02 change first' }] });
-  assert.match(invented.problems.join('\n'), /quote not found word for word in the text of CR-01 or BUG-02/);
-  assert.equal(f.ji.workerThread, undefined);
-  const ok = await call(report);
-  assert.equal(ok.accepted, true);
-  assert.deepEqual(f.ji.dependsOn, ['BUG-02']);
-  assert.deepEqual(wf.neededBy('BUG-02'), ['CR-01'], 'the helper copies the fix of BUG-02 into CR-01 like a dependency named in the text');
-  assert.match(wf.analysisNote(f.key), /Files other items of this wave change too: src\/routes\.js \(with BUG-02: registration, both add a route\)[\s\S]*only add new lines/);
-  // BUG-02 còn đang làm và chưa lên main: CR-01 giữ publish khi còn dư thời gian, tới sát mốc cơ hội cuối thì thôi.
+  f.ji.dependsOn = ['BUG-02'];
   const other = f.rt.journal.item('BUG-02');
   other.startedAt = new Date().toISOString();
   assert.equal(wf.dependencyHold(f.key, { minutesLeft: 30 }), 'BUG-02');
@@ -1676,42 +1618,6 @@ test('the wave report adds dependencies and shared files; a waiting item holds i
   assert.equal(wf.dependencyHold(f.key, { minutesLeft: 30 }), null, 'the waited-for item is on main');
 });
 
-// WQ7T6CEC: PI prepare xong sau 15 s, các đề code cùng phút sau 50 s; trần gom 20 s tách release-7 thành hai đợt.
-test('items released in the same minute make one wave while one still prepares; after 90 s a late one opens a follow-up wave', async () => {
-  const f = analystFixture(), wf = f.rt.workflow;
-  f.rt.gm.view.items[0].revealedElapsedSec = 425;
-  const add = (key, sec) => f.rt.gm.view.items.push({ key, status: 'OPEN', revealedElapsedSec: sec, raw: { descriptionMd: `Fix ${key}.` } });
-  const slowPrepare = key => {
-    let finish;
-    const job = f.rt.jobs.start('prepare_item', () => new Promise(res => { finish = res; }), { key });
-    f.rt.journal.item(key).prepareJobId = job.id;
-    return () => { finish({}); return job.promise; };
-  };
-  add('BUG-02', 440);
-  const done02 = slowPrepare('BUG-02');
-  wf.autoPrepare();
-  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
-  const w = f.rt.journal.data.waves[f.ji.analysis.wave];
-  assert.equal(w.id, 'release-7');
-  w.firstReadyAt = new Date(Date.now() - 60_000).toISOString();
-  assert.ok(!wf.actions().nextActions.some(a => a.action === 'spawn_analyst'), 'a minute after the first item the wave still waits for BUG-02');
-  wf.joinWave('BUG-02');
-  await done02();
-  const first = wf.offered(wf.actions()).nextActions.find(a => a.action === 'spawn_analyst');
-  assert.deepEqual([first.wave, first.items], ['release-7', ['CR-01', 'BUG-02']]);
-  // Đợt đã đưa cho analyst: đề cùng phút prepare xong sau đó vào đợt nối; đợt nối chờ đề còn prepare tối đa 90 s.
-  add('CR-03', 450); add('CR-04', 455);
-  const done03 = slowPrepare('CR-03');
-  const next = wf.joinWave('CR-04');
-  assert.equal(next.id, 'release-7+2');
-  next.firstReadyAt = new Date(Date.now() - 60_000).toISOString();
-  assert.ok(!wf.actions().nextActions.some(a => a.wave === 'release-7+2'));
-  next.firstReadyAt = new Date(Date.now() - 91_000).toISOString();
-  const capped = wf.actions().nextActions.find(a => a.wave === 'release-7+2');
-  assert.deepEqual(capped.items, ['CR-04'], 'after 90 s the wave goes without the item still preparing');
-  assert.equal(wf.joinWave('CR-03').id, 'release-7+3');
-  await done03();
-});
 
 // WQ7T6CEC: file dùng chung là phần dùng được của báo cáo đợt, mà helper biết chắc từ các worktree đang làm.
 test('items in work that change the same file hear it at ready_for_evidence, again only when the overlap changes', async () => {
@@ -1743,22 +1649,6 @@ test('items in work that change the same file hear it at ready_for_evidence, aga
   assert.deepEqual(await wf.inFlightOverlap(f.key), [{ file: 'src/lib.js', items: ['BUG-02'] }]);
   bug.receipt = { id: 'r-2' };
   assert.deepEqual(await wf.inFlightOverlap(f.key), []);
-});
-
-test('the analysis input lists the files triage points to and what earlier items in work changed so far', async () => {
-  const f = analystFixture(), wf = f.rt.workflow;
-  f.ji.signals = { code: { terms: ['rowCount'], files: 2, modules: 1, test_files: 0, sample: ['src/export.js', 'src/lib.js'] } };
-  const other = f.rt.wtPaths('BUG-02');
-  sh('git', ['worktree', 'add', '-q', '--detach', other.worktreeRoot, 'HEAD'], f.checkout);
-  Object.assign(f.rt.journal.item('BUG-02'), { startedAt: new Date().toISOString(), worktreeBase: f.base });
-  writeFileSync(join(other.matchRoot, 'src', 'totals.js'), 'export const total = 0;\n');
-  wf.autoPrepare();
-  await f.rt.jobs.jobs.get(f.ji.prepareJobId).promise;
-  await wf.liveRefresh;
-  wf.actions();
-  const input = readFileSync(f.rt.journal.data.waves[f.ji.analysis.wave].file, 'utf8');
-  assert.match(input, /<item_input id="CR-01"[\s\S]*<likely_files>\nsrc\/export\.js\nsrc\/lib\.js\n<\/likely_files>\n<\/item_input>/);
-  assert.match(input, /<earlier_items>\nBUG-02: in work; changed so far src\/totals\.js\n<\/earlier_items>/);
 });
 
 test('an item whose files reached main through an item that waited for it keeps its own version at sync', async () => {
@@ -1923,33 +1813,33 @@ test('the worktree codegraph index builds in the background and a refresh waits 
 });
 
 // (b) WQ7T6CEC: CR-07 tự chạy mutants 190 s, BUG-09 114 s, đề không chấm khả năng phát hiện lỗi.
-test('run_checks mutants answers at once when the accepted profile grades no detection, in the root and in a worker helper', async () => {
+test('run_checks mutants answers at once when the item text grades no detection, in the root and in a worker helper', async () => {
   const f = fixture('CR-01');
   const call = rt => rt.runChecks({ action: 'mutants', backlogItemKey: f.key, matchRoot: f.wt.matchRoot, waitSeconds: 0 }).catch(e => ({ error: e.code }));
-  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'no profile: the check is not skipped');
-  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(PROFILE()));
-  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'a profile not accepted yet does not count');
-  f.ji.analysis = { state: 'done' };
+  const rules = join(f.rt.itemDir(f.key), 'grading-rules.json');
+  writeFileSync(rules, JSON.stringify({ detection: false, from: 'rules' }));
   const t0 = Date.now();
   const skipped = await call(f.rt);
   assert.deepEqual([skipped.state, skipped.skipped], ['skipped', 'not graded']);
-  assert.match(skipped.hint, /no rule that runs your tests against broken builds/);
+  assert.match(skipped.hint, /does not grade your tests against broken builds/);
   assert.ok(Date.now() - t0 < 1000);
-  const detection = PROFILE(); detection.grading.push({ aspect: 'detection', quote: 'x' });
-  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(detection));
+  writeFileSync(rules, JSON.stringify({ detection: true, from: 'rules' }));
   assert.notEqual((await call(f.rt)).skipped, 'not graded', 'detection graded: the check runs');
-  const none = PROFILE(); none.grading = [];
-  writeFileSync(join(f.rt.itemDir(f.key), 'profile.json'), JSON.stringify(none));
-  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'no grading rule stated: the check runs');
-  // Helper của worker (chưa configure_session): đọc profile.json cạnh trận của matchRoot.
+  writeFileSync(rules, 'not json');
+  f.rt.gm.view.items[0].raw = { descriptionMd: 'Your suite earns a detection share for each broken build it fails on.' };
+  assert.notEqual((await call(f.rt)).skipped, 'not graded', 'unreadable rules: read again from the item text');
+  // Helper của worker (chưa configure_session): đọc grading-rules.json cạnh trận của matchRoot; không có thì chạy.
   const tw = tempDir('mtm-worker-mutants-'), items = join(tw, 'matches', 'M1', '.team-work', 'items', 'CR-01');
   mkdirSync(items, { recursive: true });
-  writeFileSync(join(items, 'profile.json'), JSON.stringify(PROFILE()));
   const worker = new Runtime({ teamWorkspace: tw });
   assert.equal(worker.session.paths, null);
-  const res = await worker.runChecks({ action: 'mutants', backlogItemKey: 'CR-01', matchRoot: join(tw, 'matches', 'M1', '.team-work', 'wt', 'CR-01', 'M1') });
+  const wcall = () => worker.runChecks({ action: 'mutants', backlogItemKey: 'CR-01', matchRoot: join(tw, 'matches', 'M1', '.team-work', 'wt', 'CR-01', 'M1') }).catch(e => ({ error: e.code }));
+  assert.notEqual((await wcall()).skipped, 'not graded', 'no rules file: the check is not skipped');
+  writeFileSync(join(items, 'grading-rules.json'), JSON.stringify({ detection: false, from: 'rules' }));
+  const res = await wcall();
   assert.deepEqual([res.state, res.skipped], ['skipped', 'not graded']);
 });
+
 
 // (c) WQ7T6CEC BUG-09: sau khi bản sửa baseline vào worktree, worker chạy lại cả bộ test và chờ 574 s. Candidate chỉ
 // đòi chạy lại file của các test fail sẵn cộng test mới của item; không tính được danh sách thì vẫn cả bộ.

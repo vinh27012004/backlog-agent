@@ -30,7 +30,6 @@ import { Session } from './core/session.mjs';
 import { integrateCandidate, unpushable } from './core/integration.mjs';
 import { resultArtifact, digest } from './core/candidates.mjs';
 import { Workflow } from './match/workflow.mjs';
-import { profileFlags } from './match/profile.mjs';
 import { trustedTeamWorkspace } from './core/paths.mjs';
 import { HelperError, fail, isId, oneLine, sleep, writeFileAtomic } from './core/util.mjs';
 
@@ -284,9 +283,7 @@ export class Runtime {
       { name: 'prepare_item', description: 'GAME: one background job for Start Work, materials, worktree/environment setup, profile and complete worker brief inputs. Waits up to waitSeconds (default 25) and usually returns the finished team_fixer brief inputs; state running means call job_status.',
         inputSchema: obj({ backlogItemKey: str('Item key.'), force: bool('Start with little time left.'), waitSeconds: num('Wait max 45 seconds (default 25).') }, ['backlogItemKey']), handler: a => this.workflow.prepare(a) },
       { name: 'worker_checkpoint', description: 'GAME, worker or root. This is how a worker signals root: never send_message to root. ready_for_evidence/candidate yields all writes. ready_for_evidence syncs your worktree to main at once and usually returns writesAllowed:true (restart the app, continue); otherwise stay yielded and end your turn with the hint as your reply: root gets the sync from the helper and sends a followup to resume. candidate {result} (or after writing the fix-result yourself) writes or takes the newest fix-result and checks it against its contract, submit.json against the item schema/template, that no test configuration or issued test file changed (graders restore issued tests) and that no new test launches a browser; for an item that runs the full suite it first brings in the fix of the baseline owner once that is on main: problems keep you writing (handedOff:false) until you fix them and write the next numbered fix-result; warnings are information. blocked {question}: only for a decision or lookup that root alone can make (company tools, another item, the time box); the helper wakes root with answer_worker, then end your turn with the question as your reply and continue when root\'s followup arrives. resume grants writes again (root: also registers threadId and closes an answered question). Root never syncs a writing worker. baseline_fixed {files}: only the baseline owner (youFix in <baseline_failures>), once the issued failing tests pass: the product files of that fix, relative to matchRoot; the helper commits exactly those to main as a separate commit within seconds, and items that need the full suite pick it up when they sync; files [] records that the baseline cannot be fixed. Writes stay allowed. profile {profile} and wave {wave}: team_analyst only, hand in one item profile per item of the wave and then the wave report.',
-        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'blocked', 'resume', 'baseline_fixed', 'profile', 'wave'] }, question: str('blocked: the one question for root, with what you already checked.'), threadId: str('Root: native worker thread ID when granting writes.'), files: { type: 'array', items: { type: 'string' }, description: 'baseline_fixed: product files of the baseline fix, relative to matchRoot (no tests, no test config, no answers/).' },
-          wave: { type: 'object', description: 'wave (team_analyst only): the wave report described by <wave_schema> in the analysis file (dependencies between items, shared files, landing order), handed in after the profiles; backlogItemKey is any item of the wave.' },
-          profile: { type: 'object', description: 'profile (team_analyst only): the item profile described by <profile_schema> in the analysis file. The helper checks the schema, every quote word for word against the item and MVS, and the scenario ids; accepted:false lists what to fix.' },
+        inputSchema: obj({ backlogItemKey: str('Item key.'), phase: { type: 'string', enum: ['ready_for_evidence', 'candidate', 'blocked', 'resume', 'baseline_fixed'] }, question: str('blocked: the one question for root, with what you already checked.'), threadId: str('Root: native worker thread ID when granting writes.'), files: { type: 'array', items: { type: 'string' }, description: 'baseline_fixed: product files of the baseline fix, relative to matchRoot (no tests, no test config, no answers/).' },
           result: { type: 'object', description: 'candidate: your part of the fix-result instead of writing the file yourself: {status, summary, requirements, verification (your scenario rows), and when they apply root_cause, hypotheses, criteria, suspects, risks, confidence, tests_added, test_change, needs_dependency}. The helper adds changed_files, tests_added (new test files), the run_checks rows of verification and defaults for the rest, validates the whole against the contract and writes the next numbered fix-result.' } }, ['backlogItemKey', 'phase']),
         readOnly: true, handler: a => this.workerCheckpoint(a) },
       { name: 'next_actions', description: 'GAME: ordered actions for new items, workers, sync and publish, with exact inputs and waitMs capped by next release/deadline. Root performs native agent operations.',
@@ -408,7 +405,7 @@ export class Runtime {
   // publish, không progress; chờ job không trả sớm vì PI (việc của root).
   workerCheckpoint(args) {
     if (args.phase === 'ready_for_evidence') {
-      // Hồ sơ đề và file dùng chung của đợt (team_analyst) đến khi thợ đang làm: đưa cho thợ ở đây, một lần.
+      // File các đề đang làm khác cũng đổi: đưa cho thợ ở đây, khi tập trùng đổi.
       return Promise.resolve(this.workflow.evidenceCheckpoint(args)).then(res => {
         const note = this.workflow.analysisNote(args.backlogItemKey);
         return note ? { ...res, analysis: note } : res;
@@ -417,20 +414,15 @@ export class Runtime {
     if (args.phase === 'candidate') return this.workflow.candidateCheckpoint(args);
     if (args.phase === 'blocked') return this.workflow.blockedCheckpoint(args);
     if (args.phase === 'baseline_fixed') return this.workflow.baselineCheckpoint(args);
-    if (args.phase === 'profile') return this.workflow.profileCheckpoint(args);
-    if (args.phase === 'wave') return this.workflow.waveCheckpoint(args);
     return this.workflow.checkpoint(args);
   }
 
   proxyCall(name, args) {
     // Worker sống thật mới đăng ký; root gọi read_item khi prepare không được coi là spawn thành công.
-    // phase profile là của team_analyst: không đăng ký nó làm worker của item.
-    if (name === 'worker_checkpoint' && ['profile', 'wave'].includes(args.phase)) return this.workerCheckpoint(args);
     if (['read_item', 'worker_checkpoint', 'company_lookup'].includes(name) || (name === 'worktree' && args.action === 'status')) {
       this.workflow.registerWorker(args.backlogItemKey);
     } else if (name === 'job_status') this.workflow.registerWorker(this.jobs.jobs.get(args.jobId)?.key);
-    // Hồ sơ của analyst về khi thợ đang làm: đưa trong lời gọi helper kế tiếp của thợ, không chờ ready_for_evidence
-    // (33R91I3Q: 6/14 đề đi thẳng tới candidate và không bao giờ nhận). Ở candidate thì gate checklist tự nói.
+    // Chỗ trùng file với đề khác: đưa trong lời gọi helper kế tiếp của thợ, không chờ ready_for_evidence.
     const key = name === 'job_status' ? this.jobs.jobs.get(args.jobId)?.key : args.backlogItemKey;
     const carry = out => (!key || (name === 'worker_checkpoint' && ['ready_for_evidence', 'candidate'].includes(args.phase)) ? out
       : Promise.resolve(out).then(res => {
@@ -777,13 +769,12 @@ export class Runtime {
   // PI mặc định chỉ typecheck: bản sửa PI được chấm bằng hidden test, các trường đáp án đua theo thứ tự nộp; build và
   // full suite (QDYZMY1K: timeout 600 s ở PI-02 và PI-03) chỉ làm chậm. Worker chạy test của module bị sửa bằng test_one.
   // Bộ test thu hẹp về các gói grader chạy khi đề nêu tên (test-scope.mjs; tắt bằng "scopedTests": false).
-  // mutants khi hồ sơ đề (team_analyst) khai luật chấm mà không luật nào chạy test của đội trên bản app hỏng: trả lời
-  // ngay, như mutantGate ở candidate (WQ7T6CEC: CR-07 tự chạy mutants 190 s, BUG-09 114 s, rồi mới biết ở
-  // ready_for_evidence là đề không chấm phần này).
+  // mutants khi chữ đề không nói test của đội bị chạy trên bản app hỏng (gradingRules): trả lời ngay, như mutantGate ở
+  // candidate (WQ7T6CEC: CR-07 tự chạy mutants 190 s, BUG-09 114 s cho một đề không chấm phần này).
   async runChecks(args) {
     if (args?.action === 'mutants' && this.mutantsNotGraded(args.backlogItemKey, args.matchRoot)) {
       return { state: 'skipped', skipped: 'not graded',
-        hint: "The analyst's profile of this item has no rule that runs your tests against broken builds: the mutation check earns nothing here. Go on." };
+        hint: 'This item does not grade your tests against broken builds: the mutation check earns nothing here. Go on.' };
     }
     const pi = typeOf(args?.backlogItemKey) === 'PI' && !['status', 'mutants'].includes(args.action) && args.checks === undefined
       && args.testFiles === undefined;
@@ -792,24 +783,19 @@ export class Runtime {
       scopeTests: cfg.scopedTests !== false, maxHeavy: cfg.maxHeavyCommands ?? null });
   }
 
-  // Hồ sơ đã nhận của item nói đề không chấm khả năng phát hiện lỗi (profileFlags: có luật chấm, không có detection).
-  // Helper của root đọc qua workflow.profileOf; helper của worker (chưa configure_session, không có journal) đọc
-  // profile.json cạnh trận của matchRoot: file đó chỉ được ghi khi hồ sơ được nhận.
+  // Đề không chấm khả năng phát hiện lỗi (grading-rules.json helper ghi lúc prepare, decide/signals.mjs gradingRules).
+  // Helper của root đọc qua workflow; helper của thợ (không có journal) đọc file cạnh trận của matchRoot. Không đọc được
+  // thì vẫn chạy mutants như trước.
   mutantsNotGraded(key, matchRoot) {
     if (!isKey(key)) return false;
-    let profile = null;
     try {
-      if (this.session.paths) profile = this.workflow.profileOf(key);
-      else if (this.teamWorkspace && typeof matchRoot === 'string' && isAbsolute(matchRoot)) {
-        const rel = relative(join(this.teamWorkspace, 'matches'), resolve(matchRoot));
-        if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
-          profile = JSON.parse(readFileSync(join(this.teamWorkspace, 'matches', rel.split(sep)[0], '.team-work', 'items', key, 'profile.json'), 'utf8'));
-        }
-      }
+      if (this.session.paths) return this.workflow.gradingRules(key).detection === false;
+      if (!this.teamWorkspace || typeof matchRoot !== 'string' || !isAbsolute(matchRoot)) return false;
+      const rel = relative(join(this.teamWorkspace, 'matches'), resolve(matchRoot));
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false;
+      const rules = JSON.parse(readFileSync(join(this.teamWorkspace, 'matches', rel.split(sep)[0], '.team-work', 'items', key, 'grading-rules.json'), 'utf8'));
+      return rules?.detection === false;
     } catch { return false; }
-    if (!profile) return false;
-    const flags = profileFlags(profile);
-    return flags.gradingStated && !flags.detection;
   }
 
   runtimeConfig() {

@@ -143,7 +143,7 @@ function agentsBlock(existing) {
     '- Skills: `.agents/skills/game-preparation`, `team-orchestrator`, `team-recovery`.',
     '- Work only inside the assigned match folder. Never print or store credentials.',
     '- Worker profiles may write their own immutable result JSON under the assigned checkoutRoot/.team-work/results/.',
-    '- One team_analyst per item reads the item and hands the helper its profile; one team_fixer per item codes, tests',
+    '- One team_fixer per item codes, tests',
     '  and captures evidence; the helper submits its handed-off result as is.',
     // Auto-review (guardian) của Player chặn submit khi verification chưa PASSED và không thấy ai cho phép (FMC0ZXFC
     // PI-01, BUG-04); nói rõ quyền ở đây, nơi người dùng cài pack, và submit_work mang lastChance.

@@ -19,12 +19,12 @@ test('compactStartFrame defaults on and disabling it installs the verbatim START
 });
 
 // Practice #5: agent chỉ mở skill/tham khảo được chỉ đích danh trong prompt của nó.
-test('the fixer is told which skills and references to read; the analyst is the only other subagent profile', () => {
+test('the fixer is told which skills and references to read; the fixer is the only subagent profile', () => {
   const fixer = readFileSync(join(REPO, 'pack', 'agents', 'team-fixer.toml'), 'utf8');
   for (const f of ['backlog-references/bug-patterns.md', 'backlog-references/pi-triage.md', 'backlog-references/evidence-playbook.md', 'evidence-playbook-details.md', 'backlog-references/domain-checks.md']) {
     assert.ok(fixer.includes(f), `fixer prompt names ${f}`);
   }
-  assert.deepEqual(readdirSync(join(REPO, 'pack', 'agents')).sort(), ['team-analyst.toml', 'team-fixer.toml', 'team-orchestrator.toml']);
+  assert.deepEqual(readdirSync(join(REPO, 'pack', 'agents')).sort(), ['team-fixer.toml', 'team-orchestrator.toml']);
 });
 
 test('installed pack passes Player verifyTeamRuntime', { skip: !hasPlayer }, async () => {

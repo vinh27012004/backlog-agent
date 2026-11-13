@@ -31,7 +31,12 @@ Các sửa lỗi của `practice-log.md` mục #25 (commit `2a1299d`, `22eb132`)
       có hạn (33R91I3Q: 6/14 không nhận); `checklistSeen` từ chối đúng chỗ, không chặn nhầm như TASK-08 (L142).
 - [ ] Thiếu evidence đề yêu cầu giờ bị từ chối một lần (trước chỉ cảnh báo, lựa chọn 03/11): xem có tốn lượt vô ích
       không, nếu có thì trả về cảnh báo.
-- [ ] Analyst: đúng một thread mỗi đợt, không có `retried` khi analyst còn đang đọc (L146).
+
+**Bỏ analyst** (13/11, nhánh `turning/QXUD1QAI-base`, chưa trận nào chạy)
+- [ ] Root không còn `spawn_analyst`; mỗi đề đúng một thread `team_fixer`.
+- [ ] `.team-work/items/<ID>/grading-rules.json` có ở mọi đề; `detection: true` chỉ ở đề chấm "broken build" (bộ 14
+      item: TASK-08). Đề khác gọi `run_checks mutants` nhận `skipped`, `mutantGate` không đòi.
+- [ ] Phụ thuộc vẫn đủ: CR-08 → CR-05, CR-07 → BUG-11 có `dependsOn` từ chữ đề (trước đây analyst cũng chỉ thấy hai cặp này).
 
 **Thêm sau `CUZ7KL95`** (practice-log #26, chưa trận nào chạy)
 - [ ] Đề sát hạn gặp `SYNC_REQUIRED`: job publish có bước `sync`, cảnh báo `last call: main had changed …`, item được nộp (L148).
@@ -41,10 +46,11 @@ Các sửa lỗi của `practice-log.md` mục #25 (commit `2a1299d`, `22eb132`)
 - [ ] Có `interrupt_worker` nào không, root gọi `interrupt_agent` đúng một lần (L153).
 
 **Việc còn mở** (chưa làm, có lý do)
-- Dùng lại một analyst cho cả trận (`followup_task` cho đợt sau): lợi ~2 credit mỗi đợt, phải thêm đường lùi khi
-  thread chết. Hoãn.
-- Gộp `<grading>`, `<required_evidence>`, `<checklist>` thành một khối và bỏ `<item_profile>`: chờ xem checklist mới
-  chạy ra sao trong một trận.
+- Gộp `<grading>`, `<required_evidence>`, `<checklist>` thành một khối: chờ xem checklist chạy ra sao trong một trận.
+- Luật regex cho kích thước ảnh tối thiểu ("at least 1280x720") và điều kiện 0 điểm ("scores 0", "at most 20 MB"):
+  `checklistProblems` đã kiểm được hai loại dòng này, chưa có luật viết chúng.
+- Hai đề sửa cùng một dòng (CUZ7KL95 CR-07/PI-03): báo trùng theo đoạn code kèm diff của đề kia, và báo ngay khi đề
+  kia lên main thay vì chờ tới publish. Chưa làm.
 - Agent checker cho item dài và khó: đã duyệt, chưa xây; tốn thêm credit `gpt-6.1-sol`.
 - `typecheckGate` cho đề sát hạn: cần chạy typecheck sớm hơn (ví dụ lúc `app start` đầu tiên), chưa thiết kế.
 - `run_checks` bước test 500–570 s khi nhiều đề chạy cùng lúc (riêng một mình 172 s). `vitest related` đã đo và

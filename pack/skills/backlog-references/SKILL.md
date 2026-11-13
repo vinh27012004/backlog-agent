@@ -89,17 +89,17 @@ or the item's wording; a new kind of failure is a case of one of them.
 3. Tests that detect: does each change you made to existing product code have a new test that fails with only that
    change undone? Graders put the old behaviour back and expect your tests to fail. A case whose expected result the
    old code gives too detects nothing. run_checks {action: "mutants"} undoes each change in turn and lists those no
-   test catches; candidate asks for it once when you changed existing code and added tests. When the
-   analyst's profile says "mutation check: not graded for this item", do not run it: it costs minutes and earns nothing there.
+   test catches; candidate asks for it once when you changed existing code and added tests and the item grades your
+   tests against broken builds (the <checklist> then has a mutants line); otherwise it answers "skipped": go on.
    Never run it for a PI (the helper refuses it there): the red test on the unfixed code is the PI's whole proof.
 4. Expectations: does each expected value in your tests come from a sentence of the item or its specification, for
    that very operation, and not from what your code returns?
 5. Scope: does your diff hold only this item's files? No cache folders (node_modules/, .vite, coverage), no test
    configuration, no other item's answers. Candidate refuses node_modules/ content.
    The brief's `<checklist>` is the one list for this item: the helper wrote it from the scenarios, the evidence
-   they require and the answer template. An analyst reads the item while you work; what it adds (named source files,
-   more evidence or answer fields, the files other items change too, whether the mutation check is graded) arrives
-   once in the `analysis` field of your next helper answer. Go through the checklist line by line before candidate,
+   they require and the answer template. The item text stays the source of truth: read it for named source files,
+   size limits and anything else the checklist does not list; the files other items change too arrive once in the
+   `analysis` field of a helper answer. Go through the checklist line by line before candidate,
    which checks the same lines and refuses once for each set that fails.
 6. Freshness: were the figures in submit.json computed again after your last sync and your last source change?
    Are they byte for byte what your script printed? Write submit.json with node (readFileSync(f, 'utf8'),
