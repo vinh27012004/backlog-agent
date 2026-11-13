@@ -1954,6 +1954,8 @@ test('in an item\'s last minutes publish syncs by itself, takes main\'s version 
   assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done));
   assert.ok(done.progress.includes('sync'), JSON.stringify(done.progress));
   assert.ok(done.result.warnings.some(w => /last call: main had changed M1\/src\/lib\.js; the helper synced without the worker and took main's version of M1\/src\/lib\.js/.test(w)), JSON.stringify(done.result.warnings));
+  // BQCK4MQX CR-07: publish 35,5 s mà không biết phần nào là sync; journal giữ mốc từng bước.
+  assert.deepEqual(f.ji.publishSteps.map(s => s[0]), ['verification', 'sync', 'recandidate', 'integrate', 'push', 'submit', 'done', 'end'], JSON.stringify(f.ji.publishSteps));
   assert.equal(bodies.length, 1);
   assert.equal(sh('git', ['show', 'origin/main:M1/src/lib.js'], f.checkout), 'export const value=3;', 'main keeps the other item\'s line');
   assert.equal(sh('git', ['show', 'origin/main:M1/src/audit.js'], f.checkout), 'export const audit = 1;', 'the rest of the item is on main');

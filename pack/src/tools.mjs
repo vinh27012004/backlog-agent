@@ -1357,7 +1357,9 @@ export class Runtime {
       ji.worktreeBase = mainHead;
       ji.baseAt = new Date().toISOString();
       await this.workflow.noteBaselineFix(key);
-      const codegraph = await this.refreshCodegraph(key, wt.matchRoot);
+      // Sync trong publish (phút cuối, thợ đã bàn giao): không ai dùng index nữa; làm mới chờ tới 30 s (BQCK4MQX CR-07:
+      // sync phút cuối 23 s, item đóng 0,2 s trước khi submit tới nơi).
+      const codegraph = fromPublish ? { skipped: 'publish' } : await this.refreshCodegraph(key, wt.matchRoot);
       for (const k of ['integratedRevision', 'integratedWorktreeHead', 'integratedCandidateId', 'publishedRevision', 'publishedCandidateId']) delete ji[k];
       if (ji.candidate) ji.candidate.state = 'stale';
       const changed = (await git(['diff', '--name-only', oldBase, mainHead], { cwd })).out.split(/\r?\n/).filter(Boolean);

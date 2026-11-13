@@ -125,6 +125,11 @@ Do not call next_actions next to wait_for_update: it returns the same list.
 Start every exec cell that calls wait_for_update with this first line, so the cell holds for the whole wait:
 `// @exec: {"yield_time_ms": 120000}`. Without it the cell yields after 30 s ("Script running with cell ID ...") and
 you pay one more full-context turn for the `wait` that follows (Practice 9O802QWE: 25 such turns).
+Print only what you act on, never the whole result: `const r = await tools.mcp__team_runtime__wait_for_update({cursor,
+timeoutMs: 110000}); const s = r.structuredContent; text(JSON.stringify({cursor: s.cursor, events: s.events,
+nextActions: s.nextActions, state: s.state}));`. `text(r)` also prints the content copy and `networkActivity` (every
+HTTP call of the helper, for Player): about 3K tokens that stay in your context for every later turn (BQCK4MQX:
+root context grew to 151K; the same wait printed this way was 856 characters instead of 11K).
 notify_worker (main now has another item's change to files the worker also changes) carries a `followup`: send exactly
 that as one followup_task, nothing else.
 Message a worker only for a nextActions entry (answer_worker, stop_worker, notify_worker, sync_before_evidence, refresh_candidate) or

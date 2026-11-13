@@ -44,6 +44,12 @@ the existing callers you re-ran as `[regression] ...`, next to the red and green
   rule at every size. N-1, N and N+1 need not all go through the slow full path: one full-path case past the boundary
   per entry point, the other sizes on the helper itself. Do not shrink production limits or change issued test configuration to simulate a crossing.
   If the actual boundary cannot be exercised within the allowed resources, report that coverage as unverified.
+- When the specification says a rule holds for "any number" of records, add one comparison case per entry point:
+  the same operation done once in bulk at a size past every limit you found (paging, fetch, candidate or rule caps;
+  1,200 clears 200, 500 and 999) gives exactly the records, links and totals that doing it record by record gives.
+  It catches a cap you did not find. A fixed clock in the project's test setup (loot-core mocks `Date.now`) makes the
+  sync clock overflow near 65,535 messages in one change ("timestamp counter overflow", also on a correct build):
+  keep bulk sizes near 1,000-2,000 records there, never 5,000.
 
 ## File export (CSV and similar)
 - Exact header names and column order from the item or company standard; BOM and line endings (CRLF) as specified.

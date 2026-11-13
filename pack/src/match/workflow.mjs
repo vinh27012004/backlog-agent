@@ -1814,7 +1814,10 @@ export class Workflow {
     this.publishOwner = key;
     job = r.jobs.start('publish_item', async job => {
       const since = Date.now();
-      const step = name => { job.progress.push(name); ji.publishStep = name; r.journal.save(); };
+      // Mốc từng bước (ms từ lúc job bắt đầu) trong journal: BQCK4MQX CR-07 mất 35,5 s publish mà không biết bao nhiêu là
+      // sync, lập lại candidate, integrate, push hay submit.
+      ji.publishSteps = [];
+      const step = name => { job.progress.push(name); ji.publishStep = name; ji.publishSteps.push([name, Date.now() - since]); r.journal.save(); };
       try {
         if (ji.publishedRevision && ji.publishedCandidateId === candidateId) {
           step('submit'); return await r.submitWork({ backlogItemKey: key, gitRevision: ji.publishedRevision, lastChance });
@@ -1850,6 +1853,7 @@ export class Workflow {
               if (!owned && !lastCall) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and hand off a new result before integrate`);
               step('sync');
               const synced = await r.worktree({ action: 'sync', backlogItemKey: key, prefer: [...echo], fromPublish: true, mainWins: !owned });
+              ji.publishSteps.push(['recandidate', Date.now() - since]);   // chỉ để đo, không vào progress của job
               await this.preflight({ backlogItemKey: key, fixResultFile: c.fixResultFile });
               c = await this.assertCandidate(key);
               warnings = [...warnings, owned
@@ -1882,7 +1886,7 @@ export class Workflow {
         const receipt = await r.submitWork({ backlogItemKey: key, gitRevision: pushed.revision, lastChance });
         if (receipt.status === 'SUBMITTED') step('done');
         return warnings.length ? { ...receipt, warnings } : receipt;
-      } finally { this.publishOwner = null; this.metric(key, 'publish', since); }
+      } finally { this.publishOwner = null; ji.publishSteps?.push(['end', Date.now() - since]); this.metric(key, 'publish', since); }
     }, { key });
     ji.publishJobId = job.id;
     r.journal.save();

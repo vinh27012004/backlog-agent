@@ -129,7 +129,8 @@ first-run or login screen it should have passed means the saved state is broken:
 name, app restart, fresh seed), which is not a retry. Before candidate go through "Before handoff" in
 backlog-references: when you changed existing product code and added tests, run_checks {action: "mutants"} once the
 tests are green and give every change it lists as survived a case that fails without it (it answers "skipped" when
-the item does not grade your tests against broken builds: then go on). The brief's <checklist> lists what the helper
+the item does not grade your tests against broken builds: then go on). Run it once, again only after fixing a
+survivor, and write no mutation or proof scripts of your own. The brief's <checklist> lists what the helper
 read from the item (evidence file per scenario, answer fields, scenario rows): work to it from the start and meet every
 line before candidate. When other items change the same files as you, the `analysis` field of a helper answer says
 so once. Hold app_data lock from seed

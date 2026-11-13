@@ -25,14 +25,19 @@ Check the item description immediately upon opening:
     shared query, chunking and post-processing helpers; a suite of isolated mocked modules cannot establish the
     required cross-module behavior. Keep test helpers and case manifests in the locations the item specifies.
   - For collection-wide conditions use **Batch, import and pagination** in `backlog-references/domain-checks.md`.
-    Exercise a representative real entry point across its actual processing boundary and check the records beyond it.
+    Exercise a representative real entry point across its actual processing boundary and check the records beyond it,
+    for every entry point the specification lists (adds, updates, deletes, retargets, imports that match, imports
+    that add, budget activity), not only the ones whose cap you found: OMZJW0S0 and BQCK4MQX TASK-08 each fixed the caps
+    they saw and still lost spec-batch-volume and its detection share (−16 both times).
   - Demonstrate observed specification violations on unfixed code, fix production behavior, and verify green without
     relaxing the expected result. Graders grade detection with mutants, which are usually the very defects you fixed:
     each fix needs a case that fails with only that fix undone. Build the fixture so the old and the new code give
     different results; when the rule is about precedence (a preferred pass before a fallback, a tie-break), the
     candidate the rule picks must not also be the one the fallback picks (EXP3I47A TASK-08: the preferred line came
     second, the fallback order gave the same assignment, mutant import-payee-after-rules survived, -4). Once the suite
-    is green call run_checks {action: "mutants"} and fix every change it lists as survived.
+    is green call run_checks {action: "mutants"} once and fix every change it lists as survived; run it again only
+    after such a fix. Never write your own mutation, "isolated fix" or proof scripts besides it: the helper's run is
+    the check (BQCK4MQX TASK-08: two mutation runs plus hand-made proof scripts took minutes 12 to 21 of 36).
   - Iterate with the required suite command on the integration directory and the targeted module tests only. Call the
     full run_checks once, when the source fixes and every case are final: any later edit under the source tree makes
     that run stale and the whole suite runs again (RATH0OHJ TASK-08: a full run at minute 13 was discarded by later
