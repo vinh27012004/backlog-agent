@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { baselineRerunFiles, cancelChecks, readChecks, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
+import { baselineRerunFiles, cancelChecks, readChecks, readTestRuns, runChecks, typecheckGraded, typeErrorFiles, verificationRows } from '../../pack/src/env/checks.mjs';
 import { app } from '../../pack/src/env/app.mjs';
 import { detectProfile } from '../../pack/src/env/environment.mjs';
 import { namedTestPackages, testScope } from '../../pack/src/env/test-scope.mjs';
@@ -399,6 +399,12 @@ test('run_checks with testFiles runs only those files, records the partial run a
   assert.equal(verificationRows(readChecks(p.teamWork, 'BUG-09'))[0].check, 'full test suite');
   const partial = await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, testFiles: ['own.test.cjs'] });
   assert.equal(partial.cached, true, 'the full run already covers it');
+  // BQCK4MQX CR-07: checks.json giữ lần chạy cuối; lịch sử bước test theo source còn lại cho cổng test mới ở candidate.
+  const runs = readTestRuns(p.teamWork, 'BUG-09');
+  assert.deepEqual(runs.map(r => [r.state, r.testFiles]), [['passed', ['packages/core/src/import/parse.test.cjs', 'own.test.cjs']], ['passed', null]]);
+  assert.equal(runs[1].source, readChecks(p.teamWork, 'BUG-09').snapshot.source);
+  await runChecks({ teamWorkspace: p.tw, backlogItemKey: 'BUG-09', matchRoot: p.matchRoot, checks: ['typecheck'] });
+  assert.equal(readTestRuns(p.teamWork, 'BUG-09').length, 2, 'a typecheck-only run keeps the test history');
 });
 
 test('run_checks refuses testFiles that are absolute, leave the app, look like flags or do not exist', async () => {

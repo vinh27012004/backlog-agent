@@ -103,9 +103,11 @@ does not occupy a standard slot. As for every item, the helper publishes its res
 Next priorities: least deadline slack, shared baseline/layout fixes, then points and BUG > CR > TASK on ties.
 Under four minutes left do not begin a new ordinary item. In an item's last six minutes next_actions puts its
 entries first with lastCall: stop_worker, then publish_item when it is offered (the helper usually publishes the
-handoff itself); do them before any other work. stop_worker
-carries a `followup` text: send exactly that as the one followup_task.
-interrupt_worker means the item is closed or submitted while its worker still runs: call interrupt_agent with
+handoff itself); do them before any other work. stop_worker: first call interrupt_agent with `target` exactly as
+given (the worker may sit in a two-minute command and would read a message only after it), then send the `followup`
+text exactly as the one followup_task.
+interrupt_worker means the item is closed or submitted, or the helper handed it off at the deadline, while its worker
+still runs: call interrupt_agent with
 `target` exactly as given, once, and send it nothing more. Its turns cost credits and can no longer score.
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 
@@ -123,7 +125,9 @@ Do not call next_actions next to wait_for_update: it returns the same list.
 Start every exec cell that calls wait_for_update with this first line, so the cell holds for the whole wait:
 `// @exec: {"yield_time_ms": 120000}`. Without it the cell yields after 30 s ("Script running with cell ID ...") and
 you pay one more full-context turn for the `wait` that follows (Practice 9O802QWE: 25 such turns).
-Message a worker only for a nextActions entry (answer_worker, stop_worker, sync_before_evidence, refresh_candidate) or
+notify_worker (main now has another item's change to files the worker also changes) carries a `followup`: send exactly
+that as one followup_task, nothing else.
+Message a worker only for a nextActions entry (answer_worker, stop_worker, notify_worker, sync_before_evidence, refresh_candidate) or
 a publish error, always as one followup_task that names the one thing to do. Never answer or acknowledge a worker's
 progress message; read it with your next wait_for_update and carry on.
 Retain the cursor; do not replay old events. Do not repeatedly recreate agents.

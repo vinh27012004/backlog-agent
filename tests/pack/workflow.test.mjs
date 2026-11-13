@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { Runtime, additiveMerge } from '../../pack/src/tools.mjs';
-import { itemDependencies, itemSkills, pageScripts } from '../../pack/src/match/workflow.mjs';
+import { itemDependencies, itemSkills, ownTestVerdicts, pageScripts } from '../../pack/src/match/workflow.mjs';
 import { Journal } from '../../pack/src/core/journal.mjs';
 import { Jobs } from '../../pack/src/core/jobs.mjs';
 import { digest, resultArtifact } from '../../pack/src/core/candidates.mjs';
@@ -47,6 +47,14 @@ function fixture(key = 'BUG-01', answerOnly = false, files = {}) {
   };
   const preflight = file => rt.workflow.preflight({ backlogItemKey: key, fixResultFile: file });
   return { root, bare, checkout, rt, key, ji, wt, dir, results, result, preflight };
+}
+
+// Một lần run_checks xanh trên source hiện tại (test-runs.json): test mới của item mới được lên main (ownTestGate).
+async function greenTests(f) {
+  const source = (await f.rt.workflow.snapshot(f.key)).source;
+  const file = join(f.rt.session.paths.teamWork, 'items', f.key, 'test-runs.json');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify([{ source, matchRoot: f.wt.matchRoot, testFiles: null, state: 'passed', failing: [] }]));
 }
 
 test('contract errors name fields and reject result sibling directories', async () => {
@@ -400,6 +408,10 @@ test('in the last minutes the worker is stopped and the candidate published firs
   assert.equal(stop.action, 'stop_worker');
   // ME1X0FFX: BUG-02 hạ 3 kịch bản đã đạt xuống NOT_RUN khi bị dừng. Lời dừng do helper soạn, giữ PASS đã kiểm.
   assert.match(stop.followup, /Keep every scenario you already verified as PASS/);
+  // BQCK4MQX CR-07: lời dừng chỉ tới worker khi exec 120 s của nó xong; root ngắt trước (target) rồi mới gửi lời dừng.
+  f.ji.workerThread = '/root/bug01_fixer';
+  assert.equal(f.rt.workflow.actions().nextActions[0].target, 'bug01_fixer');
+  assert.match(stop.followup, /^Your last command was interrupted/);
   // QDO8W480: item helper tự publish (reserveMinutes 2) hạn 10 phút không bị dừng khi còn 4 phút, chỉ khi còn 2.
   f.ji.prepared = { timeBox: { returnBy: new Date(Date.now() + 600_000).toISOString() } };
   const self = minutesLeft => { f.rt.itemRows = () => [{ ...rows(minutesLeft)[0], deadlineMinutes: 10, reserveMinutes: 2 }]; return f.rt.workflow.actions().nextActions.find(a => a.key === f.key); };
@@ -483,6 +495,7 @@ test('worker_checkpoint candidate keeps the worker writing until the fix-result,
   assert.equal(res.handedOff, false);
   assert.match(res.problems.join('\n'), /answer files outside the match folder's answers\/: M1\/src\/answers\/BUG-01\/submit\.json/);
   rmSync(join(f.wt.matchRoot, 'src', 'answers'), { recursive: true });
+  await greenTests(f);
   res = await checkpoint(args);
   assert.equal(res.handedOff, true, JSON.stringify(res)); assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
 });
@@ -503,6 +516,7 @@ test('worker_checkpoint candidate {result} writes the fix-result from the worker
   f.rt.journal.data.preparation.baseline = { failing: ['tests/old.test.js > old'] };
   const part = { status: 'fixed', summary: 'Value is 2', root_cause: 'value was 1', requirements: [{ id: 'AC-1', status: 'met', evidence: 'src/lib.js:1' }],
     verification: [{ check: 'TC-1', command: null, result: 'pass', note: 'observed' }] };
+  await greenTests(f);
   let res = await checkpoint({ backlogItemKey: f.key, phase: 'candidate', result: { ...part, status: 'maybe' } });
   assert.equal(res.handedOff, false); assert.match(res.problems[0], /fix-result contract: .*status/);
   assert.equal(existsSync(join(f.results, 'BUG-01-fixer-1.json')), false, 'nothing is written for a bad result');
@@ -537,12 +551,14 @@ test('worker_checkpoint candidate refuses a new test that launches a browser unl
   assert.match(problem ?? '', /src\/tests\/layout\.test\.ts/); assert.doesNotMatch(problem, /check\.mjs/, 'evidence scripts are fine');
   writeFileSync(layout, 'import { expect, it } from "vitest";\nit("x", () => expect(1).toBe(1));\n');
   f.result(2);
+  await greenTests(f);
   res = await checkpoint(args);
   assert.equal(res.handedOff, true, JSON.stringify(res));
   // Bộ test phát ra vốn là e2e: môi trường chấm có trình duyệt, không chặn.
   const e2e = fixture('BUG-01', false, { 'src/tests/e2e.spec.ts': 'import { test } from "@playwright/test";\n' });
   e2e.result(1); e2e.ji.workerState = 'writing';
   writeFileSync(join(e2e.wt.matchRoot, 'src', 'tests', 'new.spec.ts'), 'import { test } from "@playwright/test";\n');
+  await greenTests(e2e);
   res = await e2e.rt.definitions().find(t => t.name === 'worker_checkpoint').handler({ backlogItemKey: e2e.key, phase: 'candidate' });
   assert.equal(res.handedOff, true, JSON.stringify(res));
 });
@@ -914,6 +930,13 @@ for (const via of ['direct', 'proxy']) test(`ready_for_evidence syncs and resume
   const f = fixture(); f.ji.workerThread = '/root/bug01';
   writeFileSync(join(f.checkout, 'M1', 'src', 'shared.js'), 'export const shared=1;\n');
   sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'other item'], f.checkout);
+  // BQCK4MQX TASK-08: main chỉ đổi file khác, không phụ thuộc, không baseline: không sync, commit lên main lúc publish.
+  const base = f.ji.worktreeBase;
+  const skipped = await checkpoint(f.rt, { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(skipped.writesAllowed, true, JSON.stringify(skipped));
+  assert.deepEqual([skipped.synced.synced, skipped.synced.skipped, f.ji.worktreeBase], [false, 'independent', base]);
+  assert.match(skipped.hint, /^Main has no change to your files and nothing you wait for landed, so the helper did not sync/);
+  localRuntime(f.root, { skipIndependentSync: false });
   const res = await checkpoint(f.rt, { backlogItemKey: f.key, phase: 'ready_for_evidence' });
   assert.equal(res.writesAllowed, true, JSON.stringify(res)); assert.equal(res.synced.synced, true);
   assert.deepEqual([f.ji.workerState, f.ji.checkpoint, f.ji.workerThread], ['writing', 'resume', '/root/bug01']);
@@ -925,6 +948,37 @@ for (const via of ['direct', 'proxy']) test(`ready_for_evidence syncs and resume
   sh('git', ['add', 'M1'], g.checkout); sh('git', ['commit', '-q', '-m', 'same file'], g.checkout);
   const conflict = await checkpoint(g.rt, { backlogItemKey: g.key, phase: 'ready_for_evidence' });
   assert.equal(conflict.writesAllowed, false); assert.equal(conflict.syncError.code, 'WORKTREE_CONFLICT'); assert.equal(g.ji.workerState, 'yielded');
+});
+
+// BQCK4MQX TASK-08: sau sync, cả bộ chạy lại 10 phút chỉ để thấy test đỏ của CR-07. Cả bộ đã xanh trên source trước sync
+// thì chỉ chạy test của item và test các item vừa vào thêm/đổi; chưa xanh thì vẫn cả bộ.
+test('after a sync, a worktree whose full suite passed before it reruns only its own new tests and the tests the merged items brought', async () => {
+  const f = fixture('BUG-01', false, { 'src/package.json': JSON.stringify({ name: 'app', private: true, scripts: { test: 'vitest run' } }) });
+  f.ji.workerThread = '/root/bug01';
+  const calls = [];
+  f.rt.runChecks = async args => { calls.push(args); return { state: 'running', runId: `r-${calls.length}` }; };
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.test.js'), "test('value', () => {});\n");
+  // Main: một item khác thêm test và sửa đúng file của item (nên phải sync).
+  writeFileSync(join(f.checkout, 'M1', 'src', 'replay.test.js'), "test('replay', () => {});\n");
+  writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), 'export const value=1;\nexport const more=1;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'CR-07: work'], f.checkout);
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=2;\n');
+  const runs = join(f.rt.session.paths.teamWork, 'items', 'BUG-01', 'test-runs.json');
+  mkdirSync(dirname(runs), { recursive: true });
+  // Chưa có lần cả bộ xanh: sau sync vẫn cả bộ.
+  const full = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(full.synced?.synced, undefined, 'conflict on lib.js: no sync');
+  assert.equal(full.syncError?.code, 'WORKTREE_CONFLICT');
+  // Item chỉ thêm dòng mới ở cuối, không đụng dòng main đổi: sync được.
+  writeFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'export const value=1;\nexport const own=2;\n');
+  const source = (await f.rt.workflow.snapshot(f.key)).source;
+  writeFileSync(runs, JSON.stringify([{ source, matchRoot: f.wt.matchRoot, testFiles: null, state: 'passed', failing: [] }]));
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume' });
+  const res = await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(res.synced.synced, true, JSON.stringify(res));
+  const last = calls.at(-1);
+  assert.deepEqual({ ...last, testFiles: [...last.testFiles].sort() }, { backlogItemKey: f.key, matchRoot: f.wt.matchRoot, waitSeconds: 0, checks: ['typecheck', 'build', 'test'], testFiles: ['lib.test.js', 'replay.test.js'] });
+  assert.match(res.hint, /only the tests this sync can affect \(2 files/);
 });
 
 // 08OQBPW8: worker chạy run_checks 3–4 lần, có lần trước sync. Helper chạy nó một lần ngay sau sync, trên source cuối.
@@ -1112,17 +1166,143 @@ test('items named in the item text are dependencies; one that lands after the la
   assert.ok(!f.rt.workflow.actions().nextActions.some(a => a.reason === 'dependency_landed'));
 });
 
-// OMZJW0S0 CR-07: cr-07-official.test.ts (test mới của đội) fail trên revision nộp, mất 4 điểm team-tests.
-test('handoff refuses own new tests that fail in the last run_checks; failures of other tests do not block', async () => {
-  const f = fixture('CR-07');
-  writeFileSync(join(f.wt.matchRoot, 'src', 'audit.test.js'), "test('official figures', () => {});\n");
-  const checks = join(f.rt.session.paths.teamWork, 'items', 'CR-07', 'checks.json');
-  mkdirSync(dirname(checks), { recursive: true });
-  const write = failing => writeFileSync(checks, JSON.stringify({ runId: 'r1', state: 'done', results: [{ name: 'test', state: 'failed', failing }] }));
-  write(['src/audit.test.js > official figures']);
-  assert.match((await f.rt.workflow.handoffCheck('CR-07')).problems.join('\n'), /your own new tests fail in the last run_checks: src\/audit\.test\.js > official figures/);
-  write(['src/other.test.js > baseline']);
-  assert.ok(!(await f.rt.workflow.handoffCheck('CR-07')).problems.some(p => /own new tests/.test(p)));
+// OMZJW0S0 CR-07: cr-07-official.test.ts (test mới của đội) fail trên revision nộp, mất 4 điểm team-tests. BQCK4MQX
+// CR-07: lần run_checks cuối bị huỷ lúc bàn giao, cổng cũ không có kết quả, test đỏ lên main, 4 item sau mất 15 điểm.
+test('own new tests ship only when green on the handed-off source; red or unrun ones are asked for once, then kept out of the commit', async () => {
+  const f = fixture('CR-07'), wf = f.rt.workflow;
+  const testFile = join(f.wt.matchRoot, 'src', 'audit.test.js');
+  writeFileSync(testFile, "test('official figures', () => {});\n");
+  mkdirSync(join(f.wt.matchRoot, 'src', '__tests__'), { recursive: true });
+  writeFileSync(join(f.wt.matchRoot, 'src', '__tests__', 'books.json'), '{}\n');   // fixture, không phải file test
+  const runs = join(f.rt.session.paths.teamWork, 'items', 'CR-07', 'test-runs.json');
+  const source = async () => (await wf.snapshot('CR-07')).source;
+  const record = async (state, failing = [], testFiles = null) => writeFileSync(runs, JSON.stringify([{ source: await source(), matchRoot: f.wt.matchRoot, testFiles, state, failing }]));
+
+  // Chưa lần nào chạy xong trên source này: từ chối một lần với đúng lệnh chạy các file đó.
+  const asked = await wf.ownTestGate('CR-07');
+  assert.match(asked.problem, /no finished test run on your current source covers your new tests src\/audit\.test\.js/);
+  assert.match(asked.problem, /run_checks \{"checks":\["test"\],"testFiles":\["src\/audit\.test\.js"\]\}/);
+  // Xanh trên đúng source: qua; một test khác đỏ không chặn.
+  await record('passed');
+  assert.equal(await wf.ownTestGate('CR-07'), null);
+  await record('failed', ['src/other.test.js > baseline']);
+  assert.equal(await wf.ownTestGate('CR-07'), null);
+  await record('passed', [], ['src/other.test.js']);
+  delete f.ji.ownTestsAsked;   // cùng trạng thái lần đầu: lần hỏi thứ hai sẽ chuyển file
+  assert.match((await wf.ownTestGate('CR-07')).problem, /no finished test run/, 'a selected run of other files does not cover it');
+  // Đỏ: từ chối một lần, lần sau chuyển khỏi commit (code sản phẩm vẫn lên).
+  await record('failed', ['src/audit.test.js > official figures']);
+  assert.match((await wf.ownTestGate('CR-07')).problem, /your own new tests fail on your current source: src\/audit\.test\.js/);
+  const parked = await wf.ownTestGate('CR-07');
+  assert.deepEqual(parked.parked, ['src/audit.test.js']);
+  assert.match(parked.warning, /moved them to answers\/CR-07\/evidence\/unshipped-tests/);
+  assert.equal(existsSync(testFile), false);
+  assert.ok(existsSync(join(f.dir, 'evidence', 'unshipped-tests', 'src__audit.test.js')));
+  assert.ok(existsSync(join(f.wt.matchRoot, 'src', '__tests__', 'books.json')), 'fixtures stay');
+  assert.equal(readFileSync(join(f.wt.matchRoot, 'src', 'lib.js'), 'utf8'), 'export const value=2;\n');
+
+  // Quá return_by: không hỏi, chuyển luôn. Item chấm chính bộ test (detection): chỉ cảnh báo.
+  const g = fixture('CR-07');
+  writeFileSync(join(g.wt.matchRoot, 'src', 'replay.test.js'), "test('replay', () => {});\n");
+  g.ji.prepared = { timeBox: { returnBy: new Date(Date.now() - 60_000).toISOString() } };
+  assert.deepEqual((await g.rt.workflow.ownTestGate('CR-07')).parked, ['src/replay.test.js']);
+  const t = fixture('TASK-08');
+  writeFileSync(join(t.wt.matchRoot, 'src', 'suite.test.js'), "test('spec', () => {});\n");
+  t.ji.prepared = { timeBox: { returnBy: new Date(Date.now() - 60_000).toISOString() } };
+  t.rt.workflow.gradingRules = () => ({ detection: true });
+  const kept = await t.rt.workflow.ownTestGate('TASK-08');
+  assert.equal(kept.parked, undefined);
+  assert.match(kept.warning, /graders score this item's suite itself/);
+  assert.ok(existsSync(join(t.wt.matchRoot, 'src', 'suite.test.js')));
+});
+
+test('ownTestVerdicts: the newest run covering a file decides; a full failing list of 40 leaves others unknown', () => {
+  const files = ['src/a.test.ts', 'src/b.test.ts'];
+  assert.deepEqual(ownTestVerdicts(files, [{ state: 'failed', failing: ['src/a.test.ts > x'] }, { state: 'passed', testFiles: ['src/a.test.ts'] }]),
+    { 'src/a.test.ts': 'pass', 'src/b.test.ts': 'pass' });
+  assert.deepEqual(ownTestVerdicts(files, [{ state: 'failed', failing: Array.from({ length: 40 }, (_, i) => `src/z${i}.test.ts > x`) }]), {});
+  assert.deepEqual(ownTestVerdicts(files, [{ state: 'timeout', failing: [] }]), {});
+  assert.deepEqual(ownTestVerdicts(['M1/pkg/src/a.test.ts'], [{ state: 'failed', testFiles: ['pkg/src/a.test.ts'], failing: ['pkg/src/a.test.ts > case'] }]), { 'M1/pkg/src/a.test.ts': 'fail' });
+});
+
+// BQCK4MQX CR-07: worker bàn giao lúc còn 36 s, submit tới nơi 0,2 s sau khi item đóng. Còn ≤ 75 s mà worker chưa bàn
+// giao: helper bàn giao thay từ worktree (submit.json đủ trường bắt buộc, test mới chưa xanh để ngoài commit).
+test('75 seconds before an item closes the helper hands off for a worker that has not, and root interrupts that worker', async () => {
+  const f = fixture('CR-07'), wf = f.rt.workflow;
+  const materials = join(f.rt.session.paths.teamWork, 'items', 'CR-07');
+  mkdirSync(join(materials, 'files', 'challenge'), { recursive: true });
+  writeFileSync(join(materials, 'files', 'challenge', 'CR-07-submit.schema.json'), JSON.stringify({ type: 'object', required: ['status', 'testResults', 'auditSummary'],
+    properties: { status: { enum: ['DONE', 'PARTIAL', 'BLOCKED'] }, testResults: { type: 'array' },
+      auditSummary: { type: 'object', required: ['month', 'net', 'categories'], properties: { month: { type: 'string' }, net: { type: 'integer' }, categories: { type: 'array' } } } } }));
+  writeFileSync(join(materials, 'template.json'), JSON.stringify({ status: 'NOT_STARTED', testResults: [{ id: 'TC-1', result: 'NOT_RUN', evidence: [] }], auditSummary: {} }));
+  writeFileSync(join(f.dir, 'submit.json'), JSON.stringify({ status: 'NOT_STARTED', testResults: [{ id: 'TC-1', result: 'PASS', evidence: [], note: 'example passed' }], auditSummary: {} }));
+  writeFileSync(join(f.wt.matchRoot, 'src', 'replay.test.js'), "test('replay', () => { throw new Error('red'); });\n");
+  Object.assign(f.ji, { workerThread: '/root/cr07_fixer', workerState: 'writing', checkpoint: 'resume' });
+  const minutes = { left: 3 };
+  f.rt.itemRows = () => [{ key: 'CR-07', type: 'CR', status: 'OPEN', local: 'started', minutesLeft: minutes.left, deadlineMinutes: 15 }];
+
+  assert.equal(wf.autoHandoff(), null, 'three minutes left: the worker still has its time');
+  minutes.left = 1.1;
+  await wf.autoHandoff();
+  assert.equal(f.ji.deadlineHandoff.state, 'handed_off', JSON.stringify(f.ji.deadlineHandoff));
+  const submit = JSON.parse(readFileSync(join(f.dir, 'submit.json'), 'utf8'));
+  assert.equal(submit.status, 'PARTIAL');
+  assert.deepEqual(submit.auditSummary, { month: '', net: 0, categories: [] }, 'required fields filled so the submission fits the schema');
+  assert.deepEqual(submit.testResults[0].result, 'PASS', 'what the worker recorded stays');
+  assert.deepEqual(f.ji.deadlineHandoff.parked, ['src/replay.test.js'], 'an unrun new test stays out of the commit');
+  const result = JSON.parse(readFileSync(f.ji.deadlineHandoff.fixResultFile, 'utf8'));
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(result.verification.find(v => v.check === 'TC-1').result, 'pass');
+  assert.deepEqual([f.ji.workerState, f.ji.checkpoint], ['yielded', 'candidate']);
+  // Root ngắt worker; worker không được mở ghi lại; helper nộp kết quả đó.
+  const next = wf.actions().nextActions;
+  assert.deepEqual(next.filter(a => a.key === 'CR-07').map(a => [a.action, a.target ?? a.arguments?.fixResultFile ?? null]).sort(),
+    [['interrupt_worker', 'cr07_fixer'], ['publish_item', f.ji.deadlineHandoff.fixResultFile]]);
+  assert.throws(() => wf.checkpoint({ backlogItemKey: 'CR-07', phase: 'resume' }), /ITEM_HANDED_OFF/);
+  assert.equal(wf.autoHandoff(), null, 'once per item');
+
+  // Đã bàn giao: không làm gì.
+  const g = fixture('BUG-01');
+  Object.assign(g.ji, { workerThread: '/root/bug01_fixer', checkpoint: 'candidate' });
+  g.rt.itemRows = () => [{ key: 'BUG-01', type: 'BUG', status: 'OPEN', local: 'started', minutesLeft: 1 }];
+  assert.equal(g.rt.workflow.autoHandoff(), null);
+});
+
+// BQCK4MQX: PI-03 lên main với bản sửa schedules.ts mà CR-07 cũng sửa; CR-07 chỉ biết ở publish phút cuối.
+test('when main changes a file a writing worker also changes, root gets one notify_worker for that worker while time is left', async () => {
+  const f = fixture('BUG-01'), wf = f.rt.workflow;
+  Object.assign(f.ji, { workerThread: '/root/bug01_fixer', workerState: 'writing', checkpoint: 'resume' });
+  assert.deepEqual(await wf.watchMainOverlap(), [], 'main has not moved');
+  writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), 'export const value=3;\n');
+  sh('git', ['commit', '-qam', 'PI-03: work'], f.checkout);
+  const head = sh('git', ['rev-parse', 'HEAD'], f.checkout);
+  assert.deepEqual(await wf.watchMainOverlap(), ['BUG-01']);
+  assert.deepEqual([f.ji.mainOverlapNotice.files, f.ji.mainOverlapNotice.from], [['src/lib.js'], ['PI-03']]);
+  const result = wf.actions();
+  const notify = result.nextActions.find(a => a.action === 'notify_worker');
+  assert.equal(notify.key, 'BUG-01');
+  assert.match(notify.followup, /^PI-03 reached main with changes to files you also change: src\/lib\.js/);
+  assert.ok(notify.followup.includes(`git checkout ${head.slice(0, 12)} -- <file>`));
+  wf.offered(result);
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'notify_worker'), 'once per set of files');
+  assert.deepEqual(await wf.watchMainOverlap(), [], 'same main head: nothing new');
+  // Worker đã bàn giao: không báo.
+  const g = fixture('BUG-01');
+  Object.assign(g.ji, { workerThread: '/root/bug01_fixer', workerState: 'yielded', checkpoint: 'candidate' });
+  writeFileSync(join(g.checkout, 'M1', 'src', 'lib.js'), 'export const value=3;\n');
+  sh('git', ['commit', '-qam', 'PI-03: work'], g.checkout);
+  assert.deepEqual(await g.rt.workflow.watchMainOverlap(), []);
+});
+
+test('fillRequired fills only missing required fields: const, template value, first enum, then empty by type', async () => {
+  const { fillRequired, validateSchema } = await import('../../pack/src/core/jsonschema.mjs');
+  const schema = { type: 'object', required: ['schemaVersion', 'id', 'kind', 'total', 'rows', 'nested'], $defs: { kind: { enum: ['A', 'B'] } },
+    properties: { schemaVersion: { const: 1 }, id: { type: 'string' }, kind: { $ref: '#/$defs/kind' }, total: { type: 'integer', minimum: 5 }, rows: { type: 'array' },
+      nested: { type: 'object', required: ['flag'], properties: { flag: { type: 'boolean' } } } } };
+  const { value, filled } = fillRequired({ id: 'kept', nested: {} }, schema, { kind: 'B' });
+  assert.deepEqual(value, { id: 'kept', nested: { flag: false }, schemaVersion: 1, kind: 'B', total: 5, rows: [] });
+  assert.deepEqual(filled.sort(), ['kind', 'nested.flag', 'rows', 'schemaVersion', 'total']);
+  assert.deepEqual(validateSchema(value, schema), []);
 });
 
 // OMZJW0S0 TASK-08: fixer chạy 22,7 phút mà journal chỉ ghi code_test 1 s, evidence 76 s: mỗi resume đặt lại đồng hồ,
@@ -1189,6 +1369,14 @@ test('a BUG/PI/CR handoff with new tests but no product change moves those tests
   writeFileSync(join(t.wt.matchRoot, 'src', 'lib.js'), 'export const value=1;\n');
   writeFileSync(join(t.wt.matchRoot, 'src', 'suite.test.js'), "test('spec', () => {});\n");
   assert.deepEqual(await t.rt.workflow.parkRedOnlyTests('TASK-08'), []);
+
+  // BQCK4MQX CR-05: bản sửa lên main qua CR-08 (item chờ nó), CR-05 sync nên diff chỉ còn test: test vẫn có bản sửa.
+  const c = fixture('CR-05');
+  writeFileSync(join(c.wt.matchRoot, 'src', 'lib.js'), 'export const value=1;\n');
+  writeFileSync(join(c.wt.matchRoot, 'src', 'close.test.js'), "test('close', () => {});\n");
+  Object.assign(c.rt.journal.item('CR-08'), { sharedFix: { from: 'CR-05', files: ['M1/src/month-close.js'] }, integratedAt: new Date().toISOString() });
+  assert.deepEqual(await c.rt.workflow.parkRedOnlyTests('CR-05'), []);
+  assert.ok(existsSync(join(c.wt.matchRoot, 'src', 'close.test.js')));
 });
 
 // QDYZMY1K BUG-11: TC-03/04 PASS trỏ sang transfer-resync.log, thiếu mvs-tests.log mà MVS đòi; BTC chấm 0 cả hai (−8).
@@ -1649,6 +1837,33 @@ test('items in work that change the same file hear it at ready_for_evidence, aga
   assert.deepEqual(await wf.inFlightOverlap(f.key), [{ file: 'src/lib.js', items: ['BUG-02'] }]);
   bug.receipt = { id: 'r-2' };
   assert.deepEqual(await wf.inFlightOverlap(f.key), []);
+});
+
+// BQCK4MQX: CR-07 và PI-03 cùng viết lại một chỗ trong schedules.ts, đề không nêu tên nhau. Item xong trước báo item kia
+// bản đã xong nằm đâu; chỉ khi cả hai cùng sửa dòng có sẵn (thêm dòng thì tự gộp được).
+test('an item reaching ready_for_evidence tells a writing item that edits the same existing lines where its finished version is', async () => {
+  const f = fixture('CR-01'), wf = f.rt.workflow;
+  f.ji.workerThread = '/root/cr01';
+  f.rt.runChecks = async () => ({ state: 'running', runId: 'r-1' });
+  const other = f.rt.wtPaths('BUG-02');
+  sh('git', ['worktree', 'add', '-q', '--detach', other.worktreeRoot, 'HEAD'], f.checkout);
+  const bug = f.rt.journal.item('BUG-02');
+  Object.assign(bug, { startedAt: new Date().toISOString(), worktreeBase: f.ji.worktreeBase, workerThread: '/root/bug02', workerState: 'writing' });
+  f.rt.itemRows = () => ['CR-01', 'BUG-02'].map(key => ({ key, type: key.split('-')[0], status: 'OPEN', local: 'started', minutesLeft: 30 }));
+  writeFileSync(join(other.matchRoot, 'src', 'lib.js'), 'export const value=1;\nexport const extra=1;\n');   // chỉ thêm dòng
+  await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.equal(bug.peerNotice, undefined, 'added lines merge by themselves');
+  writeFileSync(join(other.matchRoot, 'src', 'lib.js'), 'export const value=5;\n');   // sửa cùng dòng có sẵn
+  f.rt.workflow.checkpoint({ backlogItemKey: f.key, phase: 'resume' });
+  await f.rt.proxyCall('worker_checkpoint', { backlogItemKey: f.key, phase: 'ready_for_evidence' });
+  assert.deepEqual([bug.peerNotice?.from, bug.peerNotice?.files], ['CR-01', ['src/lib.js']]);
+  const result = wf.actions();
+  const notify = result.nextActions.find(a => a.action === 'notify_worker');
+  assert.deepEqual([notify.key, notify.reason], ['BUG-02', 'peer_ready']);
+  assert.match(notify.followup, /^CR-01 \(still in work\) has finished its change to existing lines of files you also change: src\/lib\.js/);
+  assert.ok(notify.followup.includes(f.wt.matchRoot));
+  wf.offered(result);
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'notify_worker'), 'once');
 });
 
 test('an item whose files reached main through an item that waited for it keeps its own version at sync', async () => {

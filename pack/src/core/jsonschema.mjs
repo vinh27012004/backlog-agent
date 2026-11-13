@@ -88,3 +88,42 @@ export function validateSchema(value, schema, { maxErrors = 20 } = {}) {
   check(value, schema, '');
   return errors;
 }
+
+// Điền các trường bắt buộc còn thiếu (không đổi giá trị đã có) để bài nộp sát hạn hợp schema: const, rồi giá trị trong
+// template, rồi enum đầu tiên, rồi giá trị rỗng theo type ('' , 0, false, [], {} với trường bắt buộc của nó). BQCK4MQX
+// CR-07: auditSummary để {} trong template, schema đòi month/boundaryTransferNetMinor/categories; lần bàn giao bị từ
+// chối một lượt ngay trước giờ đóng. Trả về {value, filled: [đường dẫn]}.
+export function fillRequired(value, schema, template = undefined) {
+  const filled = [];
+  const node = s => (s?.$ref ? resolveRef(schema, s.$ref) ?? s : s);
+  const empty = (s, path, tpl) => {
+    s = node(s);
+    if (!s || typeof s !== 'object') return null;
+    if (Object.hasOwn(s, 'const')) return s.const;
+    if (tpl !== undefined && validateSchema(tpl, { $defs: schema.$defs, definitions: schema.definitions, ...s }).length === 0) return structuredClone(tpl);
+    if (s.enum?.length) return s.enum[0];
+    const t = Array.isArray(s.type) ? s.type[0] : s.type ?? (s.properties ? 'object' : s.items || s.prefixItems ? 'array' : null);
+    if (t === 'string') return '';
+    if (t === 'integer' || t === 'number') return typeof s.minimum === 'number' ? s.minimum : 0;
+    if (t === 'boolean') return false;
+    if (t === 'array') return [];
+    if (t === 'object') return walk({}, s, path, tpl && typeof tpl === 'object' ? tpl : undefined);
+    return null;
+  };
+  const walk = (v, s, path, tpl) => {
+    s = node(s);
+    if (!s || typeof s !== 'object' || !v || typeof v !== 'object' || Array.isArray(v)) return v;
+    for (const k of s.required ?? []) {
+      if (Object.hasOwn(v, k)) continue;
+      v[k] = empty(s.properties?.[k], `${path}.${k}`, tpl?.[k]);
+      filled.push(`${path}.${k}`.replace(/^\./, ''));
+    }
+    for (const [k, sub] of Object.entries(s.properties ?? {})) {
+      const child = v[k];
+      if (child && typeof child === 'object' && !Array.isArray(child)) walk(child, sub, `${path}.${k}`, tpl?.[k]);
+    }
+    return v;
+  };
+  const out = walk(structuredClone(value ?? {}), schema, '', template);
+  return { value: out, filled };
+}

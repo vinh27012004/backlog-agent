@@ -13,5 +13,6 @@
   "autoChecks": true,
   "linkedModules": true,
   "scopedTests": true,
-  "autoPublishAll": true
+  "autoPublishAll": true,
+  "skipIndependentSync": true
 }

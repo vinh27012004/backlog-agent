@@ -75,6 +75,18 @@ export function typeErrorsInOwnTests(logText, ownTests) {
 export function readChecks(teamWork, key) {
   try { return JSON.parse(readFileSync(checksFile(teamWork, key), 'utf8')); } catch { return null; }
 }
+// Lịch sử bước test theo source: checks.json chỉ giữ lần chạy cuối (một lần typecheck sau đó xoá kết quả test), còn
+// lần chạy bị huỷ lúc bàn giao ghi results: []. BQCK4MQX CR-07: lần chạy cuối bị huỷ, cổng "test mới của item fail"
+// không có gì để đọc, cr-07-replay.test.ts đỏ lên main và 4 item nộp sau mất 15 điểm team-tests.
+export const testRunsFile = (teamWork, key) => join(teamWork, 'items', key, 'test-runs.json');
+const TEST_RUNS_KEPT = 12;
+export function readTestRuns(teamWork, key) {
+  try { const list = JSON.parse(readFileSync(testRunsFile(teamWork, key), 'utf8')); return Array.isArray(list) ? list : []; } catch { return []; }
+}
+function recordTestRun(teamWork, key, entry) {
+  const list = [...readTestRuns(teamWork, key), entry].slice(-TEST_RUNS_KEPT);
+  try { writeFileAtomic(testRunsFile(teamWork, key), JSON.stringify(list, null, 2)); } catch { /* không ghi được thì cổng coi như chưa chạy */ }
+}
 
 // Huỷ lần run_checks còn chạy của item và chờ nó dừng (tối đa waitMs). Gọi khi worker đã bàn giao: kết quả của lần
 // chạy dở không còn ai đọc, còn log của nó vẫn ghi vào answers/<ID>/evidence/ và làm cây answer đổi sau handoff
@@ -401,6 +413,14 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
         }
       }
     };
+    // Bước test xong trên source không đổi suốt lần chạy: ghi vào lịch sử, kể cả khi các check khác sau đó bị huỷ.
+    const testFinished = async r => {
+      if (!before || !['passed', 'failed', 'timeout'].includes(r.state)) return;
+      const mid = await sourceSnapshot(checkout, folder, profile).catch(() => null);
+      if (!mid || mid.source !== before.source) return;
+      recordTestRun(teamWork, key, { runId, source: before.source, matchRoot: where.matchRoot, testFiles: files ?? null,
+        state: r.state, failing: r.failing ?? [], counts: r.counts ?? null, at: new Date().toISOString() });
+    };
     // Mỗi check xong thì ghi ngay (state, đuôi log khi hỏng): status trả lỗi sớm, không chờ check còn lại.
     const chain = async list => {
       for (const n of list) {
@@ -411,6 +431,7 @@ export async function runChecks({ teamWorkspace, action = 'run', backlogItemKey:
         record.finished = { ...record.finished, [n]: { name, state, exitCode, log, ...(isBad(byName[n]) ? { tail, ...(failing?.length ? { failing: failing.slice(0, 20) } : {}) } : {}),
           ...(advisory ? { advisory } : {}) } };
         if (n === 'build') await buildFinished(byName[n]);
+        if (n === 'test') await testFinished(byName[n]);
         if (mine()) writeFileAtomic(checksFile(teamWork, key), JSON.stringify(record, null, 2));
       }
     };

@@ -8,9 +8,9 @@ import { digest, resultArtifact, sourceSnapshot } from '../core/candidates.mjs';
 import { contentTree, git, revParse, trackedChanges } from '../core/git.mjs';
 import { detectProfile } from '../env/environment.mjs';
 import { evidenceProblems } from '../env/evidence.mjs';
-import { CHECK_LABEL, baselineRerunFiles, cancelChecks, readChecks, typeErrorFiles, verificationRows } from '../env/checks.mjs';
+import { CHECK_LABEL, MAX_TEST_FILES, baselineRerunFiles, cancelChecks, readChecks, readTestRuns, typeErrorFiles, verificationRows } from '../env/checks.mjs';
 import { mutantsRunning, mutationTargets, readMutants, restorePending } from '../env/mutants.mjs';
-import { validateSchema } from '../core/jsonschema.mjs';
+import { fillRequired, validateSchema } from '../core/jsonschema.mjs';
 import { sharedCommands, stopApp } from '../env/app.mjs';
 import { searchLogsHelp } from './logs.mjs';
 import { fingerprint, fingerprintAt, productChanges, revert, sameContent, shareFix } from './dependency.mjs';
@@ -69,6 +69,8 @@ const typeOf = key => String(key).split('-')[0].toUpperCase();
 // thêm esbuild jsx vào vitest.config.ts cho test mới của nó, TASK-02 nộp sau mang theo thay đổi đó và mất TC-04).
 const TEST_CONFIG = /(^|\/)((vitest|jest|playwright|cypress|karma|mocha)\.(config|setup|workspace)\.[cm]?[jt]s|vitest\.workspace\.json|jest\.config\.json|\.mocharc\.[a-z]+|setupTests\.[jt]sx?|pytest\.ini|conftest\.py|tox\.ini|phpunit\.xml(\.dist)?|karma\.conf\.js)$/i;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|Tests?\.(java|cs)$/;
+// File test chạy được (không gồm fixture/dữ liệu trong thư mục tests/): chỉ những file này qua ownTestGate.
+const RUNNABLE_TEST = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|Tests?\.(java|cs)$/;
 const isProduct = p => !TEST_FILE.test(p) && !TEST_CONFIG.test(p);
 // Test mở trình duyệt: grader chạy cả suite trong môi trường sạch không có trình duyệt, beforeAll hỏng thì vitest
 // thoát 1 dù 0 test hỏng (BTZNI69E: layout.test.ts của BUG-01 launch msedge, CR-01/CR-02/CR-03 mất TC test tự động,
@@ -105,6 +107,36 @@ const RETRY_MINUTES = 5;
 const MUTANT_MINUTES = 6;
 // Còn ít hơn số phút này tới return_by thì không đòi chạy typecheck (một lần 1–2,5 phút khi máy đang tải).
 const TYPECHECK_MINUTES = 4;
+// Còn ít hơn số phút này tới return_by thì test mới chưa xanh được chuyển khỏi commit luôn, không đòi chạy (ownTestGate;
+// chạy riêng vài file mất 10–40 s cộng một lượt model).
+const OWN_TEST_MINUTES = 1;
+// Còn bấy nhiêu giây tới lúc item đóng mà worker chưa bàn giao: helper bàn giao thay (autoHandoff). Publish đo được
+// 14–36 s (CR-07 BQCK4MQX: sync phút cuối 23 s, push và submit 10 s) cộng việc lập fix-result và kiểm.
+const DEADLINE_HANDOFF_SECONDS = 75;
+// Lỗi bàn giao làm hỏng commit của mọi item sau: bàn giao thay worker dừng ở đây (deadlineHandoff).
+const SAFETY_PROBLEM = /^(test configuration changed|issued tests changed|files under node_modules|answer files outside|test launches a browser|tests that write to an absolute path|the mutation check is still running)/;
+// Diff của worktree so với base có sửa/xoá dòng có sẵn của file (không chỉ thêm dòng).
+async function editsExisting(worktreeRoot, base, path) {
+  const res = await git(['diff', '-U0', base, '--', path], { cwd: worktreeRoot, allowFail: true });
+  return res.code === 0 && /^-(?!--)/m.test(res.out ?? '');
+}
+// Kết quả của từng file test mới trên một source: 'pass', 'fail' hay không có (chưa lần nào chạy xong phủ nó). Lần mới
+// nhất phủ file thì quyết; failing so theo tên file vì runner in đường dẫn theo gói ("src/x.test.ts > case") hay theo
+// app root. Danh sách failing bị cắt ở 40: file không có trong một danh sách đầy thì chưa rõ.
+export function ownTestVerdicts(files, runs) {
+  const out = {};
+  const name = p => String(p).replace(/\\/g, '/').split(' > ')[0].trim().split('/').pop();
+  const covers = (run, f) => !run.testFiles || run.testFiles.some(t => f === t || f.endsWith(`/${String(t).replace(/\\/g, '/')}`));
+  for (const f of files) {
+    for (const run of [...runs].reverse()) {
+      if (!covers(run, f)) continue;
+      const failing = (run.failing ?? []).map(name);
+      if (failing.includes(basename(f))) { out[f] = 'fail'; break; }
+      if (run.state === 'passed' || (run.state === 'failed' && failing.length && failing.length < 40)) { out[f] = 'pass'; break; }
+    }
+  }
+  return out;
+}
 const ITEM_KEY = /\b(?:TASK|BUG|CR|PI)-\d{1,3}\b/g;
 export function itemDependencies(key, text) {
   const out = [];
@@ -154,7 +186,11 @@ const sharedFollowup = (from, files) => `${from}'s product fix was copied into y
   + 'If the copied files break your build or tests, restore them (git checkout HEAD -- <file>; delete a file that is new) and hand off without them, saying so.';
 // Lời root gửi worker ở stop_worker (hết giờ / cơ hội cuối). ME1X0FFX: BUG-02 đã chạy đạt cả 3 kịch bản UI rồi, khi bị
 // dừng lại hạ chúng xuống NOT_RUN vì "evidence chụp trước lần sync bản sửa baseline", mất 80/100 điểm.
-const STOP_FOLLOWUP = "Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
+// BQCK4MQX CR-07: lời dừng gửi lúc 09:39:45 chỉ tới worker lúc 09:40:57, khi exec chờ replay 120 s của nó xong; bàn giao
+// lúc 09:42:02, item đóng 0,2 s trước khi submit tới nơi. Root ngắt lượt đang chạy (interrupt_agent) rồi mới gửi lời này.
+const STOP_FOLLOWUP = "Your last command was interrupted because the item's time is up: do not run it again. Stop now and hand off within one turn: release the app_data lock, stop your app and call worker_checkpoint candidate with your result. Keep every scenario you already verified as PASS with its evidence, also when a later sync brought another item's fix (baseline, shared layout): that sync does not undo what you observed, say so in the note. Mark NOT_RUN only checks you never ran. Do not start new checks or captures.";
+// Tên worker cho interrupt_agent (task_name, phần cuối của "/root/<task_name>").
+const targetOf = ji => (ji.workerThread ? String(ji.workerThread).split('/').pop() : ji.spawn?.task_name ?? null);
 // Lời root gửi worker khi helper vừa sync bản sửa baseline vào worktree đã bàn giao của nó.
 const baselineFollowup = (owner, rerun = null) => `Call worker_checkpoint resume first. ${owner}'s fix for the baseline failures (the tests that already failed in the issued code) is now on main and the helper synced it into your worktree, keeping your changes. ${rerun ? `Rerun only the tests it affects, run_checks ${JSON.stringify({ checks: ['test'], testFiles: rerun })} (the test files of the baseline failures and your own new tests, not the full suite; scenarios and screenshots you already verified stay PASS, do not recapture them), record that result` : 'Run the full suite once more to its evidence log'} (apply a migration it brings the way the project does), record the real result in submit.json, then call worker_checkpoint candidate with your updated result (or write the next numbered fix-result yourself). Change nothing else.`;
 // PI chỉ báo cáo: brief thay mọi skill (CA3WKX60: fixer PI-01 đọc 42K ký tự skill trong 22 s, rồi tự kéo log, tự chép
@@ -397,6 +433,119 @@ export class Workflow {
     });
     return [a.key];
   }
+  // ---------------------------------------------------------------- bàn giao thay worker sát giờ đóng
+  // BQCK4MQX CR-07: worker kẹt trong exec 120 s qua return_by, bàn giao lúc còn 36 s, submit tới nơi 0,2 s sau khi item
+  // đóng (0/70). Còn DEADLINE_HANDOFF_SECONDS tới lúc item đóng mà worker chưa bàn giao: helper bàn giao thay nó từ
+  // worktree như đang có (submit.json điền đủ trường bắt buộc, test mới chưa xanh để ngoài commit, fix-result partial),
+  // root ngắt worker, helper nộp. Nộp một phần vẫn hơn không nộp. Gọi ở nhịp poller, mỗi item một lần.
+  autoHandoff() {
+    const r = this.rt;
+    if (r.session.phase !== 'GAME' || !r.gm.view || !r.session.paths?.teamWork || this.handingOff) return null;
+    const items = r.journal?.data.items ?? {};
+    const due = (r.itemRows?.() ?? []).find(row => {
+      const ji = items[row.key];
+      return ji && row.status !== 'CLOSED' && row.minutesLeft != null && row.minutesLeft * 60 <= DEADLINE_HANDOFF_SECONDS && row.minutesLeft > 0
+        && ji.startedAt && ji.workerThread && !ji.endedAt && !ji.receipt && !ji.deadlineHandoff && ji.checkpoint !== 'candidate'
+        && r.jobs.jobs.get(ji.publishJobId)?.state !== 'running' && r.liveWorktree(row.key);
+    });
+    if (!due) return null;
+    this.handingOff = due.key;
+    return this.deadlineHandoff(due.key)
+      .catch(e => { this.item(due.key).deadlineHandoff = { at: new Date().toISOString(), state: 'failed', error: oneLine(`${e.code ?? 'ERROR'}: ${e.message ?? e}`, 300) }; r.journal.save(); })
+      .finally(() => { this.handingOff = null; try { this.autoPublish(); } catch { /* nhịp sau thử lại */ } });
+  }
+  async deadlineHandoff(key) {
+    const r = this.rt, ji = this.item(key), paths = this.paths(key), at = new Date().toISOString();
+    ji.deadlineHandoff = { at, state: 'started' };
+    r.journal.save();
+    const done = (state, extra = {}) => {
+      ji.deadlineHandoff = { at, state, ...extra };
+      r.journal.save();
+      r.events.push('DEADLINE_HANDOFF', { key, state });
+      return ji.deadlineHandoff;
+    };
+    // Lần run_checks còn chạy ghi log vào evidence sau bàn giao: huỷ trước khi chụp trạng thái.
+    await cancelChecks(r.session.paths.teamWork, key, 5_000).catch(() => null);
+    const filled = this.fillSubmit(key, paths);
+    const own = await this.ownTestGate(key, { outOfTime: true }).catch(() => null);
+    let file = null;
+    if (ji.verificationKind === 'answer_only') file = this.writeAnswerResult(key, paths);
+    else {
+      const composed = await this.composeResult(key, { status: 'partial',
+        summary: `The worker had not handed off ${Math.round(DEADLINE_HANDOFF_SECONDS)} s before ${key} closed: the helper handed off the worktree as it was at ${at}.`,
+        verification: this.submitRows(key, paths),
+        risks: ['Handed off by the helper at the deadline: the worker\'s last changes may be unverified.', ...(own?.parked?.length ? [`New tests left out of the commit (not green on this source): ${own.parked.join(', ')}`] : [])] });
+      file = composed?.file ?? null;
+      if (!file) return done('skipped', { reason: (composed?.problems ?? ['no fix-result']).join('; ').slice(0, 300) });
+    }
+    if (!file) return done('skipped', { reason: 'submit.json could not be read' });
+    // Chỉ dừng ở kiểm an toàn (cấu hình test, test phát ra, node_modules, đường dẫn, trình duyệt, mutants đang chạy):
+    // các thứ đó làm hỏng commit của mọi item sau. Thiếu evidence hay kịch bản thì vẫn nộp.
+    const { problems } = await this.handoffCheck(key);
+    const unsafe = problems.filter(p => SAFETY_PROBLEM.test(p));
+    if (unsafe.length) return done('skipped', { reason: unsafe.join(' | ').slice(0, 500) });
+    this.checkpoint({ backlogItemKey: key, phase: 'candidate', internal: true });
+    return done('handed_off', { fixResultFile: file, filled, parked: own?.parked ?? [] });
+  }
+  // ---------------------------------------------------------------- main vừa đổi file worker đang sửa
+  // BQCK4MQX: PI-03 lên main lúc 09:40:40 với bản sửa schedules.ts mà CR-07 cũng sửa; CR-07 chỉ biết ở publish, phút
+  // cuối, helper lấy bản của main không qua worker. Main đổi thì helper tìm các worker đang ghi có file vừa bị item khác
+  // đổi với nội dung khác (mainOverlap) và đưa root một lời nhắn notify_worker, mỗi tập file một lần, lúc worker còn giờ
+  // tự xử lý. Gọi ở nhịp poller; chỉ chạy khi đỉnh main khác lần trước.
+  async watchMainOverlap() {
+    const r = this.rt;
+    if (r.session.phase !== 'GAME' || !r.session.paths?.checkoutRoot || this.watchingMain) return [];
+    this.watchingMain = true;
+    try {
+      const head = await revParse(r.session.paths.checkoutRoot).catch(() => null);
+      if (!head || head === this.mainSeen) return [];
+      this.mainSeen = head;
+      const noticed = [];
+      for (const [key, ji] of Object.entries(r.journal?.data.items ?? {})) {
+        if (ji.workerState !== 'writing' || ji.endedAt || ji.receipt || !ji.worktreeBase || ji.worktreeBase === head) continue;
+        const paths = await this.mainOverlap(key).catch(() => []);   // đường dẫn từ gốc repo
+        const mark = paths.join('|');
+        if (!paths.length || ji.mainOverlapNotice?.mark === mark) continue;
+        const folder = `${r.session.descriptor.matchId}/`;
+        const log = await git(['log', '--format=%s', `${ji.worktreeBase}..${head}`, '--', ...paths], { cwd: r.session.paths.checkoutRoot, allowFail: true });
+        const from = [...new Set((log.out ?? '').split(/\r?\n/).map(s => s.match(/^((?:TASK|BUG|CR|PI)-\d+):/)?.[1]).filter(Boolean))];
+        const files = paths.map(p => (p.startsWith(folder) ? p.slice(folder.length) : p));
+        ji.mainOverlapNotice = { files, from, head, mark, at: new Date().toISOString() };
+        noticed.push(key);
+      }
+      if (noticed.length) r.journal.save();
+      return noticed;
+    } finally { this.watchingMain = false; }
+  }
+  mainOverlapFollowup(notice) {
+    const who = notice.from?.length ? notice.from.join(', ') : 'Another item';
+    return `${who} reached main with changes to files you also change: ${notice.files.slice(0, 6).join(', ')}. Where both of you edited the same existing lines, the sync at ready_for_evidence stops at a conflict, and in the item's last minutes main's version replaces yours. Check now, while you have time: if main has the same fix as yours, take main's version (git checkout ${String(notice.head).slice(0, 12)} -- <file>, then put back only your other changes in that file); if yours is different, keep it, preferably on new lines. Then go on with your work; do not call ready_for_evidence early for this.`;
+  }
+  // submit.json hợp schema cho bài nộp sát giờ: status chưa xong thành PARTIAL, trường bắt buộc còn thiếu điền rỗng.
+  fillSubmit(key, paths) {
+    const r = this.rt, file = join(paths.matchRoot, 'answers', key, 'submit.json');
+    const template = r.itemTemplate(key), schema = r.itemSchema(key);
+    let submit = null;
+    try { submit = JSON.parse(readFileSync(file, 'utf8')); } catch { /* chưa có hay hỏng */ }
+    const before = JSON.stringify(submit);
+    if (!submit || typeof submit !== 'object' || Array.isArray(submit)) submit = structuredClone(template ?? null);
+    if (!submit || typeof submit !== 'object') return [];
+    const allowed = schema?.properties?.status?.enum ?? ['DONE', 'PARTIAL', 'BLOCKED'];
+    if (!allowed.includes(submit.status)) submit.status = allowed.includes('PARTIAL') ? 'PARTIAL' : allowed[0];
+    const out = schema ? fillRequired(submit, schema, template) : { value: submit, filled: [] };
+    if (JSON.stringify(out.value) !== before) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileAtomic(file, `${JSON.stringify(out.value, null, 2)}\n`);
+    }
+    return out.filled;
+  }
+  // Các dòng kịch bản của submit.json thành dòng verification của fix-result.
+  submitRows(key, paths) {
+    let submit;
+    try { submit = JSON.parse(readFileSync(join(paths.matchRoot, 'answers', key, 'submit.json'), 'utf8')); } catch { return []; }
+    return (Array.isArray(submit?.testResults) ? submit.testResults : []).filter(t => t?.id).map(t => ({ check: String(t.id), command: null,
+      result: ROW_RESULT[String(t.result ?? '').toLowerCase()] ?? 'not_run', note: String(t.note ?? 'from submit.json at the deadline handoff').slice(0, 1000) }));
+  }
   // Đối số spawn_agent đúng như root cần gọi: tên task, model của bậc đầu, và một câu trỏ tới brief.
   spawnArgs(key, out) {
     const m = out.triage?.models?.fixer?.[0] ?? null;
@@ -445,8 +594,35 @@ export class Workflow {
     const list = await this.inFlightOverlap(key).catch(() => null);
     if (!list) return null;
     this.item(key).overlap = { list: list.slice(0, 20), at: new Date().toISOString() };
+    await this.notePeerReady(key, list).catch(() => {});
     this.rt.journal.save();
     return list;
+  }
+  // Item `key` vừa tới ready_for_evidence (bản sửa đã xong, vừa sync main) mà item đang làm khác cùng sửa dòng có sẵn của
+  // một file: báo worker kia (notify_worker, peer_ready) bản của `key` nằm đâu, để nó lấy nếu là cùng một bản sửa, khỏi
+  // hai bản cùng sửa một chỗ rồi xung đột lúc lên main. Đề không nêu tên nhau nên cơ chế sharedFix không chạy; helper không
+  // tự chép vì file đó còn có thay đổi riêng của worker kia. Chỉ tính file mà cả hai cùng sửa/xoá dòng có sẵn (thêm dòng
+  // thì additiveMerge tự gộp).
+  async notePeerReady(key, list) {
+    const r = this.rt, items = r.journal?.data.items ?? {}, folder = `${r.session.descriptor.matchId}/`;
+    const byPeer = new Map();
+    for (const { file, items: peers } of list) for (const p of peers) byPeer.set(p, [...(byPeer.get(p) ?? []), file]);
+    for (const [peer, files] of byPeer) {
+      const pj = items[peer];
+      if (!pj || pj.workerState !== 'writing' || !pj.worktreeBase) continue;
+      const both = [];
+      for (const f of files) {
+        const mine = await editsExisting(r.wtPaths(key).worktreeRoot, this.item(key).worktreeBase, `${folder}${f}`);
+        const theirs = mine && await editsExisting(r.wtPaths(peer).worktreeRoot, pj.worktreeBase, `${folder}${f}`);
+        if (mine && theirs) both.push(f);
+      }
+      const mark = `${key}|${both.join('|')}`;
+      if (!both.length || pj.peerNotice?.mark === mark) continue;
+      pj.peerNotice = { from: key, files: both, matchRoot: r.wtPaths(key).matchRoot, mark, at: new Date().toISOString() };
+    }
+  }
+  peerFollowup(notice) {
+    return `${notice.from} (still in work) has finished its change to existing lines of files you also change: ${notice.files.slice(0, 6).join(', ')}. If your edit there is the same fix, take ${notice.from}'s version instead of keeping two: compare with git diff --no-index -- <your file> "${notice.matchRoot}/<file>", copy what is the same fix and keep your own other changes; never edit ${notice.from}'s files. If your change there is different, keep it. When ${notice.from} reaches main first, a conflict on those lines goes to main's version in the last minutes. Then go on with your work.`;
   }
   scenarioIds(key) {
     const rows = this.rt.itemTemplate(key)?.testResults;
@@ -458,6 +634,10 @@ export class Workflow {
     for (const act of result?.nextActions ?? []) {
       if (act.action === 'spawn_worker') { this.item(act.key).spawnOfferedAt = new Date().toISOString(); changed = true; continue; }
       if (act.action === 'interrupt_worker') { this.item(act.key).interruptOfferedAt = new Date().toISOString(); changed = true; }
+      if (act.action === 'notify_worker') {
+        const notice = act.reason === 'peer_ready' ? this.item(act.key).peerNotice : this.item(act.key).mainOverlapNotice;
+        if (notice) { notice.offeredAt = new Date().toISOString(); changed = true; }
+      }
     }
     if (changed) this.rt.journal.save();
     return result;
@@ -682,15 +862,68 @@ export class Workflow {
       if (tests.length) problems.push(`issued tests changed: ${tests.join(', ')}; graders restore every issued test file before they run the suite, so this edit is discarded and the original assertions decide. Restore it (git checkout ${ji.worktreeBase.slice(0, 12)} -- <file>), make the product (code, migration, data) satisfy the original assertions and put new cases in a new test file`);
       const browser = await this.browserTests(paths.worktreeRoot, ji.worktreeBase, folder, changed);
       if (browser.length) problems.push(`test launches a browser: ${browser.join(', ')}; graders run the whole suite where no browser is installed, so the file errors and the suite exits 1 although no test fails. Test the logic without a browser (render the component or compute the CSS in node/jsdom) and keep browser checks as evidence scripts under answers/${key}/evidence/`);
-      // Test mới của chính item fail ở lần run_checks cuối: grader chạy test của đội trên revision nộp (OMZJW0S0 CR-07:
-      // cr-07-official.test.ts ghi tay expected -142000000, chuẩn ra -182000000, mất 4 điểm team-tests).
-      const added = changed.filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && TEST_FILE.test(f.path))
-        .map(f => basename(f.path));
-      const suite = (readChecks(r.session.paths.teamWork, key)?.results ?? []).find(c => c.name === 'test');
-      const ownFailing = (suite?.failing ?? []).filter(id => added.some(name => String(id).replace(/\\/g, '/').split(' > ')[0].split('/').pop() === name));
-      if (ownFailing.length) problems.push(`your own new tests fail in the last run_checks: ${ownFailing.slice(0, 5).join('; ')}. Graders run the team's tests on the submitted revision: fix the test (expected values derived from the item or the company standard, not typed by hand) or the code, or leave the test out until what it needs is in your worktree; then run_checks again`);
+      // Test mới của item fail hay chưa chạy xong trên source hiện tại: ownTestGate (trước composeResult).
     }
     return { problems, warnings };
+  }
+  // Kiểm an toàn (không đọc hồ sơ đề): test mới của item chỉ lên main khi đã xanh trên đúng source bàn giao. Grader
+  // chạy test của đội trên commit của mọi item nộp sau (OMZJW0S0 CR-07: expected ghi tay sai, −4; BQCK4MQX CR-07: lần
+  // run_checks cuối bị huỷ lúc bàn giao, cổng cũ không có kết quả để đọc, cr-07-replay.test.ts đỏ lên main, BUG-11,
+  // CR-05, BUG-12, CR-08 mất 15 điểm team-tests). Còn giờ: từ chối một lần cho mỗi trạng thái, đưa đúng lệnh chạy các
+  // file đó. Hết giờ hay lần thứ hai: chuyển các file đỏ/chưa rõ sang answers/<ID>/evidence/unshipped-tests/, code sản
+  // phẩm vẫn lên. Item mà grader chấm chính bộ test (detection, vd TASK-08) không bị chuyển: chỉ cảnh báo.
+  async ownTestGate(key, { outOfTime = false } = {}) {
+    const r = this.rt, ji = this.item(key), teamWork = r.session?.paths?.teamWork;
+    if (!teamWork || !r.liveWorktree(key) || !ji.worktreeBase || ji.verificationKind === 'answer_only') return null;
+    const paths = this.paths(key), folder = `${r.session.descriptor.matchId}/`;
+    const changed = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => null);
+    const added = (changed ?? []).filter(f => f.status === 'A' && f.path.startsWith(folder) && !f.path.startsWith(`${folder}answers/`) && RUNNABLE_TEST.test(f.path))
+      .map(f => f.path.slice(folder.length));
+    if (!added.length) return null;
+    const source = (await this.snapshot(key, paths).catch(() => null))?.source;
+    if (!source) return null;
+    const verdicts = ownTestVerdicts(added, readTestRuns(teamWork, key).filter(x => x.source === source && samePath(x.matchRoot, paths.matchRoot)));
+    const failing = added.filter(f => verdicts[f] === 'fail'), unknown = added.filter(f => !verdicts[f]);
+    if (!failing.length && !unknown.length) return null;
+    const left = this.minutesToReturn(key);
+    const mark = `${source}|${failing.join(',')}|${unknown.join(',')}`;
+    const appRoot = detectProfile(paths.matchRoot).root ?? paths.matchRoot;
+    const testFiles = [...failing, ...unknown].map(f => relative(appRoot, join(paths.matchRoot, f)).replaceAll('\\', '/')).filter(f => !f.startsWith('..'));
+    const run = `run_checks ${JSON.stringify({ checks: ['test'], testFiles })}`;
+    if (!outOfTime && (left === null || left >= OWN_TEST_MINUTES) && ji.ownTestsAsked !== mark) {
+      ji.ownTestsAsked = mark;
+      r.journal.save();
+      const live = readChecks(teamWork, key);
+      const runningNow = live?.state === 'running' && (live.checks ?? []).includes('test') && live.startSnapshot?.source === source;
+      const parts = [];
+      if (failing.length) parts.push(`your own new tests fail on your current source: ${failing.join(', ')}. Fix the test (expected values derived from the item or the company standard, not typed by hand) or the code`);
+      if (unknown.length) parts.push(runningNow
+        ? `the test run on your current source has not finished yet (${unknown.join(', ')} not reported): wait for it, run_checks {action: "status", waitSeconds: 110}`
+        : `no finished test run on your current source covers your new tests ${unknown.join(', ')} (the last one was cancelled, or you changed source after it)`);
+      return { problem: `${parts.join('; ')}. Graders run the team's tests on the commit of every item submitted after yours, so a red test on main costs them points. Run ${run} (only these files, seconds), then call candidate again. A test that is still red or unrun on the next handoff is left out of the commit and kept under answers/${key}/evidence/unshipped-tests/` };
+    }
+    const parkable = [...failing, ...unknown];
+    if (this.gradingRules(key).detection) {
+      return { warning: `your own new tests are ${failing.length ? `red (${failing.join(', ')})` : ''}${failing.length && unknown.length ? ' and ' : ''}${unknown.length ? `unrun on this source (${unknown.join(', ')})` : ''}: graders score this item's suite itself, so they stay in the commit` };
+    }
+    const moved = this.parkTests(key, parkable);
+    return moved.length ? { parked: moved, warning: `your new tests ${moved.join(', ')} were ${failing.length ? 'red' : ''}${failing.length && unknown.length ? ' or ' : ''}${unknown.length ? 'not run' : ''} on your final source: the helper moved them to answers/${key}/evidence/unshipped-tests/ so they do not fail the suite of every later item. Your product changes ship; say in the engineering record that these tests are not in this revision` } : null;
+  }
+  // Chuyển test mới (đường dẫn trong thư mục trận) sang answers/<ID>/evidence/unshipped-tests/, vẫn là bằng chứng.
+  parkTests(key, rels) {
+    const ji = this.item(key), paths = this.paths(key);
+    const dir = join(paths.matchRoot, 'answers', key, 'evidence', 'unshipped-tests');
+    const moved = [];
+    for (const rel of rels) {
+      const src = join(paths.matchRoot, rel);
+      if (!existsSync(src)) continue;
+      mkdirSync(dir, { recursive: true });
+      copyFileSync(src, join(dir, rel.replace(/[\\/]/g, '__')));
+      rmSync(src, { force: true });
+      moved.push(rel);
+    }
+    if (moved.length) { ji.unshippedTests = [...new Set([...(ji.unshippedTests ?? []), ...moved])]; this.rt.journal.save(); }
+    return moved;
   }
   // Test thêm/sửa của item (ngoài answers/) mở trình duyệt, khi bộ test phát ra chưa có file nào làm vậy (bộ test
   // vốn là e2e thì môi trường chấm có trình duyệt).
@@ -894,18 +1127,11 @@ export class Workflow {
     const tests = own.filter(f => f.status === 'A' && TEST_FILE.test(f.path));
     const product = own.filter(f => !TEST_FILE.test(f.path) && !TEST_CONFIG.test(f.path));
     if (!tests.length || product.length) return [];
-    const dir = join(paths.matchRoot, 'answers', key, 'evidence', 'unshipped-tests');
-    mkdirSync(dir, { recursive: true });
-    const moved = [];
-    for (const f of tests) {
-      const rel = f.path.slice(folder.length), src = join(paths.matchRoot, rel);
-      if (!existsSync(src)) continue;
-      copyFileSync(src, join(dir, rel.replace(/[\\/]/g, '__')));
-      rmSync(src, { force: true });
-      moved.push(rel);
-    }
-    if (moved.length) { ji.unshippedTests = moved; this.rt.journal.save(); }
-    return moved;
+    // Bản sửa của item đã lên main qua một item chờ nó (sharedFix, item đó integrate trước), rồi item sync nên diff chỉ
+    // còn test: test vẫn có bản sửa đi kèm (BQCK4MQX CR-05: month-close.ts lên main qua CR-08 lúc 09:51, CR-05 sync lúc
+    // 09:57 và mất cả 3 file test mới).
+    if (this.echoedFiles(key).size) return [];
+    return this.parkTests(key, tests.map(f => f.path.slice(folder.length)));
   }
   // Lần tra log hàng loạt (log_lookup) của item mà worker chưa nhận kết quả. LXRMBRA2 PI-03: 320 truy vấn mất 452 s
   // (Company Tools chậm, PI-02 tra cùng lúc); worker bàn giao lúc job còn chạy, job xong 36 s sau, lượt làm lại sau
@@ -1058,15 +1284,22 @@ export class Workflow {
     }
     const caught = await this.baselineCatchUp(key);
     const parked = await this.parkRedOnlyTests(key).catch(() => []);
+    // Test mới chưa xanh trên source này: từ chối một lần khi còn giờ, không thì chuyển khỏi commit (trước composeResult
+    // để fix-result không kể các file đó). Vừa sync bản sửa baseline thì lời nhắc baseline đã đòi chạy lại chính các
+    // test này (baselineRerun).
+    const ownTests = caught?.synced ? null : await this.ownTestGate(key).catch(() => null);
     const composed = args.result !== undefined ? await this.composeResult(key, args.result) : null;
     if (composed?.problems) {
-      return { key, phase: 'candidate', handedOff: false, writesAllowed: true, problems: composed.problems, warnings: [],
+      // Lời nhắc của ownTestGate đã được tính là "đã hỏi": phải tới tay worker trong chính lần từ chối này.
+      return { key, phase: 'candidate', handedOff: false, writesAllowed: true, problems: [...composed.problems, ...(ownTests?.problem ? [ownTests.problem] : [])], warnings: [],
         hint: 'Not handed off: correct the result argument and call worker_checkpoint candidate again (nothing was written).' };
     }
     const { problems, warnings } = await this.handoffCheck(key);
+    if (ownTests?.problem) problems.push(ownTests.problem);
     const overlap = await this.inFlightOverlap(key).catch(() => []);
     if (overlap.length) warnings.push(`other items in work change the same files right now: ${overlapText(overlap)}. Whichever reaches main second merges only added lines by itself; an edited or reordered existing line there stops its publish at a sync conflict`);
     if (composed?.file) warnings.unshift(...composed.warnings, `helper wrote ${basename(composed.file)} from your result`);
+    if (ownTests?.warning) warnings.unshift(ownTests.warning);
     if (parked.length) {
       warnings.unshift(`no product change came with your new tests (${parked.join(', ')}): they reproduce a defect this handoff does not fix, so they would fail every later commit's suite. The helper moved them to answers/${key}/evidence/unshipped-tests/; say in the engineering record that the fix is not in this revision`);
     }
@@ -1123,6 +1356,7 @@ export class Workflow {
     const close = () => { const c = ji.phaseClock; if (c?.name && c.name !== 'waiting') this.metric(key, c.name, c.since); };
     if (phase === 'resume') {
       if (this.publishOwner === key || ji.integratePlan) fail('WORKTREE_BUSY', 'complete the pending publish/integration before resuming this worker');
+      if (ji.deadlineHandoff?.state === 'handed_off') fail('ITEM_HANDED_OFF', `the helper handed ${key} off at the deadline and is submitting it: stop and change nothing in the worktree`);
       ji.workerState = 'writing';
       if (!ji.phaseClock || ji.phaseClock.name === 'waiting') ji.phaseClock = { name: ji.phaseClock ? 'handoff' : 'code_test', since: now };
       if (ji.question?.at) this.metric(key, 'blocked', Date.parse(ji.question.at));
@@ -1194,7 +1428,11 @@ export class Workflow {
     if (!r.liveWorktree(key)) return yielded;
     let synced;
     const hadBaseline = ji.baselineFixIn;
-    try {
+    // Source trước sync và base cũ: sau sync chỉ chạy lại test liên quan khi cả bộ đã xanh trên source này (postSyncTests).
+    const preSource = (await this.snapshot(key).catch(() => null))?.source ?? null, oldBase = ji.worktreeBase;
+    const skip = await this.syncSkippable(key).catch(() => null);
+    if (skip) synced = { synced: false, skipped: skip };
+    else try {
       stopApp(r.teamWorkspace, key);
       synced = await r.worktree({ action: 'sync', backlogItemKey: key });
     } catch (e) {
@@ -1218,13 +1456,18 @@ export class Workflow {
       const resumed = this.checkpoint({ backlogItemKey: key, phase: 'resume', threadId: ji.workerThread ?? null, internal: true });
       if (received) { received.notified = true; r.journal.save(); }
       const receivedNote = received ? ` ${received.from}'s product fix is in your worktree (copied ${received.at}: ${received.files.slice(0, 6).join(', ')}): rerun your replay and everything that depends on it before candidate.` : '';
-      const checks = await this.startChecks(key);
+      const selected = synced.synced && rerun === undefined ? await this.postSyncTests(key, oldBase, preSource).catch(() => null) : null;
+      const checks = await this.startChecks(key, { testFiles: selected });
       const shared = this.sharedNote(this.neededBy(key).length ? await this.shareWithDependents(key).catch(() => []) : []);
-      return { ...resumed, synced: { synced: synced.synced, baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
+      const what = selected ? `typecheck, build and ${selected.length ? `only the tests this sync can affect (${selected.length} file${selected.length === 1 ? '' : 's'}: your new tests and the tests the merged items added or changed; your full suite already passed before the sync)` : 'no tests (your full suite already passed before the sync and it brought no tests)'}` : 'typecheck, build, full suite';
+      const head = synced.skipped
+        ? `Main has no change to your files and nothing you wait for landed, so the helper did not sync (your commit goes onto main at publish); it resumed you`
+        : 'Helper synced this worktree to main and resumed you';
+      return { ...resumed, synced: { synced: synced.synced, ...(synced.skipped ? { skipped: synced.skipped } : {}), baseRevision: synced.baseRevision, changedFiles: synced.changedFiles ?? 0 },
         ...(checks ? { checks } : {}),
         hint: (checks
-          ? `Helper synced this worktree to main, resumed you and started run_checks (typecheck, build, full suite) on the synced source: no message to root needed. Call app start now: it waits only for that run's build and reuses it. Capture final evidence, then call run_checks {action: "status", waitSeconds: 110} for typecheck and the full suite before candidate (fix and run again only on a failure).${baseline}`
-          : `Helper synced this worktree to main and resumed you: no message to root needed. Start the app again, then capture final evidence.${baseline}`) + screensNote + shared + receivedNote };
+          ? `${head} and started run_checks (${what}) on this source: no message to root needed. Call app start now: it waits only for that run's build and reuses it. Capture final evidence, then call run_checks {action: "status", waitSeconds: 110} for the result before candidate (fix and run again only on a failure).${baseline}`
+          : `${head}: no message to root needed. Start the app again, then capture final evidence.${baseline}`) + screensNote + shared + receivedNote };
     } catch (e) {
       return { ...yielded, synced, hint: `${e.code}: stay yielded and end your turn; root gets sync_before_evidence from the helper and sends a followup to resume.` };
     }
@@ -1232,15 +1475,49 @@ export class Workflow {
   // 08OQBPW8: worker chạy run_checks 3–4 lần, có lần trước sync rồi lại sau sync, và chụp evidence trên app tự build
   // trước khi run_checks build lần nữa. Sau sync là source cuối cùng: helper chạy luôn một lần ở đây (không đợi một
   // lượt model), app start chờ build đó rồi dùng lại. Tắt: "autoChecks": false trong runtime.json.
-  async startChecks(key) {
+  async startChecks(key, { testFiles = null } = {}) {
     const r = this.rt;
     if (r.runtimeConfig().autoChecks === false || !r.liveWorktree(key)) return null;
     try {
-      const res = await r.runChecks({ backlogItemKey: key, matchRoot: r.wtPaths(key).matchRoot, waitSeconds: 0 });
+      const pick = testFiles ? (testFiles.length ? { checks: ['typecheck', 'build', 'test'], testFiles } : { checks: ['typecheck', 'build'] }) : {};
+      const res = await r.runChecks({ backlogItemKey: key, matchRoot: r.wtPaths(key).matchRoot, waitSeconds: 0, ...pick });
       return { state: res.state, runId: res.runId ?? null, ...(res.cached ? { cached: true } : {}) };
     } catch (e) {
       return null;   // stack không có app hay profile: worker tự chạy như trước
     }
+  }
+  // Item độc lập không cần sync ở ready_for_evidence (BQCK4MQX TASK-08: sync kéo code 8 item vào, cả bộ test chạy lại
+  // 10 phút, kéo theo test đỏ của CR-07): main không đổi file nào item sửa, không có item phụ thuộc hay chờ nó, không
+  // dính bản sửa baseline. Commit của item vẫn lên main bằng cherry-pick lúc publish. Tắt: "skipIndependentSync": false.
+  async syncSkippable(key) {
+    const r = this.rt, ji = this.item(key);
+    if (r.runtimeConfig().skipIndependentSync === false || !ji.worktreeBase) return null;
+    const head = await revParse(r.session.paths.checkoutRoot).catch(() => null);
+    if (!head || head === ji.worktreeBase) return null;   // main không đổi: sync là no-op
+    if (ji.dependsOn?.length || this.neededBy(key).length || this.baselineApplies(key) || this.dependencyLanded(key)) return null;
+    if ((await this.mainOverlap(key)).length) return null;
+    // Main đổi một file item cũng sửa, kể cả cùng nội dung (bản chép): để sync xử lý.
+    const own = (await productChanges(r.wtPaths(key).worktreeRoot, ji.worktreeBase, r.session.descriptor.matchId, isProduct)).map(f => f.path);
+    if (own.length && (await this.changedPaths(ji.worktreeBase, head, own)).length) return null;
+    return 'independent';
+  }
+  // Sau sync: cả bộ test đã xanh trên source trước sync thì chỉ chạy lại test của item và test các item vừa vào thêm/đổi
+  // (BQCK4MQX TASK-08: lần chạy cả bộ sau sync mất 10 phút trên máy đang tải, chỉ để thấy test đỏ của CR-07). Trả danh
+  // sách file (tương đối app root, có thể rỗng) hay null khi phải chạy cả bộ.
+  async postSyncTests(key, oldBase, preSource) {
+    const r = this.rt, ji = this.item(key), teamWork = r.session.paths.teamWork, paths = this.paths(key);
+    if (!preSource || !oldBase || !ji.worktreeBase || oldBase === ji.worktreeBase) return null;
+    const passed = readTestRuns(teamWork, key).some(x => x.source === preSource && !x.testFiles && x.state === 'passed' && samePath(x.matchRoot, paths.matchRoot));
+    if (!passed) return null;
+    const folder = `${r.session.descriptor.matchId}/`;
+    const incoming = await git(['diff', '--name-only', '--diff-filter=AM', oldBase, ji.worktreeBase, '--', folder], { cwd: paths.worktreeRoot, allowFail: true });
+    const own = await changedFiles(paths.worktreeRoot, ji.worktreeBase).catch(() => []);
+    const files = [...new Set([...(incoming.out ?? '').split(/\r?\n/), ...own.filter(f => f.status === 'A').map(f => f.path)])]
+      .filter(p => p.startsWith(folder) && !p.startsWith(`${folder}answers/`) && RUNNABLE_TEST.test(p));
+    const appRoot = detectProfile(paths.matchRoot).root;
+    if (!appRoot) return null;
+    const rel = files.map(p => relative(appRoot, join(paths.worktreeRoot, p)).replaceAll('\\', '/')).filter(p => p && !p.startsWith('..') && existsSync(join(appRoot, p)));
+    return rel.length > MAX_TEST_FILES ? null : rel;
   }
   // ---------------------------------------------------------------- test fail sẵn ở bản phát (baseline)
   // EIOR38SI: grader chạy cả bộ test trên commit nộp của từng item, sau khi khôi phục test gốc. BUG-02 lên main lúc
@@ -1542,7 +1819,15 @@ export class Workflow {
         if (ji.publishedRevision && ji.publishedCandidateId === candidateId) {
           step('submit'); return await r.submitWork({ backlogItemKey: key, gitRevision: ji.publishedRevision, lastChance });
         }
-        let c = await this.assertCandidate(key);
+        let c;
+        try { c = await this.assertCandidate(key); } catch (e) {
+          // Cuối giờ, worktree đổi sau bàn giao (worker còn ghi khi helper bàn giao thay nó, deadlineHandoff): lập lại
+          // candidate từ cùng fix-result trên worktree như hiện có rồi nộp, thay vì để item đóng khi chưa nộp.
+          if (e.code !== 'CANDIDATE_STALE' || !lastCallOf(r.itemRows().find(x => x.key === key)) || !ji.candidate?.fixResultFile) throw e;
+          await this.preflight({ backlogItemKey: key, fixResultFile: ji.candidate.fixResultFile });
+          c = await this.assertCandidate(key);
+          warnings = [...warnings, 'last call: the worktree changed after the handoff; the helper recorded it as it is now and submits that'];
+        }
         step('verification'); r.recordVerification(key);
         if (!ji.integratedRevision || ji.integratedCandidateId !== c.id) {
           // Main đổi ở file khác thì integrate luôn; chỉ khi cả hai cùng sửa một file mới phải sync và làm lại evidence
@@ -1653,7 +1938,7 @@ export class Workflow {
       if (r.jobs.jobs.get(ji.publishJobId)?.state === 'running' || this.autoPublishing.has(key)) continue;
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
-      if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
+      if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, target: targetOf(ji), returnBy, followup: STOP_FOLLOWUP }); continue; }
       // Đã bàn giao, rồi item mà đề nhắc tới mới lên main: giữ publish, worker sync và chạy lại replay (~1 phút), kể cả
       // trong cửa sổ cơ hội cuối khi còn ≥ DEPENDENCY_REFRESH_MINUTES. Ít hơn thì nộp như đang có (khối dưới).
       // Bản sửa của item mình chờ vừa được chép tới sau khi đã bàn giao: giữ publish, worker chạy lại replay.
@@ -1676,7 +1961,7 @@ export class Workflow {
       if (ji.startedAt && lastCallOf(row)) {
         // Cuối giờ: worker bàn giao ngay rồi nộp những gì đang có.
         const extra = { lastCall: true, minutesLeft: row.minutesLeft };
-        if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
+        if (ji.workerState === 'writing') { add(key, 'stop_worker', {}, { ...extra, workerThread: ji.workerThread ?? null, target: targetOf(ji), returnBy, followup: STOP_FOLLOWUP }); continue; }
         if (c && c.state !== 'stale') {
           if (!freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id }, extra);
           continue;
@@ -1691,6 +1976,18 @@ export class Workflow {
         continue;
       }
       if (ji.question) { add(key, 'answer_worker', {}, { question: ji.question.text, askedAt: ji.question.at, workerThread: ji.workerThread ?? null }); continue; }
+      // Main vừa đổi file worker đang sửa (watchMainOverlap): báo một lần khi còn giờ; phút cuối helper tự lấy bản main.
+      const notice = ji.mainOverlapNotice;
+      if (notice && !notice.offeredAt && ji.workerState === 'writing' && !lastCallOf(row) && this.dependencyRefreshFits(key)) {
+        add(key, 'notify_worker', {}, { reason: 'main_overlap', files: notice.files, from: notice.from, workerThread: ji.workerThread ?? null, followup: this.mainOverlapFollowup(notice) });
+      }
+      // Item đang làm khác vừa xong bản sửa ở cùng dòng có sẵn của file này (notePeerReady). Main đã có bản đó thì lời
+      // nhắn main_overlap ở trên thay nó.
+      const peer = ji.peerNotice;
+      if (peer && !peer.offeredAt && ji.workerState === 'writing' && !lastCallOf(row) && this.dependencyRefreshFits(key)
+        && !(notice && !notice.offeredAt) && !items[peer.from]?.integratedAt) {
+        add(key, 'notify_worker', {}, { reason: 'peer_ready', files: peer.files, from: [peer.from], workerThread: ji.workerThread ?? null, followup: this.peerFollowup(peer) });
+      }
       if (ji.checkpoint === 'ready_for_evidence' && ji.workerState === 'yielded') { add(key, 'sync_before_evidence'); continue; }
       // Bản sửa baseline vừa được helper sync vào worktree đã bàn giao: worker chạy lại cả bộ test rồi bàn giao bản mới
       // (cuối giờ thì nộp luôn bản đang có, mã đã có bản sửa). Chưa có bản sửa trên main thì giữ publish.
@@ -1710,7 +2007,10 @@ export class Workflow {
     // không còn điểm nào để lấy. Root ngắt lượt đang chạy bằng interrupt_agent, một lần (yêu cầu của user sau CUZ7KL95).
     for (const [key, ji] of Object.entries(items)) {
       if ((ji.endedAt || ji.receipt) && ji.workerState === 'writing' && ji.workerThread && !ji.interruptOfferedAt) {
-        add(key, 'interrupt_worker', {}, { workerThread: ji.workerThread, target: String(ji.workerThread).split('/').pop(), reason: ji.receipt ? 'submitted' : 'closed' });
+        add(key, 'interrupt_worker', {}, { workerThread: ji.workerThread, target: targetOf(ji), reason: ji.receipt ? 'submitted' : 'closed' });
+      } else if (ji.deadlineHandoff?.state === 'handed_off' && ji.workerThread && !ji.interruptOfferedAt && !ji.endedAt && !ji.receipt) {
+        // Helper vừa bàn giao thay worker sát giờ đóng: worker có thể còn ghi vào worktree đang được nộp.
+        add(key, 'interrupt_worker', {}, { workerThread: ji.workerThread, target: targetOf(ji), reason: 'handed_off_by_helper' });
       }
     }
     for (const u of fresh) {

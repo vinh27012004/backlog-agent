@@ -2014,6 +2014,10 @@ export class Runtime {
         this.workflow.autoPrepare();
         // Bản sửa baseline chủ vừa báo: commit lên main, rồi sync worktree đã bàn giao còn thiếu nó.
         this.workflow.autoBaseline();
+        // Sát giờ đóng mà worker chưa bàn giao: helper bàn giao thay (rồi tự publish khi xong).
+        this.workflow.autoHandoff();
+        // Main vừa đổi file một worker đang sửa: ghi lời nhắn notify_worker cho root (chỉ khi đỉnh main đổi).
+        this.workflow.watchMainOverlap().catch(() => {});
         // E: PI, answer-only vừa bàn giao thì helper tự publish.
         this.workflow.autoPublish();
       } catch (error) {

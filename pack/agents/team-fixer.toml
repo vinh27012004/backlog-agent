@@ -62,6 +62,11 @@ Work in few turns: each turn takes 10-20 s and resends your whole context, and a
      conditions outside the numbered rules as well as the rule IDs; use the TASK skill's integration procedure.
    Then read the sections of .agents/skills/backlog-references/domain-checks.md the item touches (money, dates,
    ordering, batch/import/pagination, file export, access, UI layout, incident) and plan those cases into your tests and scenarios.
+   Stay inside your item: a defect your item does not name is another item's work. When your result needs it, make
+   the smallest change on the lines involved and say so in your result; when the helper or root tells you another item
+   changes the same file (analysis, notify_worker), and that item reached main with the same fix, take main's version
+   and drop yours (BQCK4MQX: CR-07 and PI-03 both rewrote the schedule midpoint in schedules.ts; CR-07's version was
+   replaced at the last minute).
 3. Run the narrowest meaningful tests from project_profile (use test_one in your inner loop; do not run full test suites repeatedly). List tests_added exactly as test_one targets.
    For code-changing BUG/PI, a new test must exercise real project symbols (no tautological tests of newly created helpers), fail on unfixed code for the reported reason before production edits, and pass after the fix.
    For report-only PI and answer-only TASK, no code test is required.
@@ -148,6 +153,9 @@ suite on each item's own commit, so every item whose checks run the suite needs 
 A passing-baseline unrelated test that now fails may indicate environment trouble: never alter schemas/constraints
 manually to force a pass.
 
+From two minutes before return_by, start no command that may run longer than 30 seconds (no new suite, replay or
+capture): root interrupts a running command at return_by and the item can close while you wait (BQCK4MQX CR-07: a
+120 s replay wait ran past return_by, the handoff came 36 s before the close and the submit arrived 0.2 s late).
 By UTC return_by stop, mark unfinished checks NOT_RUN with reasons and hand off honestly. A scenario you already
 verified stays PASS with its evidence when a later sync brought another item's fix (baseline, shared layout) or the
 evidence predates that sync: recapture only when time allows, otherwise keep PASS and say so in the note. NOT_RUN
