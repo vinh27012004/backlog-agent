@@ -263,7 +263,7 @@ export function environmentText(setup, mainAppRoot = null) {
 }
 
 export class Workflow {
-  constructor(runtime) { this.rt = runtime; this.publishOwner = null; }
+  constructor(runtime) { this.rt = runtime; this.publishOwner = null; this.autoPublishing = new Set(); }
   item(key) {
     this.rt.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
@@ -403,7 +403,10 @@ export class Workflow {
     const ji = this.item(a.key);
     ji.autoPublished = this.publishMark(a);
     r.journal.save();
-    this.publish({ ...a.arguments, waitSeconds: 0 }).catch(e => {
+    // Từ đây tới lúc job publish bắt đầu (preflight) root không được thấy publish_item của item này: CUZ7KL95 root tự gọi
+    // publish_item cho BUG-09, TASK-11, PI-04, BUG-11, mỗi lần một lượt model và một lượt guardian.
+    this.autoPublishing.add(a.key);
+    this.publish({ ...a.arguments, waitSeconds: 0 }).finally(() => this.autoPublishing.delete(a.key)).catch(e => {
       ji.autoPublishError = { code: e.code ?? 'INTERNAL_ERROR', message: String(e.message ?? e).slice(0, 300), at: new Date().toISOString() };
       r.journal.save();
       r.events.push('AUTO_PUBLISH_FAILED', { key: a.key, code: ji.autoPublishError.code });
@@ -603,6 +606,7 @@ export class Workflow {
     let changed = false;
     for (const act of result?.nextActions ?? []) {
       if (act.action === 'spawn_worker') { this.item(act.key).spawnOfferedAt = new Date().toISOString(); changed = true; continue; }
+      if (act.action === 'interrupt_worker') { this.item(act.key).interruptOfferedAt = new Date().toISOString(); changed = true; continue; }
       if (act.action !== 'spawn_analyst') continue;
       const w = this.waves()[act.wave];
       if (!w) continue;
@@ -1799,12 +1803,18 @@ export class Workflow {
               // chúng. Tự sync, giữ bản của đề này ở các file đó, lập lại candidate rồi nộp (DVVFEPXF: CR-08 lên main với bản
               // CR-05 lúc 02:42, CR-05 bàn giao 02:59 và publish hỏng 3 lần SYNC_REQUIRED, root đã hết credit).
               const echo = this.echoedFiles(key);
-              if (!shared.every(p => echo.has(p))) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and hand off a new result before integrate`);
+              const owned = shared.every(p => echo.has(p));
+              // Phút cuối của item: không còn giờ cho một vòng sync qua thợ. Helper tự sync; file còn xung đột lấy bản của
+              // main (mainWins), rồi nộp bản đó kèm cảnh báo, thay vì để item đóng khi chưa nộp (CUZ7KL95 CR-07).
+              const lastCall = lastCallOf(r.itemRows().find(x => x.key === key));
+              if (!owned && !lastCall) fail('SYNC_REQUIRED', `main changed files this item also changes (${shared.slice(0, 5).join(', ')}); sync a yielded worker, refresh evidence and hand off a new result before integrate`);
               step('sync');
-              const synced = await r.worktree({ action: 'sync', backlogItemKey: key, prefer: [...echo], fromPublish: true });
+              const synced = await r.worktree({ action: 'sync', backlogItemKey: key, prefer: [...echo], fromPublish: true, mainWins: !owned });
               await this.preflight({ backlogItemKey: key, fixResultFile: c.fixResultFile });
               c = await this.assertCandidate(key);
-              warnings = [...warnings, `main already had this item's files through an item that waited for it; the helper synced and kept this item's version of ${(synced.preferred ?? []).join(', ') || 'them'}`];
+              warnings = [...warnings, owned
+                ? `main already had this item's files through an item that waited for it; the helper synced and kept this item's version of ${(synced.preferred ?? []).join(', ') || 'them'}`
+                : `last call: main had changed ${shared.slice(0, 5).join(', ')}; the helper synced without the worker${synced.yielded?.length ? ` and took main's version of ${synced.yielded.join(', ')}` : ''}; checks and evidence are from before that sync`];
             }
           }
           step('integrate'); await r.worktree({ action: 'integrate', backlogItemKey: key, message });
@@ -1885,7 +1895,7 @@ export class Workflow {
       }
       if (ji.endedAt || ji.receipt) continue;
       // Đang publish (root hay helper): chờ job, không có gì để làm.
-      if (r.jobs.jobs.get(ji.publishJobId)?.state === 'running') continue;
+      if (r.jobs.jobs.get(ji.publishJobId)?.state === 'running' || this.autoPublishing.has(key)) continue;
       if (ji.publishedRevision && (!c || ji.submitIntent || ji.publishedCandidateId === c.id)) { add(key, 'submit_work', { gitRevision: ji.publishedRevision }); continue; }
       const returnBy = ji.prepared?.timeBox?.returnBy ?? row.returnBy;
       if (ji.workerState === 'writing' && Date.parse(returnBy) <= Date.now()) { add(key, 'stop_worker', {}, { workerThread: ji.workerThread ?? null, returnBy, followup: STOP_FOLLOWUP }); continue; }
@@ -1940,6 +1950,13 @@ export class Workflow {
       if (this.dependencyHold(key, row)) { held.add(key); continue; }
       if (c?.state === 'stale') { add(key, 'refresh_candidate', {}, { candidateId: c.id, workerThread: ji.workerThread ?? null }); continue; }
       if (c && !freshKeys.has(key)) add(key, 'publish_item', { candidateId: c.id });
+    }
+    // Item đã đóng hay đã nộp mà thợ vẫn đang ghi (không nằm trong suggestedOrder nữa): mỗi lượt của nó tốn credit mà
+    // không còn điểm nào để lấy. Root ngắt lượt đang chạy bằng interrupt_agent, một lần (yêu cầu của user sau CUZ7KL95).
+    for (const [key, ji] of Object.entries(items)) {
+      if ((ji.endedAt || ji.receipt) && ji.workerState === 'writing' && ji.workerThread && !ji.interruptOfferedAt) {
+        add(key, 'interrupt_worker', {}, { workerThread: ji.workerThread, target: String(ji.workerThread).split('/').pop(), reason: ji.receipt ? 'submitted' : 'closed' });
+      }
     }
     for (const u of fresh) {
       if (held.has(u.key) || r.jobs.jobs.get(items[u.key]?.publishJobId)?.state === 'running') continue;

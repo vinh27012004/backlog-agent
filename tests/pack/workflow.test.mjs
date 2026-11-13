@@ -1828,6 +1828,46 @@ test('publish of an item whose file reached main through an item that waited for
   assert.equal(sh('git', ['show', 'origin/main:M1/src/lib.js'], f.checkout), 'export const value=2;', 'the owner\'s final version is on main');
 });
 
+// CUZ7KL95 CR-07: nó và PI-03 cùng sửa một dòng của shared/schedules.ts, PI-03 lên main trước 17 s; ba lần publish dừng
+// ở SYNC_REQUIRED khi item còn 1m45s, item đóng khi chưa nộp (11,9 credit).
+test('in an item\'s last minutes publish syncs by itself, takes main\'s version of a conflicting file and submits', { timeout: 120_000 }, async () => {
+  const f = fixture('CR-07'), bodies = submitted(f);
+  const checkpoint = f.rt.definitions().find(t => t.name === 'worker_checkpoint').handler;
+  f.ji.workerThread = '/root/cr07'; f.ji.workerState = 'writing';
+  writeFileSync(join(f.wt.matchRoot, 'src', 'audit.js'), 'export const audit = 1;\n');
+  await checkpoint({ backlogItemKey: f.key, phase: 'ready_for_evidence', testsAdded: [] });
+  const file = f.result(1);
+  assert.equal((await checkpoint({ backlogItemKey: f.key, phase: 'candidate' })).handedOff, true);
+  // PI-03 sửa cùng dòng của lib.js theo cách khác và lên main trước.
+  writeFileSync(join(f.checkout, 'M1', 'src', 'lib.js'), 'export const value=3;\n');
+  sh('git', ['add', 'M1'], f.checkout); sh('git', ['commit', '-q', '-m', 'PI-03: work'], f.checkout);
+  const early = await publishDone(f, { backlogItemKey: f.key, fixResultFile: file });
+  assert.equal(early.error?.code, 'SYNC_REQUIRED', 'with time left the worker syncs and checks again');
+  const rows = f.rt.itemRows;
+  f.rt.itemRows = () => rows().map(x => ({ ...x, minutesLeft: 1.5 }));
+  const done = await publishDone(f, { backlogItemKey: f.key, fixResultFile: file });
+  assert.equal(done.result?.status, 'SUBMITTED', JSON.stringify(done));
+  assert.ok(done.progress.includes('sync'), JSON.stringify(done.progress));
+  assert.ok(done.result.warnings.some(w => /last call: main had changed M1\/src\/lib\.js; the helper synced without the worker and took main's version of M1\/src\/lib\.js/.test(w)), JSON.stringify(done.result.warnings));
+  assert.equal(bodies.length, 1);
+  assert.equal(sh('git', ['show', 'origin/main:M1/src/lib.js'], f.checkout), 'export const value=3;', 'main keeps the other item\'s line');
+  assert.equal(sh('git', ['show', 'origin/main:M1/src/audit.js'], f.checkout), 'export const audit = 1;', 'the rest of the item is on main');
+});
+
+// Yêu cầu của user sau CUZ7KL95: item đã đóng hay đã nộp mà thợ còn đang ghi thì ngắt thợ để khỏi tốn credit.
+test('a worker still writing after its item closed is offered to root for interrupt_agent, once', () => {
+  const f = fixture('CR-07'), wf = f.rt.workflow;
+  Object.assign(f.ji, { workerThread: '/root/cr07_fixer', workerState: 'writing' });
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'interrupt_worker'), 'the item is still open');
+  Object.assign(f.ji, { endedAt: new Date().toISOString(), outcome: 'CLOSED' });
+  const first = wf.offered(wf.actions()).nextActions.find(a => a.action === 'interrupt_worker');
+  assert.deepEqual([first.key, first.target, first.reason], ['CR-07', 'cr07_fixer', 'closed']);
+  assert.ok(!wf.actions().nextActions.some(a => a.action === 'interrupt_worker'), 'offered once');
+  const g = fixture('BUG-01');
+  Object.assign(g.ji, { workerThread: '/root/bug01_fixer', workerState: 'yielded', endedAt: new Date().toISOString(), outcome: 'SUBMITTED' });
+  assert.ok(!g.rt.workflow.actions().nextActions.some(a => a.action === 'interrupt_worker'), 'a worker that handed off costs nothing');
+});
+
 // DVVFEPXF: worktree checkout cả 14 trận cũ còn trong repo (34 816 file, 6% thuộc trận), prepare giữa trận 49–168 s.
 test('a new worktree checks out only the match folder; changes in it are seen as usual', async () => {
   const f = fixture('BUG-01');

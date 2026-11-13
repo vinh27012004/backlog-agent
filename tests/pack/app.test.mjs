@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { app, appCommand, appsDir, authUrlEnv, stopApp } from '../../pack/src/env/app.mjs';
+import { app, appCommand, appsDir, authUrlEnv, dedicatedAppData, stopApp } from '../../pack/src/env/app.mjs';
 import { install, McpClient, sh, tempDir } from './support.mjs';
 
 // App node nhỏ trong matches/M1/<wt>/src: build ghi built.txt, server trả nội dung đó trên PORT.
@@ -242,6 +242,11 @@ test('custom commands from the README build in their folder, serve with {port}/{
   assert.equal(shared.commandsFrom, 'BUG-09');
   assert.match(shared.hint, /project commands BUG-09 already ran successfully/);
   assert.equal(await body(shared.url), `CR-07 web on ${shared.port}`);
+  // CUZ7KL95: CR-08 chờ khoá app_data chung do CR-05 giữ dù mỗi đề có server và thư mục dữ liệu riêng ({data}).
+  assert.equal(dedicatedAppData(tw, 'BUG-09'), 'app-data/BUG-09', 'its running app keeps its data in {data}');
+  assert.equal(dedicatedAppData(tw, 'CR-07'), 'app-data/CR-07');
+  assert.equal(dedicatedAppData(tw, 'CR-08', other), 'app-data/CR-08', 'not started yet: the commands kept for this app use {data}');
+  assert.equal(dedicatedAppData(tw, 'CR-08'), null, 'nothing known about its app: the shared lock applies');
   stopApp(tw, 'CR-07');
 
   // Start lại không gửi custom: dùng lệnh đã nhớ; build:false bỏ bước build.

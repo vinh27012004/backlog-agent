@@ -283,6 +283,20 @@ export function rememberShared(teamWorkspace, key, matchRoot, custom) {
   return value;
 }
 
+// App của item chạy bằng lệnh riêng có biến môi trường trỏ vào {data} (.team-work/app-data/<ID>): dữ liệu của nó là của
+// riêng item, không cần khoá app_data chung. CUZ7KL95: CR-05 giữ khoá chung 10 phút, CR-08 (server riêng, thư mục dữ
+// liệu riêng) chờ khoá và nộp ba kịch bản NOT_RUN. Xét app đang chạy, lệnh item đã nhớ, rồi lệnh nhớ theo app.
+export function dedicatedAppData(teamWorkspace, key, matchRoot = null) {
+  const own = custom => Object.values(custom?.env ?? {}).some(v => typeof v === 'string' && v.includes('{data}'));
+  const state = readState(teamWorkspace, key);
+  if (state?.custom) return own(state.custom) ? `app-data/${key}` : null;
+  try { if (own(JSON.parse(readFileSync(customFile(teamWorkspace, key), 'utf8')))) return `app-data/${key}`; } catch { /* chưa có lệnh riêng */ }
+  const root = matchRoot ?? state?.matchRoot ?? null;
+  let shared = null;
+  try { shared = root ? sharedCommands(teamWorkspace, root) : null; } catch { shared = null; }
+  return shared && own(shared) ? `app-data/${key}` : null;
+}
+
 export function sharedCommands(teamWorkspace, matchRoot) {
   const sign = appSign(matchRoot);
   if (!sign) return null;

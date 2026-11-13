@@ -610,3 +610,21 @@ từng thợ, bundle `runs/judge/33R91I3Q/`, chạy lại typecheck và bộ tes
 | L145 | Sync server của app trả "Too many requests" khi nhiều lần chụp liền nhau (thấy lúc tái hiện L137) | Có thể làm hỏng lần chụp | Chưa sửa |
 | L146 | Đợt 4 (`release-19`): `spawn_analyst` được đưa lại cho root 81 s sau lần đầu vì analyst chưa gọi helper sau 60 s (nó chỉ gọi khi nộp, 45–133 s); chỉ có một thread analyst, root bỏ qua | Một lần đánh thức root vô ích | **Đã** sửa: đưa lại sau 240 s (`ANALYST_QUIET_MS`) |
 | L147 | Điều tra, không sửa: `run_checks` bước test 500–570 s (chạy riêng một mình 172 s, 82% là setup từng file của vitest) vì nhiều tiến trình vitest, build, app chạy chung 12 luồng; prepare 26–30 s ở TASK-11/12, PI-03 trùng lúc máy đang tải; PI-02 chờ 18 s vì root còn đang spawn ba thợ đợt trước; "Too many requests" chỉ thấy khi tôi tự gọi `enterApp` dồn dập, không có trong transcript nào của trận | Không có lỗi helper riêng | Đã đo `vitest related` trên main của trận (13/11): file nguồn ở giữa đồ thị import (`shared/schedules.ts`, `transactions/transfer.ts`) kéo theo cả 99 file test, 169–199 s, bằng cả bộ; chỉ module mới ở lá (`budget/month-close.ts`) còn 6 file, 17 s. Phần lớn đề code của trận sửa các file kiểu đó (ước lượng theo tên file, chỉ đo ba file trên), nên **không làm** |
+
+## #26 · 13/11/2026 · tự luyện `CUZ7KL95` (bộ 14 item, model mặc định, pack ở commit `e6b818a`)
+
+Nộp 13/14, 930 điểm đã nộp; judge 12/14 (33R91I3Q 8/14, DVVFEPXF 12/14). 186 credit (fixer 171,4, analyst 10,8, root
+3,5), hạn mức plus 0% → 97%. Nguồn: journal, transcript root và từng thợ, bundle `runs/judge/CUZ7KL95/`.
+
+Đối chiếu mục #25: `enterApp` qua đủ `setup`/`signin`/`welcome` (CR-05, CR-07); baseline `FAIL` có chủ (TASK-08), không
+`TIMEOUT`; mỗi đợt một analyst, không `retried`; BUG-09 từ 36m30s xuống 9m16s; CR-05, TASK-07, TASK-08 từ trượt sang đạt.
+
+| # | Việc | Hệ quả | Sửa |
+|---|---|---|---|
+| L148 | CR-07 (hạn 15 phút) và PI-03 cùng sửa một dòng của `shared/schedules.ts`; PI-03 lên main 02:08:28, CR-07 bàn giao 02:08:45, ba lần publish dừng ở `SYNC_REQUIRED`, item đóng 02:10:30 | Không nộp, mất 11,9 credit | **Đã** sửa: ở phút cuối của item, publish tự sync; file còn xung đột lấy bản của main (`mainWins`), nộp kèm cảnh báo |
+| L149 | Root (`gpt-6-luna`) nhận `spawn_worker` của đợt 2 lúc 01:55:43 nhưng gọi lại `wait_for_update`/`next_actions` để gom cả đợt; các mục đã đưa bị ẩn 90 s nên tới 01:57:13 mới spawn | PI-02, CR-07, CR-05 bắt đầu muộn 90 s; CR-07 trễ hạn khoảng 1 phút | **Đã** sửa lời dặn root: spawn ngay những gì vừa nhận, không gọi chờ trước. Chưa đổi cơ chế ẩn 90 s |
+| L150 | CR-08 chờ khoá `app_data` chung do CR-05 giữ 10 phút, dù mỗi đề có server và thư mục dữ liệu riêng (`{data}`) | TC-03/04/05 NOT_RUN | **Đã** sửa: `dedicatedAppData`: lệnh riêng dùng `{data}` thì khoá trả `dedicated` ngay |
+| L151 | Root tự gọi `publish_item` cho BUG-09, TASK-11, PI-04, BUG-11: mục này lộ ra trong khoảng helper đang preflight trước khi job publish bắt đầu | Mỗi lần một lượt root và guardian | **Đã** sửa: ẩn trong lúc `autoPublishing` |
+| L152 | BUG/CR code xong trong 5–8 phút rồi chờ `run_checks` 11–17 phút (BUG-11 một lần chạy 11m47s; TASK-08 lần cuối hết giờ 600 s, nộp PARTIAL). Đo trên máy 12 luồng: 1 bộ loot-core 172 s, 2 bộ cùng lúc 263–302 s, 4 bộ cùng lúc 517–534 s | 60–70% thời gian của BUG-11, BUG-12, TASK-08 | Giới hạn số bộ test chạy cùng lúc **không dùng**: 4 bộ chạy chung xong hết ở 534 s, chạy 2 cái một lượt thì hai bộ sau tới 582 s. **Đã** nới thời hạn bước test 10 → 15 phút |
+| L153 | Không thread thợ nào còn chạy sau khi item của nó nộp hay đóng (lần gọi model cuối cách bàn giao vài giây) | Item xong không tốn thêm credit | Thêm lưới an toàn theo yêu cầu: item đã đóng/nộp mà thợ còn `writing` thì root nhận `interrupt_worker` và gọi `interrupt_agent` một lần |
+| L154 | Credit theo item: TASK-08 34,7; CR-05 22,5; BUG-12 21,4; BUG-11 15,2; CR-07 11,9; PI-03 10,9; TASK-07 10,7; BUG-09 10,4; PI-04 10,3; PI-02 8,9; CR-08 8,4; TASK-10 3,2; TASK-12 2,7; TASK-11 0,2 (luna). Mỗi lượt của thợ sol tốn 0,5–0,7 credit; các lượt chỉ để hỏi `run_checks status` ước khoảng 20 credit cả trận | — | Chưa sửa |

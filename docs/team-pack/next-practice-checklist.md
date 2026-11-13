@@ -33,6 +33,13 @@ Các sửa lỗi của `practice-log.md` mục #25 (commit `2a1299d`, `22eb132`)
       không, nếu có thì trả về cảnh báo.
 - [ ] Analyst: đúng một thread mỗi đợt, không có `retried` khi analyst còn đang đọc (L146).
 
+**Thêm sau `CUZ7KL95`** (practice-log #26, chưa trận nào chạy)
+- [ ] Đề sát hạn gặp `SYNC_REQUIRED`: job publish có bước `sync`, cảnh báo `last call: main had changed …`, item được nộp (L148).
+- [ ] Root spawn mọi `spawn_worker` ngay lượt nhận, không gọi `wait_for_update`/`next_actions` xen giữa (L149): so `spawnOfferedAt` với giờ bắt đầu thread.
+- [ ] `app_data lock` trả `dedicated` cho đề chạy server riêng; không đề nào chờ khoá của đề khác (L150).
+- [ ] Root không còn tự gọi `publish_item` khi helper publish được (L151).
+- [ ] Có `interrupt_worker` nào không, root gọi `interrupt_agent` đúng một lần (L153).
+
 **Việc còn mở** (chưa làm, có lý do)
 - Dùng lại một analyst cho cả trận (`followup_task` cho đợt sau): lợi ~2 credit mỗi đợt, phải thêm đường lùi khi
   thread chết. Hoãn.

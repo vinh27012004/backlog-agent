@@ -20,7 +20,9 @@ import { mutantsRunning, restorePending, runMutants } from './mutants.mjs';
 
 export const CHECKS = ['typecheck', 'build', 'test'];
 const MAX_WAIT_SECONDS = 110;
-const TIMEOUT_MS = { typecheck: 5 * 60_000, build: 10 * 60_000, test: 10 * 60_000 };
+// test 15 phút: bộ loot-core chạy riêng 172 s, bốn bộ chạy chung máy 517–534 s mỗi bộ (đo 13/11), trong trận có thêm build
+// và app nên vượt 600 s (CUZ7KL95 TASK-08: lần chạy cuối hết giờ ở 600 s, nộp PARTIAL).
+const TIMEOUT_MS = { typecheck: 5 * 60_000, build: 10 * 60_000, test: 15 * 60_000 };
 const LOG = { typecheck: 'typecheck.log', build: 'build.log', test: 'full-suite.log' };
 // Lần test chỉ chạy các file được chỉ định (testFiles): log riêng, nhãn riêng, để fix-result không nhận là cả bộ test.
 const SELECTED_LOG = 'selected-tests.log';

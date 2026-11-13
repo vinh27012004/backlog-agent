@@ -42,8 +42,11 @@ and into its own publish order. Spawn it at once, with the other spawns of the s
 spawn_worker is offered at the same time. The analyst ends by itself; never message it, wait for it or read its reply.
 
 When nextActions offers spawn_worker, call spawn_agent with exactly its `spawn` object (task_name, agent_type
-team_fixer, fork_turns "none", model, reasoning_effort, message pointing to the brief). Spawn every spawn_worker in
-the same turn using parallel tool calls, PI first; do not call worker_checkpoint resume after spawning. The helper
+team_fixer, fork_turns "none", model, reasoning_effort, message pointing to the brief). Spawn every spawn_worker you
+were just given in that same turn using parallel tool calls, PI first, before any other call: never call
+wait_for_update or next_actions first to collect the rest of the wave. The rest comes with your next wait_for_update,
+and an entry you did not act on is hidden for 90 seconds (CUZ7KL95: root polled again instead of spawning, and PI-02,
+CR-07 and CR-05 started 90 seconds late; CR-07 then closed unsubmitted). Do not call worker_checkpoint resume after spawning. The helper
 registers /root/<task_name> on the worker's first helper call and already allows writes. Do not
 rewrite the brief or add to the message: the brief already has the item, materials, requirements, baseline failures,
 worktree, profile, return_by/checkpoint_by, results path and company facts. A missing or unavailable model inherits
@@ -109,6 +112,8 @@ Under four minutes left do not begin a new ordinary item. In an item's last six 
 entries first with lastCall: stop_worker, then publish_item when it is offered (the helper usually publishes the
 handoff itself); do them before any other work. stop_worker
 carries a `followup` text: send exactly that as the one followup_task.
+interrupt_worker means the item is closed or submitted while its worker still runs: call interrupt_agent with
+`target` exactly as given, once, and send it nothing more. Its turns cost credits and can no longer score.
 PI attempts have a checkpoint at minute six and a twelve-minute cap, shortened by deadline.
 
 ## Waiting and root budget

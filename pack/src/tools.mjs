@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, forgetBuild, readState as appState, stopApp } from './env/app.mjs';
+import { app, dedicatedAppData, forgetBuild, readState as appState, stopApp } from './env/app.mjs';
 import { captureEvidence } from './env/browser.mjs';
 import { runChecks } from './env/checks.mjs';
 import { ensureCodegraphIndex, indexCodegraph } from './env/codegraph.mjs';
@@ -1076,6 +1076,12 @@ export class Runtime {
   // chung 4 phút dù app của nó chạy trên database riêng.
   itemDatabase(key, matchRoot = null) {
     if (!isKey(key)) return null;
+    // Server riêng với thư mục dữ liệu riêng của item (lệnh custom dùng {data}): không chung dữ liệu với item nào.
+    try {
+      const wtRoot = this.session?.paths?.teamWork && this.session.descriptor?.matchId ? this.wtPaths(key).matchRoot : matchRoot;
+      const own = this.teamWorkspace ? dedicatedAppData(this.teamWorkspace, key, typeof wtRoot === 'string' && existsSync(wtRoot) ? wtRoot : null) : null;
+      if (own) return own;
+    } catch { /* xét database như cũ */ }
     if (this.session?.paths?.matchRoot && this.session.descriptor?.matchId) {
       return dedicatedAppDatabase(this.wtPaths(key).matchRoot, this.session.paths.matchRoot);
     }
@@ -1193,7 +1199,7 @@ export class Runtime {
     return { skipped: 'indexing in the background' };
   }
 
-  async worktree({ action, backlogItemKey: key, message, prefer = null, fromPublish = false }) {
+  async worktree({ action, backlogItemKey: key, message, prefer = null, fromPublish = false, mainWins = false }) {
     this.session.require('GAME');
     if (!isKey(key)) fail('INVALID_ARGUMENT', 'backlogItemKey');
     const { checkoutRoot, matchRoot, teamWork } = this.session.paths;
@@ -1346,6 +1352,14 @@ export class Runtime {
         const merged = await unionMerge({ cwd, files: conflicts, mine, oldBase, mainHead }).catch(() => null);
         if (merged) { autoMerged = conflicts; conflicts = null; }
       }
+      // mainWins (publish ở phút cuối, workflow.publish): file còn xung đột thì lấy bản của main, phần còn lại của item giữ
+      // nguyên. CUZ7KL95 CR-07: nó và PI-03 cùng sửa một dòng của shared/schedules.ts, PI-03 lên main trước 17 s, ba lần
+      // publish dừng ở SYNC_REQUIRED và item đóng khi chưa nộp (11,9 credit).
+      let yielded = [];
+      if (conflicts?.length && mainWins) {
+        for (const f of conflicts) await git(['checkout', mainHead, '--', f], { cwd });
+        yielded = conflicts; conflicts = null;
+      }
       if (conflicts) {
         await restore();
         if (conflicts.length) fail('WORKTREE_CONFLICT', `main changes conflict with ${key}'s work: ${conflicts.join(', ')}; the worktree is unchanged (patch kept at ${patch})`);
@@ -1373,7 +1387,7 @@ export class Runtime {
       }
       j.save();
       return { synced: true, baseRevision: mainHead, changedFiles: changed.length, codegraph, ...(setupJobId ? { setupJobId } : {}),
-        ...(autoMerged.length ? { autoMerged } : {}), ...(preferred.length ? { preferred } : {}),
+        ...(autoMerged.length ? { autoMerged } : {}), ...(preferred.length ? { preferred } : {}), ...(yielded.length ? { yielded } : {}),
         hint: `${setupJobId ? 'Wait for setupJobId, then rebuild. ' : ''}Restart the app from this worktree before new evidence.`
           + (autoMerged.length ? ` Main and you both only added lines to ${autoMerged.join(', ')}: the helper kept both additions (yours and main's, nothing removed). Read those files once: both registrations must be there, in a valid order, with no duplicate import; then run_checks before more evidence.` : '') };
     }
